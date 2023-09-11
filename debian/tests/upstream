@@ -1,0 +1,90 @@
+#!/bin/sh
+# autopkgtest check: Build and run the upstream test suite.
+# (C) 2012 Canonical Ltd.
+# Author: Daniel Kessel <d.kessel@gmx.de>
+
+# running the mysql testsuite as described in:
+# https://bugs.launchpad.net/ubuntu/+source/mysql-5.5/+bug/959683
+
+echo "Running test 'testsuite'"
+set -e
+
+MTR_SKIP_TEST_LIST=$(mktemp)
+ARCH=$(dpkg --print-architecture)
+
+WORKDIR=$(mktemp -d)
+trap 'rm -rf $WORKDIR $MTR_SKIP_TEST_LIST' 0 INT QUIT ABRT PIPE TERM
+cd "$WORKDIR"
+
+mkdir var
+mkdir tmp
+
+echo "using vardir: $WORKDIR/var"
+echo "using tmpdir: $WORKDIR/tmp"
+
+# Disable native IO and force regular fsync() on selected architectures which
+# seem to sugger from random crashes that stem from Linux kernel incompatibility
+# (Debian Bug#1030510 and perhaps also Bug#1031656, MariaDB MDEV-30728,
+# https://lists.ozlabs.org/pipermail/linuxppc-dev/2023-March/256189.html)
+if [ "$ARCH" = "ppc64el" ] || [ "$ARCH" = "s390x" ]
+then
+  MTR_ARGUMENTS_APPEND="--mysqld=--loose-innodb-flush-method=fsync --mysqld=--loose-skip-innodb-use-native-aio"
+fi
+
+echo "Setting up skip-tests-list"
+
+# Use the arch specific skiplists if exist, otherwise list is empty
+if [ -f /usr/share/mysql/mysql-test/unstable-tests.$ARCH ]
+then
+  cat /usr/share/mysql/mysql-test/unstable-tests.$ARCH >> $MTR_SKIP_TEST_LIST
+fi
+
+# Skip tests that cannot run properly on ci.debian.net / autopkgtests.ubuntu.com
+cat >> $MTR_SKIP_TEST_LIST << EOF
+binlog.binlog_server_start_options : Requires writable /usr
+main.ctype_uca : Requires writable /usr
+rpl.rpl_gtid_mode : Requires starting server as root ref http://bugs.mysql.com/bug.php?id=70517
+EOF
+
+# Skip tests that cannot run properly on Gitlab-CI
+if [ ! -z "$GITLAB_CI" ]
+then
+  cat >> $MTR_SKIP_TEST_LIST << EOF
+main.mysqld--help : For unknown reason table-cache is 4000 instead of default 421
+EOF
+fi
+
+if [ "$ARCH" = "s390x" ]
+then
+  echo "main.func_regexp_pcre : recursion fails on s390x https://bugs.launchpad.net/ubuntu/+source/mariadb-10.1/+bug/1723947" >> $MTR_SKIP_TEST_LIST
+elif [ "$ARCH" = "armhf" ] || [ "$ARCH" = "i386" ]
+then
+  echo "main.failed_auth_unixsocket : Test returns wrong exit code on armhf and i386 (but only in debci) https://jira.mariadb.org/browse/MDEV-23933" >> $MTR_SKIP_TEST_LIST
+fi
+
+# Temporary workaround to ensure critical MariaDB uploads targeting Debian 13
+# "Bookworm" don't get stuck on irrelevant lxcfs issue
+# https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1036818
+if [ "$ARCH" = "armhf" ] || [ "$ARCH" = "armel" ]
+then
+  echo "run: skipped on armhf and armel due to Bug#1036818"
+  exit 0
+fi
+
+# Store skipped test list in artifacts so it can be viewed while debugging
+# failed autopkgtest runs
+cp -v $MTR_SKIP_TEST_LIST $AUTOPKGTEST_ARTIFACTS
+
+cd /usr/share/mysql/mysql-test
+echo "starting mysql-test-tun.pl..."
+export MTR_PRINT_CORE=detailed
+eatmydata perl -I. ./mysql-test-run.pl \
+    --force --testcase-timeout=120 --suite-timeout=540 --retry=3 \
+    --verbose-restart --max-save-core=1 --max-save-datadir=1 \
+    --parallel=auto --skip-rpl --suite=main \
+    --skip-test-list=$MTR_SKIP_TEST_LIST \
+    --vardir="$WORKDIR/var" --tmpdir="$WORKDIR/tmp" \
+    --xml-report=$AUTOPKGTEST_ARTIFACTS/mysql-test-run-junit.xml \
+    $MTR_ARGUMENTS_APPEND \
+    $@ 2>&1
+echo "run: OK"
