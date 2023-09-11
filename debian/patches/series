@@ -1,0 +1,8 @@
+0025-Change-the-default-optimization-from-O3-to-O2-in-mys.patch
+rocksdb-kfreebsd.patch
+env-perl-usr-bin-perl.patch
+fix-spelling-rocksdb.patch
+fix-reproducible-builds-rocksdb.patch
+mroonga-mrn-lib-dirs-path-reproducible-build.patch
+2129-new-script-wsrep-sst-backup-fixes.patch
+2541-fix-stack-overflow-in-pinbox-allocator.patch

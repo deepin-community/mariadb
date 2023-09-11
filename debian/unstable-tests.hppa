@@ -1,0 +1,4 @@
+main.func_json_notembedded : MDEV-27955 / MDEV-30518 / https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1006529 (timeout)
+main.index_intersect : MDEV-23921
+main.large_pages     : MDEV-30572
+repair_symlink-5543  : MDEV-23920
