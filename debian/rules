@@ -54,16 +54,6 @@ ifeq (32,$(DEB_HOST_ARCH_BITS))
     CMAKEFLAGS += -DPLUGIN_ROCKSDB=NO
 endif
 
-# Cross building requires stack direction instruction
-ifneq ($(DEB_BUILD_ARCH),$(DEB_HOST_ARCH))
-    ifneq (,$(filter $(DEB_HOST_ARCH_CPU),alpha amd64 arm arm64 i386 ia64 m68k mips64el mipsel powerpc ppc64 ppc64el riscv64 s390x sh4 sparc64))
-        CMAKEFLAGS += -DSTACK_DIRECTION=-1
-    endif
-    ifneq (,$(filter $(DEB_HOST_ARCH_CPU),hppa))
-        CMAKEFLAGS += -DSTACK_DIRECTION=1
-    endif
-endif
-
 # Only attempt to build with PMEM on archs that have package libpmem-dev available
 # See https://packages.debian.org/search?searchon=names&keywords=libpmem-dev
 ifneq (,$(filter $(DEB_HOST_ARCH),amd64 arm64 ppc64el riscv64))
@@ -73,14 +63,6 @@ endif
 # Fix compilation errors like "relocation truncated to fit: GPREL16 against symbol `wsrep_debug'"
 ifeq ($(DEB_HOST_ARCH),alpha)
     export DEB_LDFLAGS_MAINT_APPEND += -Wl,--no-relax
-endif
-
-# Disable native IO and force regular fsync() on selected architectures which
-# seem to sugger from random crashes that stem from Linux kernel incompatibility
-# (Debian Bug#1030510 and perhaps also Bug#1031656, MariaDB MDEV-30728,
-# https://lists.ozlabs.org/pipermail/linuxppc-dev/2023-March/256189.html)
-ifneq (,$(filter $(DEB_HOST_ARCH),ppc64el s390x))
-    export MTR_ARGUMENTS_APPEND += --mysqld=--loose-innodb-flush-method=fsync --mysqld=--loose-skip-innodb-use-native-aio
 endif
 
 # Add support for verbose builds
@@ -107,7 +89,7 @@ override_dh_auto_configure:
 	dh_testdir
 
 ifneq ($(DEB_BUILD_ARCH),$(DEB_HOST_ARCH))
-	dpkg-architecture -a$(DEB_BUILD_ARCH) -f -c dh_auto_configure --builddirectory=builddir-native
+	dpkg-architecture -a$(DEB_BUILD_ARCH) -f -c dh_auto_configure --builddirectory=builddir-native --reload-all-buildenv-variables
 	dh_auto_build --builddirectory=builddir-native -- import_executables
 endif
 
@@ -156,7 +138,7 @@ ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	# Skip unstable tests if such are defined for arch
 	[ ! -f debian/unstable-tests.$(DEB_HOST_ARCH) ] || cat debian/unstable-tests.$(DEB_HOST_ARCH) >> $(MTR_SKIP_TEST_LIST)
 	# Show contents of skip list on this architecture
-	@echo "On arcitecture $(DEB_HOST_ARCH) skip tests:"
+	@echo "On architecture $(DEB_HOST_ARCH) skip tests:"
 	cat $(MTR_SKIP_TEST_LIST)
 	# Run testsuite
 	cd $(BUILDDIR)/mysql-test && \
@@ -236,7 +218,7 @@ override_dh_systemd_enable:
 #	dh_systemd_enable --no-enable --name=mariadb@ mariadb.socket
 #	dh_systemd_enable --no-enable --name=mariadb-extra@ mariadb-extra.socket
 
-# Start mysql at sequence number 19 before 20 where apache, proftpd etc gets
+# Start mariadbd at sequence number 19 before 20 where apache, proftpd etc gets
 # started which might depend on a running database server.
 override_dh_installinit-arch:
 	dh_installinit --name=mariadb --no-start -- defaults 19 21

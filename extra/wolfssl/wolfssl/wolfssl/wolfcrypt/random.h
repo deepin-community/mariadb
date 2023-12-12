@@ -1,6 +1,6 @@
 /* random.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -113,6 +113,8 @@
      /* allow whitewood as direct RNG source using wc_GenerateSeed directly */
 #elif defined(HAVE_INTEL_RDRAND)
     /* Intel RDRAND or RDSEED */
+#elif defined(WOLF_CRYPTO_CB)
+    /* Requires registered Crypto Callback to service RNG, with devId set */
 #elif !defined(WC_NO_RNG)
     #error No RNG source defined!
 #endif
@@ -159,14 +161,12 @@ struct OS_Seed {
 #ifdef HAVE_HASHDRBG
 struct DRBG_internal {
     word32 reseedCtr;
-    word32 lastBlock;
     byte V[DRBG_SEED_LEN];
     byte C[DRBG_SEED_LEN];
     void* heap;
 #if defined(WOLFSSL_ASYNC_CRYPT) || defined(WOLF_CRYPTO_CB)
     int devId;
 #endif
-    byte   matchCount;
 #ifdef WOLFSSL_SMALL_STACK_CACHE
     wc_Sha256 sha256;
 #endif

@@ -1,6 +1,6 @@
 /* des3.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -49,7 +49,7 @@
 enum {
     DES_KEY_SIZE        =  8,  /* des                     */
     DES3_KEY_SIZE       = 24,  /* 3 des ede               */
-    DES_IV_SIZE         =  8,  /* should be the same as DES_BLOCK_SIZE */
+    DES_IV_SIZE         =  8   /* should be the same as DES_BLOCK_SIZE */
 };
 
 

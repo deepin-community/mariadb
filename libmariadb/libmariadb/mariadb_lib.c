@@ -123,7 +123,7 @@ extern int mthd_stmt_fetch_to_bind(MYSQL_STMT *stmt, unsigned char *row);
 extern int mthd_stmt_read_all_rows(MYSQL_STMT *stmt);
 extern void mthd_stmt_flush_unbuffered(MYSQL_STMT *stmt);
 extern my_bool _mariadb_read_options(MYSQL *mysql, const char *dir, const char *config_file, const char *group, unsigned int recursion);
-extern unsigned char *mysql_net_store_length(unsigned char *packet, size_t length);
+extern unsigned char *mysql_net_store_length(unsigned char *packet, ulonglong length);
 
 extern void
 my_context_install_suspend_resume_hook(struct mysql_async_context *b,
@@ -2342,7 +2342,7 @@ void my_set_error(MYSQL *mysql,
 {
   va_list ap;
 
-  const char *errmsg;
+  const char *errmsg= format;
 
   mysql->net.last_errno= error_nr;
   ma_strmake(mysql->net.sqlstate, sqlstate, SQLSTATE_LENGTH);
@@ -2359,8 +2359,7 @@ void my_set_error(MYSQL *mysql,
   }
 
   va_start(ap, format);
-  vsnprintf(mysql->net.last_error, MYSQL_ERRMSG_SIZE - 1,
-            format ? format : errmsg, ap);
+  vsnprintf(mysql->net.last_error, MYSQL_ERRMSG_SIZE - 1, errmsg, ap);
   va_end(ap);
   return;
 }
@@ -3535,10 +3534,7 @@ mysql_optionsv(MYSQL *mysql,enum mysql_option option, ...)
     mysql->options.use_ssl= (*(my_bool *)arg1);
     break;
   case MYSQL_OPT_SSL_VERIFY_SERVER_CERT:
-    if (*(my_bool *)arg1)
-      mysql->options.client_flag |= CLIENT_SSL_VERIFY_SERVER_CERT;
-    else
-      mysql->options.client_flag &= ~CLIENT_SSL_VERIFY_SERVER_CERT;
+    OPT_SET_EXTENDED_VALUE(&mysql->options, tls_verify_server_cert, *(my_bool *)arg1);
     break;
   case MYSQL_OPT_SSL_KEY:
     OPT_SET_VALUE_STR(&mysql->options, ssl_key, (char *)arg1);
@@ -3904,7 +3900,7 @@ mysql_get_optionv(MYSQL *mysql, enum mysql_option option, void *arg, ...)
     *((my_bool *)arg)= mysql->options.use_ssl;
     break;
   case MYSQL_OPT_SSL_VERIFY_SERVER_CERT:
-    *((my_bool *)arg)= test(mysql->options.client_flag & CLIENT_SSL_VERIFY_SERVER_CERT);
+    *((my_bool*)arg) = mysql->options.extension ? mysql->options.extension->tls_verify_server_cert : 0;
     break;
   case MYSQL_OPT_SSL_KEY:
     *((char **)arg)= mysql->options.ssl_key;

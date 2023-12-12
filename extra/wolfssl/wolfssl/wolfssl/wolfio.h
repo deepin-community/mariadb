@@ -1,6 +1,6 @@
 /* io.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -127,7 +127,7 @@
         #include <lwip-socket.h>
         #include <errno.h>
     #elif defined(WOLFSSL_ZEPHYR)
-        #include <net/socket.h>
+        #include <zephyr/net/socket.h>
     #elif defined(MICROCHIP_PIC32)
         #include <sys/errno.h>
     #elif defined(HAVE_NETX)

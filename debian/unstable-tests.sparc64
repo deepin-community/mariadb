@@ -1,4 +1,5 @@
-main.ctype_utf8mb4_innodb : MDEV-28052
+main.ctype_binary : https://bugs.debian.org/1053485
+main.ctype_latin1 : https://bugs.debian.org/1053485
 main.features : MDEV-27954
 main.func_json_notembedded : MDEV-27955 / MDEV-30518
 main.func_like : MDEV-27954
@@ -6,10 +7,11 @@ main.func_math : MDEV-27954
 main.func_str : MDEV-27954
 main.group_by : MDEV-27954
 main.group_by_null : MDEV-27954
-main.implicit_commit : Bug#1007219 / MDEV-28052
-main.long_unique_bugs : MDEV-28052
 main.long_unique_bugs : MDEV-30928
 main.partition_order : MDEV-27954
 main.repair_symlink-5543 : MDEV-23920
 main.type_datetime : MDEV-27954
 main.xml : MDEV-27954
+maria.maria-purge : MDEV-31349
+type_test.type_test_double : MDEV-22243, but wasn't actually fixed yet
+unit.conc_connection : CONC-640: unit.conc_connection fails on test_conc21

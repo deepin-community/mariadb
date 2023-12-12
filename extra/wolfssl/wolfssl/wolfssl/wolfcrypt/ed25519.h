@@ -1,6 +1,6 @@
 /* ed25519.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -69,7 +69,7 @@
 enum {
     Ed25519    = -1,
     Ed25519ctx = 0,
-    Ed25519ph  = 1,
+    Ed25519ph  = 1
 };
 
 #ifndef WC_ED25519KEY_TYPE_DEFINED
@@ -80,7 +80,7 @@ enum {
 /* ED25519 Flags */
 enum {
     WC_ED25519_FLAG_NONE     = 0x00,
-    WC_ED25519_FLAG_DEC_SIGN = 0x01,
+    WC_ED25519_FLAG_DEC_SIGN = 0x01
 };
 
 /* An ED25519 Key */

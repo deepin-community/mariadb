@@ -1,6 +1,6 @@
 /* hash.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -86,6 +86,7 @@ enum wc_HashFlags {
 #ifdef WOLFSSL_SHA3
     WC_HASH_SHA3_KECCAK256 =0x00010000, /* Older KECCAK256 */
 #endif
+    WOLF_ENUM_DUMMY_LAST_ELEMENT(WC_HASH)
 };
 
 #ifndef NO_HASH_WRAPPER

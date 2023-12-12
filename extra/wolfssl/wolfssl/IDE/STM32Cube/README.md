@@ -37,16 +37,6 @@ You need both the STM32 IDE and the STM32 initialization code generator (STM32Cu
 8. The Benchmark example uses float. To enable go to "Project Properties" -> "C/C++ Build" -> "Settings" -> "Tool Settings" -> "MCU Settings" -> Check "Use float with printf".
 9. To enable printf make the `main.c` changes below in the [STM32 Printf](#stm32-printf) section.
 
-### STM32 Cube Pack Examples
-
-In the `I-CUBE-wolfSSL.pack` pack there are pre-assembled example projects available.
-After installing the pack you can find these example projects in `STM32Cube/Repository/Packs/wolfSSL/wolfSSL/[Version]/Projects`.
-To use an example:
-
-1. Open STM32CubeIDE
-2. Choose "Import" -> "Import an Existing STM32CubeMX Configuration File (.ioc)".
-3. Browse to find the .ioc in `STM32Cube/Repository/Packs/wolfSSL/wolfSSL/[Version]/Projects` and click finish.
-
 ### Creating your own STM32CubeMX configuration
 
 If none of the examples fit your STM32 type then you can create your own in STM32CubeMX by doing the following:
@@ -97,15 +87,19 @@ The section for "Hardware platform" may need to be adjusted depending on your pr
 * To enable STM32L5 support define `WOLFSSL_STM32L5`.
 * To enable STM32H7 support define `WOLFSSL_STM32H7`.
 * To enable STM32WB support define `WOLFSSL_STM32WB`.
+* To enable STM32U5 support define `WOLFSSL_STM32U5`.
+* To enable STM32H5 support define `WOLFSSL_STM32H5`.
 
 To use the STM32 Cube HAL support make sure `WOLFSSL_STM32_CUBEMX` is defined.
 
-The L5 and WB55 support ECC PKA acceleration, which is enabled with `WOLFSSL_STM32_PKA`.
+The PKA acceleration for ECC is available on some U5, L5 and WB55 chips.
+This is enabled with `WOLFSSL_STM32_PKA`. You can see some of the benchmarks [here](STM32_Benchmarks.md).
 
 To disable hardware crypto acceleration you can define:
 
 * `NO_STM32_HASH`
 * `NO_STM32_CRYPTO`
+* `NO_STM32_RNG`
 
 To enable the latest Cube HAL support please define `STM32_HAL_V2`.
 
@@ -167,6 +161,8 @@ The TLS v1.3 client/server examples over UART are paired with these host-side ap
 * https://github.com/wolfSSL/wolfssl-examples/blob/master/tls/server-tls-uart.c
 
 To use this example you will need to use the STM32Cube interface to enable an additional USART and enable DMA for the RX with defaults. Enabling DMA for the USART requires adding the USART RX DMA in the STM32Cube tool. Under Connectivity click on your TLS USART# and goto DMA Settings and "Add" one for USART#_RX with default options.
+
+On some boards, such as U5, there is GPDMA support. In this case when you click on "DMA Settings" you will be given a button to take you to GPDMA1 configuration. Click it. You can then enable a channel (any of the ones from 0 to 11 should be fine.) as "Standard Request Mode" and set the "Request Configuration" section's "Request" to USART#_RX. In the "System Core" tab, find NVIC and click on it. Make sure that the GPDMA1 global interrupt for your channel is enabled as well as USARTx global interrupt.
 
 Then set the TLS_UART macro to the correct `huart#` instance. This USART will be used as a TLS transport.
 

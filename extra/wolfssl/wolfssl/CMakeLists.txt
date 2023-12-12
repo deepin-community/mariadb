@@ -1,6 +1,6 @@
 # CMakeList.txt
 #
-# Copyright (C) 2006-2020 wolfSSL Inc.
+# Copyright (C) 2006-2023 wolfSSL Inc.
 #
 # This file is part of wolfSSL. (formerly known as CyaSSL)
 #
@@ -28,16 +28,16 @@ if("${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_BINARY_DIR}")
      You must delete them, or cmake will refuse to work.")
 endif()
 
-project(wolfssl VERSION 5.5.4 LANGUAGES C ASM)
+project(wolfssl VERSION 5.6.3 LANGUAGES C ASM)
 
 # shared library versioning
 # increment if interfaces have been added, removed or changed
-set(LIBTOOL_CURRENT 38)
+set(LIBTOOL_CURRENT 40)
 # increment if source code has changed  set to zero if current is incremented
-set(LIBTOOL_REVISION 0)
+set(LIBTOOL_REVISION 1)
 # increment if interfaces have been added set to zero if interfaces have been
 # removed or changed
-set(LIBTOOL_AGE 3)
+set(LIBTOOL_AGE 5)
 
 math(EXPR LIBTOOL_SO_VERSION "${LIBTOOL_CURRENT} - ${LIBTOOL_AGE}")
 set(LIBTOOL_FULL_VERSION ${LIBTOOL_SO_VERSION}.${LIBTOOL_AGE}.${LIBTOOL_REVISION})
@@ -391,6 +391,24 @@ add_option(WOLFSSL_OPENSSLEXTRA
     "Enable extra OpenSSL API, size+ (default: disabled)"
     "no" "yes;no")
 
+add_option(WOLFSSL_OPENSSLALL
+    "Enable all OpenSSL API, size++ (default: disabled)"
+    "no" "yes;no")
+
+add_option(WOLFSSL_ASIO
+    "Enable asio support (default: disabled)"
+    "no" "yes;no")
+
+if (WOLFSSL_ASIO)
+    list(APPEND WOLFSSL_DEFINITIONS
+    "-DWOLFSSL_ASIO" "-DASIO_USE_WOLFSSL"
+    "-DBOOST_ASIO_USE_WOLFSSL" "-DHAVE_EX_DATA"
+    "-DSSL_TXT_TLSV1_2" "-DOPENSSL_NO_SSL2" "-DOPENSSL_NO_SSL3"
+    "-DHAVE_OCSP" "-DWOLFSSL_KEY_GEN")
+    override_cache(WOLFSSL_OPENSSLALL "yes")
+    override_cache(WOLFSSL_OPENSSLEXTRA "yes")
+endif()
+
 if (WOLFSSL_OPENSSLEXTRA AND NOT WOLFSSL_OPENSSLCOEXIST)
     list(APPEND WOLFSSL_DEFINITIONS
       "-DOPENSSL_EXTRA"
@@ -400,6 +418,14 @@ if (WOLFSSL_OPENSSLEXTRA AND NOT WOLFSSL_OPENSSLCOEXIST)
       "-DHAVE_EXT_CACHE"
       "-DWOLFSSL_FORCE_CACHE_ON_TICKET")
 endif()
+
+if (WOLFSSL_OPENSSLALL)
+    list(APPEND WOLFSSL_DEFINITIONS
+      "-DOPENSSL_ALL" "-DWOLFSSL_EITHER_SIDE" "-DWC_RSA_NO_PADDING"
+      "-DWC_RSA_PSS" "-DWOLFSSL_PSS_LONG_SALT" "-DWOLFSSL_TICKET_HAVE_ID"
+      "-DWOLFSSL_ERROR_CODE_OPENSSL" "-DWOLFSSL_CERT_NAME_ALL")
+endif()
+
 
 # TODO: - IPv6 test apps
 
@@ -548,7 +574,7 @@ endif()
 
 # SHA224
 set(SHA224_DEFAULT "no")
-if(("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86_64") OR
+if(("${CMAKE_SYSTEM_PROCESSOR}" MATCHES "x86_64|AMD64|arm64") OR
     ("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "aarch64"))
     if(NOT WOLFSSL_AFALG AND NOT WOLFSSL_DEVCRYPTO AND
        (NOT WOLFSSL_FIPS OR ("${FIPS_VERSION}" STREQUAL "v2")))
@@ -562,7 +588,7 @@ add_option("WOLFSSL_SHA224"
 
 # SHA3
 set(SHA3_DEFAULT "no")
-if(("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86_64") OR
+if(("${CMAKE_SYSTEM_PROCESSOR}" MATCHES "x86_64|AMD64|arm64") OR
     ("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "aarch64"))
     if(NOT WOLFSSL_FIPS OR ("${FIPS_VERSION}" STREQUAL "v2"))
         set(SHA3_DEFAULT "yes")
@@ -931,7 +957,7 @@ endif()
 # DH
 add_option("WOLFSSL_DH"
     "Enable DH (default: enabled)"
-    "yes" "yes;no")
+    "yes" "yes;no;const")
 
 if(WOLFSSL_OPENSSH)
     override_cache(WOLFSSL_DH "yes")
@@ -944,6 +970,11 @@ else()
       list(APPEND WOLFSSL_DEFINITIONS "-DNO_DH")
       override_cache(WOLFSSL_DH "no")
     endif()
+endif()
+
+if("${WOLFSSL_DH}" STREQUAL "const")
+    list(APPEND WOLFSSL_DEFINITIONS "-DWOLFSSL_DH_CONST")
+    set(WOLFSSL_DH_CONST "yes")
 endif()
 
 # TODO: - Anonymous
@@ -1043,7 +1074,7 @@ endif()
 
 # Base64
 set(BASE64_ENCODE_DEFAULT "no")
-if("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86_64")
+if("${CMAKE_SYSTEM_PROCESSOR}" MATCHES "x86_64|AMD64|arm64")
     set(BASE64_ENCODE_DEFAULT "yes")
 endif()
 
@@ -1063,7 +1094,8 @@ add_option("WOLFSSL_DES3" ${WOLFSSL_DES3_HELP_STRING} "no" "yes;no")
 if(WOLFSSL_OPENSSH OR
    WOLFSSL_QT OR
    WOLFSSL_OPENVPN OR
-   WOLFSSL_WPAS)
+   WOLFSSL_WPAS OR
+   WOLFSSL_ASIO)
     override_cache(WOLFSSL_DES3 "yes")
 endif()
 
@@ -1521,7 +1553,7 @@ if(WOLFSSL_FAST_MATH)
         set(WOLFSSL_SLOWMATH "no")
     endif()
 
-    if("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86_64")
+    if("${CMAKE_SYSTEM_PROCESSOR}" MATCHES "x86_64|AMD64")
         # Have settings.h set FP_MAX_BITS higher if user didn't set directly
         list(APPEND WOLFSSL_DEFINITIONS "-DWOLFSSL_X86_64_BUILD")
     endif()
@@ -1529,7 +1561,7 @@ endif()
 
 # TODO: - Fast huge math
 
-if("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86_64")
+if("${CMAKE_SYSTEM_PROCESSOR}" MATCHES "x86_64|AMD64")
     list(APPEND WOLFSSL_DEFINITIONS "-DWOLFSSL_X86_64_BUILD")
 endif()
 
@@ -1653,6 +1685,10 @@ endif()
 
 add_option("WOLFSSL_USER_SETTINGS"
     "Use your own user_settings.h and do not add Makefile CFLAGS (default: disabled)"
+    "no" "yes;no")
+
+add_option("WOLFSSL_USER_SETTINGS_ASM"
+    "Enable use of user_settings_asm.h in assembly files (default: disabled)"
     "no" "yes;no")
 
 add_option("WOLFSSL_OPTFLAGS"
@@ -1798,6 +1834,14 @@ if (WOLFSSL_TLSX)
 endif()
 
 
+add_option("WOLFSSL_CAAM"
+    "Enable use of CAAM with NXP (default: disabled)"
+    "no" "yes;no")
+if (WOLFSSL_CAAM)
+   list(APPEND WOLFSSL_DEFINITIONS  "-DWOLFSSL_CAAM")
+endif()
+
+
 # Generates the BUILD_* flags. These control what source files are included in
 # the library. A series of AM_CONDITIONALs handle this in configure.ac.
 generate_build_flags()
@@ -1808,21 +1852,33 @@ generate_build_flags()
 # USER SETTINGS
 if(WOLFSSL_USER_SETTINGS)
     # Replace all options and just use WOLFSSL_USER_SETTINGS
-    set(WOLFSSL_DEFINITIONS "-DWOLFSSL_USER_SETTINGS
-        -DWOLFSSL_USER_SETTINGS_ASM")
-
-    # Create user_settings_asm.h for use in assembly files (e.g. .S files).
-    execute_process(COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/user_settings_asm.sh
-                            "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS}"
-                    RESULT_VARIABLE USER_SETTINGS_ASM_RET)
-    if (NOT USER_SETTINGS_ASM_RET EQUAL 0)
-        message(FATAL_ERROR "${CMAKE_CURRENT_SOURCE_DIR}/scripts/user_settings_asm.sh failed.")
-    endif()
+    set(WOLFSSL_DEFINITIONS "-DWOLFSSL_USER_SETTINGS")
 endif()
 
-# TODO: Applying definitions to everything like this, rather than
-#       individual targets, is discouraged in CMake.
-add_definitions(${WOLFSSL_DEFINITIONS})
+if(WOLFSSL_USER_SETTINGS_ASM)
+    if(WOLFSSL_USER_SETTINGS)
+        list(APPEND WOLFSSL_DEFINITIONS "-DWOLFSSL_USER_SETTINGS_ASM")
+        # Create user_settings_asm.h for use in assembly files (e.g. .S files).
+        if(WIN32)
+            execute_process(COMMAND
+            $ENV{SHELL} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/user_settings_asm.sh
+            "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS}"
+            RESULT_VARIABLE USER_SETTINGS_ASM_RET)
+        else()
+            execute_process(COMMAND
+            ${CMAKE_CURRENT_SOURCE_DIR}/scripts/user_settings_asm.sh
+            "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS}"
+            RESULT_VARIABLE USER_SETTINGS_ASM_RET)
+        endif()
+        if (NOT USER_SETTINGS_ASM_RET EQUAL 0)
+            message(FATAL_ERROR
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/user_settings_asm.sh failed.")
+        endif()
+    else()
+        message(FATAL_ERROR
+        "Must have WOLFSSL_USER_SETTINGS to enable WOLFSSL_USER_SETTINGS_ASM.")
+    endif()
+endif()
 
 add_option("WOLFSSL_CONFIG_H"
     "Enable generation of config.h and define HAVE_CONFIG_H (default: enabled)"
@@ -1838,6 +1894,16 @@ if(WOLFSSL_CONFIG_H)
                    "${CMAKE_CURRENT_BINARY_DIR}/wolfcrypt/test/test_paths.h" )
 endif()
 
+# If config.h or wolfssl/options.h exists, delete it to avoid
+# a mixup with build/wolfssl/options.h.
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/wolfssl/options.h")
+    file(REMOVE "${CMAKE_CURRENT_SOURCE_DIR}/wolfssl/options.h")
+endif()
+
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config.h")
+    file(REMOVE "${CMAKE_CURRENT_SOURCE_DIR}/config.h")
+endif()
+
 # Suppress some warnings about separate compilation, inlining
 add_definitions("-DWOLFSSL_IGNORE_FILE_WARN")
 # Generate user options header
@@ -1845,7 +1911,7 @@ message("Generating user options header...")
 if (${CMAKE_DISABLE_SOURCE_CHANGES})
     set(WOLFSSL_BUILD_OUT_OF_TREE_DEFAULT "${CMAKE_DISABLE_SOURCE_CHANGES}")
 else()
-    set(WOLFSSL_BUILD_OUT_OF_TREE_DEFAULT "no")
+    set(WOLFSSL_BUILD_OUT_OF_TREE_DEFAULT "yes")
 endif()
 add_option("WOLFSSL_BUILD_OUT_OF_TREE"
     "Don't generate files in the source tree (default: ${WOLFSSL_BUILD_OUT_OF_TREE_DEFAULT})"
@@ -1863,7 +1929,7 @@ file(REMOVE ${OPTION_FILE})
 file(APPEND ${OPTION_FILE} "/* wolfssl options.h\n")
 file(APPEND ${OPTION_FILE} " * generated from configure options\n")
 file(APPEND ${OPTION_FILE} " *\n")
-file(APPEND ${OPTION_FILE} " * Copyright (C) 2006-2020 wolfSSL Inc.\n")
+file(APPEND ${OPTION_FILE} " * Copyright (C) 2006-2023 wolfSSL Inc.\n")
 file(APPEND ${OPTION_FILE} " *\n")
 file(APPEND ${OPTION_FILE} " * This file is part of wolfSSL. (formerly known as CyaSSL)\n")
 file(APPEND ${OPTION_FILE} " *\n")
@@ -1907,7 +1973,13 @@ set(LIB_SOURCES "")
 # Corresponds to the instances of "src_libwolfssl_la_SOURCES += ..."
 # in the *.am files.
 generate_lib_src_list("${LIB_SOURCES}")
-add_library(wolfssl ${LIB_SOURCES})
+if(BUILD_SHARED_LIBS)
+    add_library(wolfssl SHARED ${LIB_SOURCES})
+else()
+    add_library(wolfssl STATIC ${LIB_SOURCES})
+endif()
+
+add_library(wolfssl::wolfssl ALIAS wolfssl)
 
 set_target_properties(wolfssl
     PROPERTIES
@@ -1919,6 +1991,7 @@ target_compile_definitions(wolfssl PRIVATE "BUILDING_WOLFSSL")
 if(${BUILD_SHARED_LIBS})
     target_compile_definitions(wolfssl PUBLIC "WOLFSSL_DLL")
 endif()
+target_compile_definitions(wolfssl PUBLIC ${WOLFSSL_DEFINITIONS})
 
 ####################################################
 # Include Directories
@@ -1941,7 +2014,7 @@ target_link_libraries(wolfssl PUBLIC ${WOLFSSL_LINK_LIBS})
 if(WIN32)
     # For Windows link ws2_32
     target_link_libraries(wolfssl PUBLIC
-        $<$<PLATFORM_ID:Windows>:ws2_32>)
+        $<$<PLATFORM_ID:Windows>:ws2_32 crypt32>)
 elseif(APPLE)
     if(WOLFSSL_SYS_CA_CERTS)
         target_link_libraries(wolfssl PUBLIC
@@ -1949,10 +2022,12 @@ elseif(APPLE)
             ${SECURITY_FRAMEWORK})
     endif()
 else()
-    # DH requires math (m) library
-    target_link_libraries(wolfssl
-        PUBLIC
-            m)
+    if(WOLFSSL_DH AND NOT WOLFSSL_DH_CONST)
+        # DH requires math (m) library
+        target_link_libraries(wolfssl
+            PUBLIC
+                m)
+    endif()
 endif()
 
 ####################################################
@@ -2201,7 +2276,7 @@ if(NOT BUILD_FIPS OR BUILD_FIPS_V1)
     "wolfssl/wolfcrypt/fips.h")
 endif()
 
-if(NOT BUILD_QNXCAAM)
+if(NOT BUILD_QNXCAAM OR BUILD_CAAM)
   list(APPEND HEADER_EXCLUDE
     "wolfssl/wolfcrypt/port/caam"
     )
@@ -2260,7 +2335,8 @@ install(FILES
 # Install the export set
 install(EXPORT wolfssl-targets
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/wolfssl
-        FILE wolfssl-config.cmake)
+        FILE wolfssl-targets.cmake
+        NAMESPACE wolfssl::)
 
 # TODO: Distro build + rules for what to include in the distro.
 #       See various include.am files.
@@ -2274,3 +2350,28 @@ set(VERSION ${PROJECT_VERSION})
 configure_file(support/wolfssl.pc.in ${CMAKE_CURRENT_BINARY_DIR}/support/wolfssl.pc @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/support/wolfssl.pc
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+
+include(CMakePackageConfigHelpers)
+configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Config.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/wolfssl-config.cmake"
+  INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/wolfssl"
+  NO_SET_AND_CHECK_MACRO
+  NO_CHECK_REQUIRED_COMPONENTS_MACRO
+)
+
+export(EXPORT wolfssl-targets
+  FILE "${CMAKE_CURRENT_BINARY_DIR}/wolfssl-targets.cmake"
+  NAMESPACE wolfssl::
+)
+
+write_basic_package_version_file(
+  "${CMAKE_CURRENT_BINARY_DIR}/wolfssl-config-version.cmake"
+  VERSION "${wolfssl_VERSION_MAJOR}.${wolfssl_VERSION_MINOR}"
+  COMPATIBILITY AnyNewerVersion
+)
+
+install(FILES
+  ${CMAKE_CURRENT_BINARY_DIR}/wolfssl-config.cmake
+  ${CMAKE_CURRENT_BINARY_DIR}/wolfssl-config-version.cmake
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/wolfssl
+)

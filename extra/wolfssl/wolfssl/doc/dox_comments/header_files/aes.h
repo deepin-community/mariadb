@@ -136,8 +136,10 @@ int  wc_AesCbcEncrypt(Aes* aes, byte* out,
     \param aes pointer to the AES object used to decrypt data.
     \param out pointer to the output buffer in which to store the plain text
     of the decrypted message.
+    size must be a multiple of AES_BLOCK_LENGTH, padded if necessary
     \param in pointer to the input buffer containing cipher text to be
     decrypted.
+    size must be a multiple of AES_BLOCK_LENGTH, padded if necessary
     \param sz size of input message.
 
     _Example_
@@ -176,7 +178,9 @@ int  wc_AesCbcDecrypt(Aes* aes, byte* out,
     \param aes pointer to the AES object used to decrypt data
     \param out pointer to the output buffer in which to store the cipher
     text of the encrypted message
+    size must be a multiple of AES_BLOCK_LENGTH, padded if necessary
     \param in pointer to the input buffer containing plain text to be encrypted
+    size must be a multiple of AES_BLOCK_LENGTH, padded if necessary
     \param sz size of the input plain text
 
     _Example_
@@ -353,7 +357,9 @@ int  wc_AesGcmSetKey(Aes* aes, const byte* key, word32 len);
 
     \param aes - pointer to the AES object used to encrypt data
     \param out pointer to the output buffer in which to store the cipher text
+    size must match in's size (sz)
     \param in pointer to the input buffer holding the message to encrypt
+    size must be a multiple of AES_BLOCK_LENGTH, padded if necessary
     \param sz length of the input message to encrypt
     \param iv pointer to the buffer containing the initialization vector
     \param ivSz length of the initialization vector
@@ -403,7 +409,9 @@ int  wc_AesGcmEncrypt(Aes* aes, byte* out,
 
     \param aes pointer to the AES object used to encrypt data
     \param out pointer to the output buffer in which to store the message text
+    size must match in's size (sz)
     \param in pointer to the input buffer holding the cipher text to decrypt
+    size must be a multiple of AES_BLOCK_LENGTH, padded if necessary
     \param sz length of the cipher text to decrypt
     \param iv pointer to the buffer containing the initialization vector
     \param ivSz length of the initialization vector
@@ -855,7 +863,8 @@ int wc_AesXtsFree(XtsAes* aes);
 /*!
     \ingroup AES
     \brief Initialize Aes structure. Sets heap hint to be used and ID for use
-    with async hardware
+    with async hardware. It is up to the user to call wc_AesFree on the Aes
+    structure when done.
     \return 0 Success
 
     \param aes aes structure in to initialize
@@ -870,13 +879,41 @@ int wc_AesXtsFree(XtsAes* aes);
 
     //heap hint could be set here if used
 
-    wc_AesInit(&aes, hint, devId);
+    wc_AesInit(&enc, hint, devId);
     \endcode
 
     \sa wc_AesSetKey
     \sa wc_AesSetIV
+    \sa wc_AesFree
 */
 int  wc_AesInit(Aes* aes, void* heap, int devId);
+
+/*!
+    \ingroup AES
+    \brief free resources associated with the Aes structure when applicable.
+    Internally may sometimes be a no-op but still recommended to call in all
+    cases as a general best-practice (IE if application code is ported for use
+    on new environments where the call is applicable).
+    \return no return (void function)
+
+    \param aes aes structure in to free
+
+    _Example_
+    \code
+    Aes enc;
+    void* hint = NULL;
+    int devId = INVALID_DEVID; //if not using async INVALID_DEVID is default
+
+    //heap hint could be set here if used
+
+    wc_AesInit(&enc, hint, devId);
+    // ... do some interesting things ...
+    wc_AesFree(&enc);
+    \endcode
+
+    \sa wc_AesInit
+*/
+int  wc_AesFree(Aes* aes);
 
 /*!
     \ingroup AES

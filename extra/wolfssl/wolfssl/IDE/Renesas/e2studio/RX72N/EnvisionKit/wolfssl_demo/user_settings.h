@@ -1,6 +1,6 @@
 /* user_settings.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -40,9 +40,10 @@
  *      113: TSIPv1.13
  *      114: TSIPv1.14
  *      115: TSIPv1.15
+ *      117: TSIPv1.17
  *----------------------------------------------------------------------------*/
   #define WOLFSSL_RENESAS_TSIP
-  #define WOLFSSL_RENESAS_TSIP_VER     115
+  #define WOLFSSL_RENESAS_TSIP_VER     117
 
 #if defined(SIMPLE_TLS_CLIENT) || defined(SIMPLE_TLS_SERVER)
  #undef WOLFSSL_RENESAS_TSIP
@@ -75,6 +76,18 @@
     #define WOLFSSL_NO_SOCK
     #define WOLFSSL_USER_IO
 #endif
+
+/*-- Compiler related definitions  ---------------------------------------------
+ *
+ *  CC-RX is C99 compliant, but may not provide the features wolfSSL requires.
+ *  This section defines macros for such cases to avoid build-time or run-time
+ *  failures.
+ *
+ *----------------------------------------------------------------------------*/
+
+/* CC-RX does not support variable length array */
+#define WOLFSSL_SP_NO_DYN_STACK
+
 
 /*-- Cipher related definitions  -----------------------------------------------
  *
@@ -121,6 +134,11 @@
    */
   #define USE_ECC_CERT
 
+  /* Enable WOLFSSL_CHECK_SIG_FAULTS definition when self-verify for
+   * Ecc signature is required. It is disabled by default.
+   */
+  /*#define WOLFSSL_CHECK_SIG_FAULTS*/
+
   /* In this example application, Root CA cert buffer named 
    * "ca_ecc_cert_der_256" is used under the following macro definition 
    * for ECDSA.
@@ -157,7 +175,6 @@
   #define WOLFSSL_LOG_PRINTF
   #define WOLFSSL_HAVE_MIN
   #define WOLFSSL_HAVE_MAX
-  #define WOLFSSL_SMALL_STACK
   #define NO_WRITEV
   
 
@@ -175,7 +192,12 @@
   #define TFM_TIMING_RESISTANT
   #define ECC_TIMING_RESISTANT
 
-  #define USE_FAST_MATH
+  #define FP_MAX_BITS   4096
+  #define WOLFSSL_SP_MATH
+  #define WOLFSSL_SP_MATH_ALL /* use SP math for all key sizes and curves */
+  #define WOLFSSL_HAVE_SP_RSA
+  #define WOLFSSL_HAVE_SP_DH
+  #define WOLFSSL_HAVE_SP_ECC
 
 /*-- Debugging options  ------------------------------------------------------
  *
@@ -221,6 +243,7 @@
         #define WOLFSSL_RENESAS_TSIP_TLS_AES_CRYPT
         #define HAVE_PK_CALLBACKS
         #define WOLF_CRYPTO_CB
+        #define WOLF_PRIVATE_KEY_ID
     #endif
 
 #else

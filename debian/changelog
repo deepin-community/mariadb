@@ -1,3 +1,79 @@
+mariadb (1:10.11.6-1) unstable; urgency=medium
+
+  [ Otto Kekäläinen ]
+  * New upstream version 10.11.6. Includes fixes for several severe regressions
+    as noted at https://mariadb.com/kb/en/mariadb-10-11-6-release-notes/ as well
+    as security issues:
+    - CVE-2023-22084
+  * Upstream MariaDB Server 10.11.6 included fix for fmtlib 10 compatibility
+    (Closes: #1056387)
+  * Drop STACK_DIRECTION customization as upstream CMake code now handles it
+  * Update traces to match these changes in MariaDB 10.11.6:
+    - New option 'ALL' to multiple parameters as a way to define that all
+      possible values/options are selected
+    - New variables log-slow-max-warnings, note-verbosity and
+      optimizer-max-sel-args
+    - Default value for innodb-purge-batch-size increased to 1000
+    - Support for TLSv1.1 has been dropped
+
+  [ Guillem Jover ]
+  * Remove tilegx support removed from dpkg 1.22.0 (Closes: #1056748)
+
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 26 Nov 2023 18:54:33 -0800
+
+mariadb (1:10.11.5-3) unstable; urgency=medium
+
+  * Bugfix: Rewrite 0300a91 again to retain original autopkgtest behavior
+  * Disable more tests not passing on Debian post-build test or Launchpad
+  * Fix misc spelling
+
+ -- Otto Kekäläinen <otto@debian.org>  Fri, 13 Oct 2023 21:48:03 -0700
+
+mariadb (1:10.11.5-2) unstable; urgency=medium
+
+  [ Otto Kekäläinen ]
+  * Make SysV init more verbose in case of MariaDB start failures
+  * Test & QA related changes:
+    * Bugfix: Rewrite 0300a9157cc to retain original autopkgtest behavior
+    * Switch autopkgtest upstream job to use '--skip-rpl --suite=main' again
+    * Include type_test.so and others in mariadb-test package
+    * Revert "Skip upstream MTR run on armel/armhf where lxcfs upgrade broke CPU check"
+    * Partially revert fc1358087b3 about MDEV-30728 to see if it still occurs
+    * Remove overrides for test failures that should be fixed now
+    * Add patch to fix disk.disk{_notembedded} tests and re-enable them
+    * Disable tests not passing on Debian CI, Salsa CI or Launchpad builds
+
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 07 Oct 2023 16:00:43 -0700
+
+mariadb (1:10.11.5-1) unstable; urgency=medium
+
+  [ Helmut Grohne ]
+  * Fix FTCBFS: Do not pass host CFLAGS to the native build. (Closes: #1051222)
+
+  [ Otto Kekäläinen ]
+  * New upstream version 10.11.5. Includes fixes for several severe regressions
+    as noted at https://mariadb.com/kb/en/mariadb-10-11-5-release-notes/ such as
+    - MDEV-31642: Upgrade may crash if innodb_log_file_buffering=OFF
+      (Closes: #1040784)
+  * Update configuration tracing to match what is expected for 10.11.5
+  * Include trailing slash in watch file to be compatible with latest uscan
+  * Re-apply "Limit check of running mysqld/mariadbd to system users (Closes: #1032047)"
+  * Re-apply "Add patches to fix spelling in MariaDB and components (Closes: #1032860)"
+  * Sync downstream (where applicable) with upstream 10.11 debian/* contents
+  * Complement upstream commits with more complete mysql->mariadb conversion
+  * Misc fixes to Debian scripts to satisfy Shellcheck
+  * Fix blocksize check to use $mysql_datadir/$datadir correctly
+  * Make sure that datadir always has some value and exists
+
+  [ Tuukka Pasanen ]
+  * MDEV-30951: Fix small perlcritic and enable modern Perl
+  * Remove usage of AWK from Debian init and postinst scripts
+
+  [ Anel Husakovic ]
+  * MDEV-31358: Update description for MariaDB deb packages
+
+ -- Otto Kekäläinen <otto@debian.org>  Tue, 03 Oct 2023 20:59:30 -0700
+
 mariadb (1:10.11.4-1) unstable; urgency=medium
 
   [ Otto Kekäläinen ]

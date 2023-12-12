@@ -1,6 +1,6 @@
 /* sha512.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -91,6 +91,11 @@
     #include <wolfssl/wolfcrypt/port/kcapi/kcapi_hash.h>
 #endif
 
+#if defined(WOLFSSL_IMXRT1170_CAAM)
+    #include "fsl_device_registers.h"
+    #include "fsl_caam.h"
+#endif
+
 #if defined(_MSC_VER)
     #define SHA512_NOINLINE __declspec(noinline)
 #elif defined(__IAR_SYSTEMS_ICC__) || defined(__GNUC__)
@@ -135,7 +140,7 @@ enum {
 
     WC_SHA512_256_BLOCK_SIZE  = WC_SHA512_BLOCK_SIZE,
     WC_SHA512_256_DIGEST_SIZE = 32,
-    WC_SHA512_256_PAD_SIZE    = WC_SHA512_PAD_SIZE,
+    WC_SHA512_256_PAD_SIZE    = WC_SHA512_PAD_SIZE
 };
 
 
@@ -192,6 +197,10 @@ struct wc_Sha512 {
 #ifdef WOLFSSL_HASH_FLAGS
     word32 flags; /* enum wc_HashFlags in hash.h */
 #endif
+#ifdef WOLFSSL_IMXRT1170_CAAM
+    caam_hash_ctx_t ctx;
+    caam_handle_t hndl;
+#endif
 #endif /* WOLFSSL_PSOC6_CRYPTO */
 };
 
@@ -208,7 +217,6 @@ struct wc_Sha512 {
 #endif /* HAVE_FIPS */
 
 #ifdef WOLFSSL_SHA512
-
 
 WOLFSSL_API int wc_InitSha512(wc_Sha512* sha);
 WOLFSSL_API int wc_InitSha512_ex(wc_Sha512* sha, void* heap, int devId);
@@ -228,11 +236,12 @@ WOLFSSL_API int wc_Sha512Copy(wc_Sha512* src, wc_Sha512* dst);
     WOLFSSL_API int wc_Sha512GetFlags(wc_Sha512* sha512, word32* flags);
 #endif
 
-#if defined(OPENSSL_EXTRA)
+#if defined(OPENSSL_EXTRA) || defined(HAVE_CURL)
 WOLFSSL_API int wc_Sha512Transform(wc_Sha512* sha, const unsigned char* data);
 #endif
 
-#if !defined(WOLFSSL_NOSHA512_224)
+#if !defined(WOLFSSL_NOSHA512_224) && \
+   (!defined(HAVE_FIPS) || FIPS_VERSION_GE(5, 3)) && !defined(HAVE_SELFTEST)
 WOLFSSL_API int wc_InitSha512_224(wc_Sha512* sha);
 WOLFSSL_API int wc_InitSha512_224_ex(wc_Sha512* sha, void* heap, int devId);
 WOLFSSL_API int wc_Sha512_224Update(wc_Sha512* sha, const byte* data, word32 len);
@@ -246,13 +255,14 @@ WOLFSSL_API int wc_Sha512_224Copy(wc_Sha512* src, wc_Sha512* dst);
     WOLFSSL_API int wc_Sha512_224GetFlags(wc_Sha512* sha512, word32* flags);
 #endif
 
-#if defined(OPENSSL_EXTRA)
+#if defined(OPENSSL_EXTRA) || defined(HAVE_CURL)
 WOLFSSL_API int wc_Sha512_224Transform(wc_Sha512* sha,
                                                 const unsigned char* data);
-#endif
-#endif /* !WOLFSSL_NOSHA512_224 */
+#endif /* OPENSSL_EXTRA */
+#endif /* !WOLFSSL_NOSHA512_224 && !FIPS ... */
 
-#if !defined(WOLFSSL_NOSHA512_256)
+#if !defined(WOLFSSL_NOSHA512_256) && \
+   (!defined(HAVE_FIPS) || FIPS_VERSION_GE(5, 3)) && !defined(HAVE_SELFTEST)
 WOLFSSL_API int wc_InitSha512_256(wc_Sha512* sha);
 WOLFSSL_API int wc_InitSha512_256_ex(wc_Sha512* sha, void* heap, int devId);
 WOLFSSL_API int wc_Sha512_256Update(wc_Sha512* sha, const byte* data, word32 len);
@@ -266,13 +276,11 @@ WOLFSSL_API int wc_Sha512_256Copy(wc_Sha512* src, wc_Sha512* dst);
     WOLFSSL_API int wc_Sha512_256GetFlags(wc_Sha512* sha512, word32* flags);
 #endif
 
-#if defined(OPENSSL_EXTRA)
+#if defined(OPENSSL_EXTRA) || defined(HAVE_CURL)
 WOLFSSL_API int wc_Sha512_256Transform(wc_Sha512* sha,
                                                 const unsigned char* data);
-#endif
-#endif /* !WOLFSSL_NOSHA512_256 */
-
-
+#endif /* OPENSSL_EXTRA */
+#endif /* !WOLFSSL_NOSHA512_256 && !FIPS ... */
 
 #endif /* WOLFSSL_SHA512 */
 

@@ -112,6 +112,7 @@ wsrep::transaction::transaction(
     , apply_error_buf_()
     , xid_()
     , streaming_rollback_in_progress_(false)
+    , is_bf_immutable_(false)
 { }
 
 
@@ -555,6 +556,12 @@ int wsrep::transaction::before_commit()
         assert(0);
         break;
     }
+
+    if (ret == 0 && state() == s_committing)
+    {
+        is_bf_immutable_ = true;
+    }
+
     debug_log_state("before_commit_leave");
     return ret;
 }
@@ -564,6 +571,7 @@ int wsrep::transaction::ordered_commit()
     wsrep::unique_lock<wsrep::mutex> lock(client_state_.mutex());
     debug_log_state("ordered_commit_enter");
     assert(state() == s_committing);
+    assert(is_bf_immutable_);
     assert(ordered());
     client_service_.debug_sync("wsrep_before_commit_order_leave");
     int ret(provider().commit_order_leave(ws_handle_, ws_meta_,
@@ -602,6 +610,7 @@ int wsrep::transaction::after_commit()
     int ret(0);
 
     wsrep::unique_lock<wsrep::mutex> lock(client_state_.mutex());
+    assert(is_bf_immutable_);
     debug_log_state("after_commit_enter");
     assert(state() == s_ordered_commit);
 
@@ -639,7 +648,6 @@ int wsrep::transaction::after_commit()
     }
     assert(ret == 0);
     state(lock, s_committed);
-
     debug_log_state("after_commit_leave");
     return ret;
 }
@@ -735,8 +743,7 @@ int wsrep::transaction::after_rollback()
 {
     wsrep::unique_lock<wsrep::mutex> lock(client_state_.mutex());
     debug_log_state("after_rollback_enter");
-    assert(state() == s_aborting ||
-           state() == s_must_replay);
+    assert(state() == s_aborting || state() == s_must_replay);
 
     // Note that it would be technically more correct to
     // remove fragments after TOI BF abort in before_rollback(),
@@ -747,16 +754,18 @@ int wsrep::transaction::after_rollback()
     if (is_streaming() && bf_aborted_in_total_order_)
     {
         remove_fragments_in_storage_service_scope(lock);
-        streaming_context_.cleanup();
-    }
-
-    if (is_streaming() && state() != s_must_replay)
-    {
-        streaming_context_.cleanup();
     }
 
     if (state() == s_aborting)
     {
+        if (is_streaming())
+        {
+            // We skip streaming context cleanup for replay because
+            // we want to remember if the transaction was streaming.
+            // See transaction::replay()
+            streaming_context_.cleanup();
+        }
+
         state(lock, s_aborted);
     }
 
@@ -808,9 +817,15 @@ void wsrep::transaction::remove_fragments_in_storage_service_scope(
 
 int wsrep::transaction::after_statement()
 {
+  wsrep::unique_lock<wsrep::mutex> lock(client_state_.mutex());
+  return after_statement(lock);
+}
+
+int wsrep::transaction::after_statement(wsrep::unique_lock<wsrep::mutex>& lock)
+{
     int ret(0);
-    wsrep::unique_lock<wsrep::mutex> lock(client_state_.mutex());
     debug_log_state("after_statement_enter");
+    assert(lock.owns_lock());
     assert(client_state_.mode() == wsrep::client_state::m_local);
     assert(state() == s_executing ||
            state() == s_prepared ||
@@ -981,6 +996,12 @@ bool wsrep::transaction::bf_abort(
                          wsrep::log::debug_level_transaction,
                          "Transaction not active, skipping bf abort");
     }
+    else if (is_bf_immutable_)
+    {
+        WSREP_LOG_DEBUG(client_state_.debug_log_level(),
+                        wsrep::log::debug_level_transaction,
+                        "Transaction has become immutable for BF abort");
+    }
     else
     {
         switch (state_at_enter)
@@ -1073,9 +1094,7 @@ bool wsrep::transaction::bf_abort(
                 }
             }
 
-            lock.unlock();
-            server_service_.background_rollback(client_state_);
-            lock.lock();
+            server_service_.background_rollback(lock, client_state_);
         }
     }
     return ret;
@@ -2052,7 +2071,9 @@ int wsrep::transaction::replay(wsrep::unique_lock<wsrep::mutex>& lock)
             wsrep::e_deadlock_error);
         if (is_streaming())
         {
+            lock.unlock();
             client_service_.remove_fragments();
+            lock.lock();
             streaming_context_.cleanup();
         }
         state(lock, s_aborted);
@@ -2063,16 +2084,16 @@ int wsrep::transaction::replay(wsrep::unique_lock<wsrep::mutex>& lock)
         break;
     }
 
-    WSREP_LOG_DEBUG(client_state_.debug_log_level(),
-                    wsrep::log::debug_level_transaction,
-                    "replay returned" << replay_ret);
+    WSREP_LOG_DEBUG(
+        client_state_.debug_log_level(), wsrep::log::debug_level_transaction,
+        "replay returned: " << replay_ret << " ("
+                            << wsrep::provider::to_string(replay_ret) << ")");
     return ret;
 }
 
 void wsrep::transaction::cleanup()
 {
     debug_log_state("cleanup_enter");
-    assert(is_streaming() == false);
     assert(state() == s_committed || state() == s_aborted);
     id_ = wsrep::transaction_id::undefined();
     ws_handle_ = wsrep::ws_handle();
@@ -2096,6 +2117,7 @@ void wsrep::transaction::cleanup()
     client_service_.cleanup_transaction();
     apply_error_buf_.clear();
     xid_.clear();
+    is_bf_immutable_ = false;
     debug_log_state("cleanup_leave");
 }
 
@@ -2140,4 +2162,10 @@ void wsrep::transaction::debug_log_key_append(const wsrep::key& key) const
                     << "trx_id: "
                     << int64_t(id().get())
                     << " append key:\n" << key);
+}
+
+std::ostream& wsrep::operator<<(std::ostream& os,
+                                enum wsrep::transaction::state state)
+{
+    return (os << to_c_string(state));
 }

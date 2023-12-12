@@ -27,7 +27,7 @@ set -ex
 # Start the daemon if it was not running. For example in Docker testing
 # environments there might not be any systemd et al and the service needs to
 # be started manually.
-if ! which systemctl
+if ! command -v systemctl
 then
   if ! /etc/init.d/mariadb status
   then
@@ -57,9 +57,10 @@ INSERT INTO foo (bar) VALUES (41);
 EOT
 
 result=$(echo 'SELECT bar+1 FROM foo;'|mysql --batch --skip-column-names --user=testuser --password=testpassword testdatabase)
-if [ "$result" != "42" ]; then
-       echo "Unexpected result" >&2
-       exit 1
+if [ "$result" != "42" ]
+then
+  echo "Unexpected result" >&2
+  exit 1
 fi
 
 mysql --user=testuser --password=testpassword testdatabase <<EOT
@@ -91,20 +92,21 @@ EOT
 plugin=mariadb-plugin-rocksdb
 if [ "$(dpkg-architecture -qDEB_HOST_ARCH_BITS)" != 32 ] &&
    [ "$(dpkg-architecture -qDEB_HOST_ARCH_ENDIAN)" = little ]
-  then
+then
   dpkg-query -W $plugin
 
   LOG=/var/lib/mysql/#rocksdb/LOG
   # XXX: The server may only be started during the install of
   #      mariadb-server, which happens before that of the plugin.
-  [ -e $LOG ] || mysql -e "INSTALL PLUGIN RocksDB SONAME 'ha_rocksdb';"
+  [ -e $LOG ] || mariadb -e "INSTALL PLUGIN RocksDB SONAME 'ha_rocksdb';"
   # XXX: rocksdb_supported_compression_types variable does not report ZSTD.
 
   # Print RocksDB supported items so test log is easier to debug
   grep -F " supported:" $LOG
 
   # Check that the expected compression methods are supported
-  for a in LZ4 Snappy Zlib ZSTD; do
+  for a in LZ4 Snappy Zlib ZSTD
+  do
     if ! grep -qE "k$a(Compression)? supported: 1" $LOG
     then
       # Fail with explicit error message
@@ -113,5 +115,9 @@ if [ "$(dpkg-architecture -qDEB_HOST_ARCH_BITS)" != 32 ] &&
     fi
   done
 else
-  ! dpkg-query -W $plugin
+  if dpkg-query -W $plugin
+  then
+    echo "Error: Plugin $plugin was found even though it should not exist on a 32-bit and little-endian system"
+    exit 1
+  fi
 fi

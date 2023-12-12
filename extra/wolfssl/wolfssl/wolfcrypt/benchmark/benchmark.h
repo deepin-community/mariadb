@@ -1,6 +1,6 @@
 /* wolfcrypt/benchmark/benchmark.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -43,7 +43,7 @@ int wolfcrypt_benchmark_main(int argc, char** argv);
 /* individual benchmarks */
 int  benchmark_init(void);
 int  benchmark_free(void);
-void benchmark_configure(int block_size);
+void benchmark_configure(word32 block_size);
 
 void bench_des(int useDeviceID);
 void bench_arc4(int useDeviceID);
@@ -55,7 +55,7 @@ void bench_gmac(void);
 void bench_aesccm(int useDeviceID);
 void bench_aesecb(int useDeviceID);
 void bench_aesxts(void);
-void bench_aesctr(void);
+void bench_aesctr(int useDeviceID);
 void bench_aescfb(void);
 void bench_aesofb(void);
 void bench_aessiv(void);
@@ -67,13 +67,21 @@ void bench_sha224(int useDeviceID);
 void bench_sha256(int useDeviceID);
 void bench_sha384(int useDeviceID);
 void bench_sha512(int useDeviceID);
+#if !defined(WOLFSSL_NOSHA512_224) && \
+   (!defined(HAVE_FIPS) || FIPS_VERSION_GE(5, 3)) && !defined(HAVE_SELFTEST)
+void bench_sha512_224(int useDeviceID);
+#endif
+#if !defined(WOLFSSL_NOSHA512_256) && \
+   (!defined(HAVE_FIPS) || FIPS_VERSION_GE(5, 3)) && !defined(HAVE_SELFTEST)
+void bench_sha512_256(int useDeviceID);
+#endif
 void bench_sha3_224(int useDeviceID);
 void bench_sha3_256(int useDeviceID);
 void bench_sha3_384(int useDeviceID);
 void bench_sha3_512(int useDeviceID);
 void bench_shake128(int useDeviceID);
 void bench_shake256(int useDeviceID);
-int  bench_ripemd(void);
+void bench_ripemd(void);
 void bench_cmac(int useDeviceID);
 void bench_scrypt(void);
 void bench_hmac_md5(int useDeviceID);
@@ -84,9 +92,9 @@ void bench_hmac_sha384(int useDeviceID);
 void bench_hmac_sha512(int useDeviceID);
 void bench_siphash(void);
 void bench_rsaKeyGen(int useDeviceID);
-void bench_rsaKeyGen_size(int useDeviceID, int keySz);
+void bench_rsaKeyGen_size(int useDeviceID, word32 keySz);
 void bench_rsa(int useDeviceID);
-void bench_rsa_key(int useDeviceID, int keySz);
+void bench_rsa_key(int useDeviceID, word32 keySz);
 void bench_dh(int useDeviceID);
 void bench_kyber(int type);
 void bench_ecc_curve(int curveId);
@@ -114,10 +122,8 @@ void bench_blake2b(void);
 void bench_blake2s(void);
 void bench_pbkdf2(void);
 void bench_falconKeySign(byte level);
-void bench_dilithiumKeySign(byte level, byte sym);
+void bench_dilithiumKeySign(byte level);
 void bench_sphincsKeySign(byte level, byte optim);
-void bench_pqcKemKeygen(word32 alg);
-void bench_pqcKemEncapDecap(word32 alg);
 
 void bench_stats_print(void);
 

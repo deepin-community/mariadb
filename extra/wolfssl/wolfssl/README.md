@@ -79,125 +79,150 @@ single call hash function. Instead the name `WC_SHA`, `WC_SHA256`, `WC_SHA384` a
 `WC_SHA512` should be used for the enum name.
 
 
-# wolfSSL Release 5.5.4 (Dec 21, 2022)
+# wolfSSL Release 5.6.3 (Jun 20, 2023)
 
-Release 5.5.4 of wolfSSL embedded TLS has bug fixes and new features including:
+Release 5.6.3 has been developed according to wolfSSL's development and QA process (see link below) and successfully passed the quality criteria.
+
+Release 5.6.3 of wolfSSL embedded TLS has 4 bug fixes:
+
+* Fix for setting the atomic macro options introduced in release 5.6.2. This issue affects GNU gcc autoconf builds. The fix resolves a potential mismatch of the generated macros defined in options.h file and the macros used when the wolfSSL library is compiled. In version 5.6.2 this mismatch could result in unstable runtime behavior.
+* Fix for invalid suffix error with Windows build using the macro GCM_TABLE_4BIT.
+* Improvements to Encrypted Memory support (WC_PROTECT_ENCRYPTED_MEM) implementations for modular exponentiation in SP math-all (sp_int.c) and TFM (tfm.c).
+* Improvements to SendAlert for getting output buffer.
+
+
+# wolfSSL Release 5.6.2 (Jun 09, 2023)
+
+Release 5.6.2 has been developed according to wolfSSL's development and QA process (see link below) and successfully passed the quality criteria.
+https://www.wolfssl.com/about/wolfssl-software-development-process-quality-assurance
+
+NOTE: * --enable-heapmath is being deprecated and will be removed by 2024
+
+Release 5.6.2 of wolfSSL embedded TLS has bug fixes and new features including:
+
+## Vulnerabilities
+* [Low] In cases where a malicious agent could analyze cache timing at a very detailed level, information about the AES key used could be leaked during T/S Box lookups. One such case was shown on RISC-V hardware using the MicroWalk tool (https://github.com/microwalk-project/Microwalk). A hardened version of T/S Box lookups was added in wolfSSL to help mitigate this potential attack and is now on by default with RISC-V builds and can be enabled on other builds if desired by compiling wolfSSL with the macro WOLFSSL_AES_TOUCH_LINES. Thanks to Jan Wichelmann, Christopher Peredy, Florian Sieck, Anna Pätschke, Thomas Eisenbarth (University of Lübeck): MAMBO-V: Dynamic Side-Channel Leakage Analysis on RISC-V. Fixed in the following GitHub pull request https://github.com/wolfSSL/wolfssl/pull/6309
+* [High] In previous versions of wolfSSL if a TLS 1.3 client gets neither a PSK (pre shared key) extension nor a KSE (key share extension) when connecting to a malicious server, a default predictable buffer gets used for the IKM value when generating the session master secret. Using a potentially known IKM value when generating the session master secret key compromises the key generated, allowing an eavesdropper to reconstruct it and potentially allowing surreptitious access to or meddling with message contents in the session. This issue does not affect client validation of connected servers, nor expose private key information, but could result in an insecure TLS 1.3 session when not controlling both sides of the connection. We recommend that TLS 1.3 client side users update the version of wolfSSL used. Thanks to Johannes from Sectra Communications and Linköping University for the report. Fixed in the following GitHub pull request https://github.com/wolfSSL/wolfssl/pull/6412
 
 ## New Feature Additions
 
-* QUIC related changes for HAProxy integration and config option
-* Support for Analog Devices MAXQ1080 and MAXQ1065
-* Testing and build of wolfSSL with NuttX
-* New software based entropy gatherer with configure option --enable-entropy-memuse
-* NXP SE050 feature expansion and fixes, adding in RSA support and conditional compile of AES and CMAC
-* Support for multi-threaded sniffer
+### New Ports and Expansions
+* Add support for STM32H5
+* Add support for Renesas TSIP v1.17
+* Add Renesas SCE RSA crypto-only support
+* STARCORE DSP port and example builds added
+* Add the function wc_PKCS7_SetDefaultSignedAttribs for setting PKCS7 signed attributes to use with PKCS7 bundle creation
+* NXP IMX6Q CAAM port with QNX and performance optimizations for AES-CTR
 
-## Improvements / Optimizations
+### New Build Options
+* ASN.1 print utility to decode ASN.1 syntax and print out human readable text --enable-asn-print. Utility app is located in the directory ./examples/asn1/
+* Add introspection for math build, wc_GetMathInfo() to get information about the math library compiled into the linked wolfSSL library
+* Implement TLS recommendations from RFC 9325 for hardening TLS/DTLS security. Enabled with the autoconf flag --enable-harden-tls.
+* Add option to support disabling thread local storage, --disable-threadlocal
+* Added wc_DsaSign_ex() and wc_DsaVerify_ex() for handling alternative digest algorithms with DSA Sign/Verify
+* Implement atomic operations interface. Macros auto-detect if atomic operations are expected to be available, can be turned off with the macro WOLFSSL_NO_ATOMICS
+* Added support for DTLS 1.3 Authentication and Integrity-Only Cipher Suites
+* Expand crypto callback to have a device ID find callback function with wc_CryptoCb_SetDeviceFindCb. Enabled with the macro WOLF_CRYPTO_CB_FIND
 
-### Benchmark and Tests
-* Add alternate test case for unsupported static memory API when testing mutex allocations
-* Additional unit test cases added for AES CCM 256-bit
-* Initialize and free AES object with benchmarking AES-OFB
-* Kyber with DTLS 1.3 tests added
-* Tidy up Espressif ESP32 test and benchmark examples
-* Rework to be able to run API tests individually and add display of time taken per test
+## Enhancements and Optimizations
 
-### Build and Port Improvements
-* Add check for 64-bit ABI on MIPS64 before declaring a 64-bit CPU
-* Add support to detect SIZEOF_LONG in armclang and diab
-* Added in a simple example working on Rx72n
-* Update azsphere support to prevent compilation of file included inline
-* --enable-brainpool configure option added and default to on when custom curves are also on
-* Add RSA PSS salt defines to engine builds if not FIPS v2
+### Optimizations
+* Increased performance with ChaCha20 C implementation and general XOR operations
+* Added integer type to the ASN.1 sequencing with ASN.1 Integer sequence
+* With wolfSSL_get_x509_next_altname reset alt name list to head once cycled through if compiling with the macro WOLFSSL_MULTICIRCULATE_ALTNAMELIST
+* Additional key validity sanity checks on input to wolfSSL_EC_KEY_set_private_key
+* adds support for TLSv1.3 stateful session tickets when using SSL_OP_NO_TICKET
 
-### Post Quantum
-* Remove kyber-90s and route all Kyber through wolfcrypt
-* Purge older version of NTRU and SABER from wolfSSL
+### Memory Optimizations
+* Improvements to stack usage and management with SP int math library
+* Optimization to TLS 1.3 server to remove caching messages for Ed25519/Ed448
+* Added a HAVE_CURL macro build for building a subset of the wolfSSL library when linking with cURL
+* Memory usage improvement with reducing the size of alignment needed with AES
+* Reduce run time memory used with ECC operations and ALT_ECC_SIZE
+* Fixes and improvements for building edge cases such as crypto callback without hash-drbg with low footprint options
+* Support HAVE_SESSION_TICKET build option without depending on realloc
 
-### SP Math
-* Support static memory build with sp-math
-* SP C, SP int: improve performance
-* SP int: support mingw64 again
-* SP int: enhancements to guess 64-bit type and check on NO_64BIT macro set before using long long
-* SP int: check size required when using sp_int on stack
-* SP: --enable-sp-asm now enables SP by default if not set
-* SP: support aarch64 big endian
+### Documentation
+* Instructions for GPDMA on STM32 configuration added
+* Add in instructions for compiling with zephyr on STM32
+* Documentation fixup for wolfSSL_get_chain_cert()
+* Fix the file pointed to in the TI RTOS documentation that we maintain
+* Documentation for wolfSSL_CertManagerFreeCRL
+* Updates made to AES and Chacha documentation
+* Update Japanese comments for Ed25519, AES, and other miscellaneous items
 
-### DTLS
-* Allow DTLS 1.3 to compile when FIPS is enabled
-* Allow for stateless DTLS client hello parsing
+### Tests
+* Add in an option for easily testing malloc failures when building with WOLFSSL_MEM_FAIL_COUNT macro
+* Updated in process for using Expect vs Assert to facilitate more malloc failure tests
+* Enhance wolfCrypt test for builds that do not have ECC SECP curves enabled
+* ESP32 platform-specific VisualGDB test & benchmark projects
+* Update to dependencies in docker container file used for tests
+* Fix up for base 10 output with bundled benchmark application
 
-### Misc.
-* Easier detection of DRBG health when using Intel’s RDRAND by updating the structures status value
-* Detection of duplicate known extensions with TLS
-* PKCS#11 handle a user PIN that is a NULL_PTR, compile time check in finding keys, add initialization API
-* Update max Cert Policy size based on RFC 5280
-* Add Android CA certs path for wolfSSL_CTX_load_system_CA_certs()
-* Improve logic for enabling system CA certs on Apple devices
-* Stub functions to allow for cpuid public functions with non-intel builds
-* Increase RNG_SECURITY_STRENGTH for FIPS
-* Improvements in OpenSSL Compat ERR Queue handling
-* Support ASN1/DER CRLs in LoadCertByIssuer
-* Expose more ECC math functions and improve async shared secret
-* Improvement for sniffer error messages
-* Warning added that renegotiation in TLS 1.3 requires session ticket
-* Adjustment for TLS 1.3 post auth support
-* Rework DH API and improve PEM read/write
+### Port Updates
+* Zephyr port update, compile time warning fixes, misc. fixes when used with TLS and update of includes
+* Update RIOT-OS to not compile out use of writev by default
+* Update Micrium port to enable use of STM32_RNG
+* Micrium updates for XMEMOVE and XSTRTOK use
+* Various Espressif HW crypto, SHA2, AES, MP updates
+* Added in ASIO build option with CMake builds
+
+### General Enhancements
+* Global codebase cleanup for C89 compliance and wolfCrypt -Wconversion hygiene
+* PKCS#11 enhancement adding a callback for RSA key size when using a hardware key, by default 2048 bit key is used
+* Allow for unknown OIDs in extensions in wolfSSL_X509_set_ext()
+* Allow user to override XSTAT by defining the macro XSTAT when compiling
+* Support UPN and SID with x509 certificate extensions and custom OID build
+* Write next IV in wolfSSL_DES_ede3_cbc_encrypt for better handling of inline encryption
+* Adding NO_ASN_TIME_CHECK build option for compiling out certificate before/after checks
+* Improve different peer recvfrom handling and error reporting with ipv4 vs ipv6
 
 ## Fixes
+* Fix for STM32 ECC sign and verify out of bounds buffer write when the hash length passed in is larger than the key size. Thanks to Maximilian for the report.
+* Fix to skip Async_DevCtxInit when using init rsa/ecc label/id api's
+* Revert WOLFSSL_NO_ASN_STRICT macro guard around alternate names directory list
+* In async mode, don't retry decrypting if a valid error is encountered on a packet parse attempt
+* Add additional sanity check on PKCS7 index value in wc_PKCS7_DecryptKekri
+* Fix for padding when using an AuthEnvelope PKCS7 type with GCM/CCM stream ciphers
+* Fix siphash assembly so that no register is left behind
+* Fix to not send a TLS 1.3 session ID resume response when resuming and downgrading to a protocol less than TLS 1.3
+* Fix overwriting serialNumber by favouriteDrink when generating a certificate using Cert struct
+* Fix for the default realloc used with EspressIf builds
+* Track SetDigest usage to avoid invalid free under error conditions
+* DTLS v1.3 fix for epoch 0 check on plaintext message
+* Fix for session ticket memory leak in wolfSSL_Cleanup
+* Fixes for propagating SendAlert errors when the peer disconnects
+* Replace XMEMCPY with XMEMMOVE to fix valgrind-3.15.0 reports "Source and destination overlap in memcpy" when using --enable-aesgcm-stream
+* Fix for potential out-of-bounds write edge case in fp_mod_2d with --enable-fastmath math library
+* Fix getting ECC key size in stm32_ecc_sign_hash_ex
+* Fix for case where wc_PeekErrorNodeLineData was not unlocking error queue on error
+* Fix for async ECC shared secret state
+* Fix for better error checking with sp_gcd with SP int math library
+* Fix memory leak in TLSX_KeyShare_Setup when handling an error case
+* Fix for double free edge case in InitOCSPRequest when handling a memory allocation failure
+* X509 NAME Entry fix for leaking memory on error case
+* Fix wolfssl_asn1_time_to_tm setting unexpected fields in tm struct
+* Fix for FIPS ECC integrity check with crypto callback set
+* BN_to_ASN1_INTEGER fix for handling leading zero byte padding when needed
+* Fix a typo in PP macro and add a ceiling to guard against implementation bugs
+* DTLS 1.3 fix for using the correct label when deriving the resumption key
+* OCSP fix for GetDateInfo edge case with non ASN template builds
+* Allow a user set certificate callback function to override the skipAddCA flag when parsing a certificate
+* SP int: sp_radix_size when radix 10 fix temp size for handling edge case
+* Fixes and improvements for handling failures with memory allocations
+* Fix for DecodeECC_DSA_Sig to handle r and s being initialized
+* Fix for wc_ecc_is_point to ensure that the x and y are in range [0, p-1] and z is one (affine ordinates)
 
 ### Build Fixes
-* Fix --enable-devcrypto build error for sys without u_int8_t type
-* Fix casts in evp.c and build issue in ParseCRL
-* Fixes for compatibility layer building with heap hint and OSSL callbacks
-* fix compile error due to Werro=undef on gcc-4.8
-* Fix mingw-w64 build issues on windows
-* Xcode project fixes for different build settings
-* Initialize variable causing failures with gcc-11 and gcc-12 with a unique wolfSSL build configuration
-* Prevent WOLFSSL_NO_MALLOC from breaking RSA certificate verification
-* Fixes for various tests that do not properly handle `WC_PENDING_E` with async. builds
-* Fix for misc `HashObject` to be excluded for `WOLFCRYPT_ONLY`
-
-### OCSP Fixes
-* Correctly save next status with OCSP response verify
-* When the OCSP responder returns an unknown exception, continue through to checking the CRL
-
-### Math Fixes
-* Fix for implicit conversion with 32-bit in SP math
-* Fix for error checks when modulus is even with SP int build
-* Fix for checking of err in _sp_exptmod_nct with SP int build
-* ECC cofactor fix when checking scalar bits
-* ARM32 ASM: don't use ldrd on user data
-* SP int, fix when ECC specific size code included
-
-### Port Fixes
-* Fixes for STM32 PKA ECC (not 256-bit) and improvements for AES-GCM
-* Fix for cryptocell signature verification with ECC
-* Benchmark devid changes, CCM with SECO fix, set IV on AES import into SECO
-
-### Compat. Layer Fixes
-* Fix for handling DEFAULT:... cipher suite list
-* Fix memory leak in wolfSSL_X509_NAME_ENTRY_get_object
-* Set alt name type to V_ASN1_IA5STRING
-* Update name hash functions wolfSSL_X509_subject_name_hash and wolfSSL_X509_issuer_name_hash to hash the canonical form of subject
-* Fix wolfSSL_set_SSL_CTX() to be usable during handshake
-* Fix X509_get1_ocsp to set num of elements in stack
-* X509v3 EXT d2i: fix freeing of aia
-* Fix to remove recreation of certificate with wolfSSL_PEM_write_bio_X509()
-* Link newly created x509 store's certificate manager to self by default to assist with CRL verification
-* Fix for compatibility `EC_KEY_new_by_curve_name` to not create a key if the curve is not found
-
-### Misc.
-* Free potential signer malloc in a fail case
-* fix other name san parsing and add RID cert to test parsing
-* WOLFSSL_OP_NO_TICKET fix for TLSv1.2
-* fix ASN template parsing of X509 subject directory attribute
-* Fix the wrong IV size with the cipher suite TLS_ECDHE_PSK_WITH_AES_128_GCM_SHA256
-* Fix incorrect self signed error return when compiled with certreq and certgen.
-* Fix wrong function name in debug comment with wolfSSL_X509_get_name_oneline()
-* Fix for decryption after second handshake with async sniffer
-* Allow session tickets to properly resume when using PQ KEMs
-* Add sanity overflow check to DecodeAltNames input buffer access
+* Fix for building on Windows with CMake and using USER_SETTINGS and fix for options.h creation with CMake when using USER_SETTINGS
+* CMake fixes and improvements for use with mingw32
+* Fix for building with wpas and x509 small options
+* Check if colrm is available for options.h creation when using autoconf
+* Clean up NO_BIG_INT build, removing WOLFSSL_SP_MATH macro and heapmath compile
+* Fix PKCS#7 build with NO_PKCS7_STREAM
+* Fix compilation error in CC-RX and remove unnecessary public key import
+* SP Build fixes for ARM assembly with ARMv6 clz and ARM thumb debug build
+* For to not advertise support for RSA in TLS extensions when compiled with NO_RSA
 
 For additional vulnerability information visit the vulnerability page at:
 https://www.wolfssl.com/docs/security-vulnerabilities/

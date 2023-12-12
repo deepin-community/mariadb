@@ -1,6 +1,6 @@
 /* zephyr_init.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -19,22 +19,4 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335, USA
  */
 
-/** @file
- * @brief wolfSSL initialization
- *
- * Initialize the wolfSSL library.
- */
-
-#include <init.h>
-
-#include "user_settings.h"
-#include "wolfssl/ssl.h"
-
-static int _wolfssl_init(const struct device *device)
-{
-    ARG_UNUSED(device);
-
-    return 0;
-}
-
-SYS_INIT(_wolfssl_init, POST_KERNEL, 0);
+/* Not needed. Keeping file for backwards compatibility. */

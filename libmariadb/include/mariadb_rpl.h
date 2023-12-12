@@ -86,7 +86,8 @@ enum mariadb_rpl_option {
   MARIADB_RPL_UNCOMPRESS,
   MARIADB_RPL_HOST,
   MARIADB_RPL_PORT,
-  MARIADB_RPL_EXTRACT_VALUES
+  MARIADB_RPL_EXTRACT_VALUES,
+  MARIADB_RPL_SEMI_SYNC,
 };
 
 /* Event types: From MariaDB Server sql/log_event.h */
@@ -340,7 +341,8 @@ typedef struct st_mariadb_rpl {
   uint8_t extract_values;
   char nonce[12];
   uint8_t encrypted;
-} MARIADB_RPL;
+  uint8_t is_semi_sync;
+}MARIADB_RPL;
 
 typedef struct st_mariadb_rpl_value {
   enum enum_field_types field_type;
@@ -408,6 +410,10 @@ struct st_mariadb_rpl_gtid_event {
   uint32_t domain_id;
   uint8_t flags;
   uint64_t commit_id;
+  uint32_t format_id;
+  uint8_t gtrid_len;
+  uint8_t bqual_len;
+  MARIADB_STRING xid;
 };
 
 struct st_mariadb_rpl_annotate_rows_event {

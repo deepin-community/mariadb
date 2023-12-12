@@ -1,6 +1,6 @@
 /* simpel_tls_tsip_client.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -202,7 +202,7 @@ void wolfSSL_TLS_client_init(const char* cipherlist)
         return;
     }
     
-#if defined(WOLFSSL_TLS13) && (WOLFSSL_RENESAS_TSIP_VER >= 115)
+#if defined(WOLFSSL_TLS13)
     if (wolfSSL_CTX_UseSupportedCurve(client_ctx, WOLFSSL_ECC_SECP256R1) 
                                                         != WOLFSSL_SUCCESS) {
         wolfSSL_CTX_free(client_ctx); client_ctx = NULL;

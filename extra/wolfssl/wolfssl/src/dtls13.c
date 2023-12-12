@@ -1,6 +1,6 @@
 /* dtls13.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -92,9 +92,9 @@ typedef struct Dtls13RecordPlaintextHeader {
 #define DTLS13_LEN_SIZE 2
 /* size of the flags in the unified header */
 #define DTLS13_HDR_FLAGS_SIZE 1
-/* size of the sequence number wher SEQ_LEN_BIT is present */
+/* size of the sequence number where SEQ_LEN_BIT is present */
 #define DTLS13_SEQ_16_LEN 2
-/* size of the sequence number wher SEQ_LEN_BIT is not present */
+/* size of the sequence number where SEQ_LEN_BIT is not present */
 #define DTLS13_SEQ_8_LEN 1
 
 /* fixed bits mask to detect unified header  */
@@ -123,6 +123,7 @@ WOLFSSL_METHOD* wolfDTLSv1_3_client_method_ex(void* heap)
     WOLFSSL_METHOD* method;
 
     WOLFSSL_ENTER("DTLSv1_3_client_method_ex");
+    (void)heap;
 
     method = (WOLFSSL_METHOD*)XMALLOC(sizeof(WOLFSSL_METHOD), heap,
         DYNAMIC_TYPE_METHOD);
@@ -145,6 +146,7 @@ WOLFSSL_METHOD* wolfDTLSv1_3_server_method_ex(void* heap)
     WOLFSSL_METHOD* method;
 
     WOLFSSL_ENTER("DTLSv1_3_server_method_ex");
+    (void)heap;
 
     method = (WOLFSSL_METHOD*)XMALLOC(sizeof(WOLFSSL_METHOD), heap,
         DYNAMIC_TYPE_METHOD);
@@ -299,6 +301,12 @@ static int Dtls13EncryptDecryptRecordNumber(WOLFSSL* ssl, byte* seq,
     byte mask[DTLS13_RN_MASK_SIZE];
     int ret;
 
+#ifdef HAVE_NULL_CIPHER
+    /* Do not encrypt record numbers with null cipher. See RFC 9150 Sec 9 */
+    if (ssl->specs.bulk_cipher_algorithm == wolfssl_cipher_null)
+        return 0;
+#endif /*HAVE_NULL_CIPHER */
+
     ret = Dtls13GetRnMask(ssl, ciphertext, mask, dir);
     if (ret != 0)
         return ret;
@@ -330,7 +338,8 @@ static byte Dtls13RtxMsgNeedsAck(WOLFSSL* ssl, enum HandShakeType hs)
 
 static void Dtls13MsgWasProcessed(WOLFSSL* ssl, enum HandShakeType hs)
 {
-    ssl->keys.dtls_expected_peer_handshake_number++;
+    if (ssl->options.dtlsStateful)
+        ssl->keys.dtls_expected_peer_handshake_number++;
 
     /* we need to send ACKs on the last message of a flight that needs explicit
        acknowledgment */
@@ -343,7 +352,7 @@ int Dtls13ProcessBufferedMessages(WOLFSSL* ssl)
     word32 idx = 0;
     int ret = 0;
 
-    WOLFSSL_ENTER("Dtls13ProcessBufferedMessages()");
+    WOLFSSL_ENTER("Dtls13ProcessBufferedMessages");
 
     while (msg != NULL) {
         idx = 0;
@@ -360,8 +369,10 @@ int Dtls13ProcessBufferedMessages(WOLFSSL* ssl)
                 msg->sz, msg->sz);
 
         /* processing certificate_request triggers a connect. The error came
-         * from there, the message can be considered processed successfully */
-        if (ret == 0 || (msg->type == certificate_request &&
+         * from there, the message can be considered processed successfully.
+         * WANT_WRITE means that we are done with processing the msg and we are
+         * waiting to flush the output buffer. */
+        if ((ret == 0 || ret == WANT_WRITE) || (msg->type == certificate_request &&
                          ssl->options.handShakeDone && ret == WC_PENDING_E)) {
             Dtls13MsgWasProcessed(ssl, (enum HandShakeType)msg->type);
 
@@ -408,7 +419,7 @@ static int Dtls13SendFragFromBuffer(WOLFSSL* ssl, byte* output, word16 length)
     if (ret != 0)
         return ret;
 
-    buf = ssl->buffers.outputBuffer.buffer + ssl->buffers.outputBuffer.length;
+    buf = GetOutputBuffer(ssl);
 
     XMEMCPY(buf, output, length);
 
@@ -432,8 +443,39 @@ static int Dtls13SendNow(WOLFSSL* ssl, enum HandShakeType handshakeType)
     return 0;
 }
 
-/* Handshake header DTLS only fields are not inlcuded in the transcript hash */
-int Dtls13HashHandshake(WOLFSSL* ssl, const byte* output, word16 length)
+/* Handshake header DTLS only fields are not included in the transcript hash.
+ * body points to the body of the DTLSHandshake message. */
+int Dtls13HashClientHello(const WOLFSSL* ssl, byte* hash, int* hashSz,
+        const byte* body, word32 length, CipherSpecs* specs)
+{
+    /* msg_type(1) + length (3) */
+    byte header[OPAQUE32_LEN];
+    int ret;
+    wc_HashAlg hashCtx;
+    int type = wolfSSL_GetHmacType_ex(specs);
+
+    header[0] = (byte)client_hello;
+    c32to24(length, header + 1);
+
+    ret = wc_HashInit_ex(&hashCtx, type, ssl->heap, ssl->devId);
+    if (ret == 0) {
+        ret = wc_HashUpdate(&hashCtx, type, header, OPAQUE32_LEN);
+        if (ret == 0)
+            ret = wc_HashUpdate(&hashCtx, type, body, length);
+        if (ret == 0)
+            ret = wc_HashFinal(&hashCtx, type, hash);
+        if (ret == 0) {
+            *hashSz = wc_HashGetDigestSize(type);
+            if (*hashSz < 0)
+                ret = *hashSz;
+        }
+        wc_HashFree(&hashCtx, type);
+    }
+    return ret;
+}
+
+/* Handshake header DTLS only fields are not included in the transcript hash */
+int Dtls13HashHandshake(WOLFSSL* ssl, const byte* input, word16 length)
 {
     int ret;
 
@@ -441,18 +483,18 @@ int Dtls13HashHandshake(WOLFSSL* ssl, const byte* output, word16 length)
         return BAD_FUNC_ARG;
 
     /* msg_type(1) + length (3) */
-    ret = HashRaw(ssl, output, OPAQUE32_LEN);
+    ret = HashRaw(ssl, input, OPAQUE32_LEN);
     if (ret != 0)
         return ret;
 
-    output += OPAQUE32_LEN;
+    input += OPAQUE32_LEN;
     length -= OPAQUE32_LEN;
 
     /* message_seq(2) + fragment_offset(3) + fragment_length(3) */
-    output += OPAQUE64_LEN;
+    input += OPAQUE64_LEN;
     length -= OPAQUE64_LEN;
 
-    return HashRaw(ssl, output, length);
+    return HashRaw(ssl, input, length);
 }
 
 static int Dtls13SendFragment(WOLFSSL* ssl, byte* output, word16 output_size,
@@ -612,12 +654,14 @@ static void Dtls13RtxFlushBuffered(WOLFSSL* ssl, byte keepNewSessionTicket)
     ssl->dtls13Rtx.rtxRecordTailPtr = prevNext;
 }
 
-static Dtls13RecordNumber* Dtls13NewRecordNumber(WOLFSSL* ssl, w64wrapper epoch,
-    w64wrapper seq)
+static Dtls13RecordNumber* Dtls13NewRecordNumber(w64wrapper epoch,
+    w64wrapper seq, void* heap)
 {
     Dtls13RecordNumber* rn;
 
-    rn = (Dtls13RecordNumber*)XMALLOC(sizeof(*rn), ssl->heap,
+    (void)heap;
+
+    rn = (Dtls13RecordNumber*)XMALLOC(sizeof(*rn), heap,
         DYNAMIC_TYPE_DTLS_MSG);
     if (rn == NULL)
         return NULL;
@@ -635,7 +679,7 @@ static int Dtls13RtxAddAck(WOLFSSL* ssl, w64wrapper epoch, w64wrapper seq)
 
     WOLFSSL_ENTER("Dtls13RtxAddAck");
 
-    rn = Dtls13NewRecordNumber(ssl, epoch, seq);
+    rn = Dtls13NewRecordNumber(epoch, seq, ssl->heap);
     if (rn == NULL)
         return MEMORY_E;
 
@@ -880,8 +924,7 @@ static int Dtls13SendFragmentedInternal(WOLFSSL* ssl)
         if (ret != 0)
             return ret;
 
-        output =
-            ssl->buffers.outputBuffer.buffer + ssl->buffers.outputBuffer.length;
+        output = GetOutputBuffer(ssl);
 
         ret = Dtls13HandshakeAddHeaderFrag(ssl, output + rlHeaderLength,
             (enum HandShakeType)ssl->dtls13FragHandshakeType,
@@ -1186,7 +1229,7 @@ word16 Dtls13GetRlHeaderLength(WOLFSSL* ssl, byte isEncrypted)
 
 /**
  * Dtls13GetHeadersLength() - return length of record + handshake header
- * @ssl: ssl oject
+ * @ssl: ssl object
  * @type: type of handshake in the message
  */
 word16 Dtls13GetHeadersLength(WOLFSSL* ssl, enum HandShakeType type)
@@ -1465,8 +1508,7 @@ static int Dtls13RtxSendBuffered(WOLFSSL* ssl)
         if (ret != 0)
             return ret;
 
-        output =
-            ssl->buffers.outputBuffer.buffer + ssl->buffers.outputBuffer.length;
+        output = GetOutputBuffer(ssl);
 
         XMEMCPY(output + headerLength, r->data, r->length);
 
@@ -1941,7 +1983,7 @@ int Dtls13GetSeq(WOLFSSL* ssl, int order, word32* seq, byte increment)
 
     if (order == PEER_ORDER) {
         nativeSeq = &ssl->keys.curSeq;
-        /* never increment seq number for curent record. In DTLS seq number are
+        /* never increment seq number for current record. In DTLS seq number are
            explicit */
         increment = 0;
     }
@@ -2228,6 +2270,15 @@ int Dtls13SetRecordNumberKeys(WOLFSSL* ssl, enum encrypt_side side)
     }
 #endif /* HAVE_CHACHA */
 
+#ifdef HAVE_NULL_CIPHER
+    if (ssl->specs.bulk_cipher_algorithm == wolfssl_cipher_null) {
+#ifdef WOLFSSL_DEBUG_TLS
+        WOLFSSL_MSG("Skipping Record Number key provisioning with null cipher");
+#endif /* WOLFSSL_DEBUG_TLS */
+        return 0;
+    }
+#endif /* HAVE_NULL_CIPHER */
+
     return NOT_COMPILED_IN;
 }
 
@@ -2289,8 +2340,7 @@ static int Dtls13WriteAckMessage(WOLFSSL* ssl,
     if (ret != 0)
         return ret;
 
-    output =
-        ssl->buffers.outputBuffer.buffer + ssl->buffers.outputBuffer.length;
+    output = GetOutputBuffer(ssl);
 
     ackMessage = output + headerLength;
 
@@ -2435,7 +2485,7 @@ int Dtls13RtxTimeout(WOLFSSL* ssl)
 
     /* we have two timeouts, a shorter (dtls13FastTimeout = 1) and a longer
        one. When the shorter expires we only send ACKs, as it normally means
-       that some messages we are waiting for dont't arrive yet. But we
+       that some messages we are waiting for don't arrive yet. But we
        retransmit our buffered messages only if the longer timeout
        expires. fastTimeout is 1/4 of the longer timeout */
     if (ssl->dtls13FastTimeout) {
@@ -2564,8 +2614,7 @@ int SendDtls13Ack(WOLFSSL* ssl)
         if (ret != 0)
             return ret;
 
-        output =
-            ssl->buffers.outputBuffer.buffer + ssl->buffers.outputBuffer.length;
+        output = GetOutputBuffer(ssl);
 
         ret = Dtls13RlAddPlaintextHeader(ssl, output, ack, (word16)length);
         if (ret != 0)
@@ -2579,10 +2628,10 @@ int SendDtls13Ack(WOLFSSL* ssl)
         if (ret != 0)
             return ret;
 
-        output =
-            ssl->buffers.outputBuffer.buffer + ssl->buffers.outputBuffer.length;
+        output = GetOutputBuffer(ssl);
 
         outputSize = ssl->buffers.outputBuffer.bufferSize -
+                     ssl->buffers.outputBuffer.idx -
                      ssl->buffers.outputBuffer.length;
 
         headerSize = Dtls13GetRlHeaderLength(ssl, 1);

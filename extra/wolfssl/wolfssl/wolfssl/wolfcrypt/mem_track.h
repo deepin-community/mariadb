@@ -1,6 +1,6 @@
 /* mem_track.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -62,15 +62,24 @@
 
 #include "wolfssl/wolfcrypt/settings.h"
 #include "wolfssl/wolfcrypt/logging.h"
+#include "wolfssl/wolfcrypt/memory.h"
 
 #if defined(WOLFSSL_TRACK_MEMORY) || defined(HAVE_STACK_SIZE) || \
     defined(HAVE_STACK_SIZE_VERBOSE)
-#include <stdio.h>
+    #ifdef NO_STDIO_FILESYSTEM
+        /* if wc_port.h/linuxkm_wc_port.h doesn't define printf, then the user
+         * needs to define it.
+         */
+        #define wc_mem_printf(...) printf(__VA_ARGS__)
+    #else
+        #include <stdio.h>
+        #define wc_mem_printf(...) fprintf(stderr, __VA_ARGS__)
+    #endif
 #endif
 
 #if defined(WOLFSSL_TRACK_MEMORY)
     #define DO_MEM_STATS
-    #if defined(__linux__) || defined(__MACH__)
+    #if (defined(__linux__) && !defined(WOLFSSL_LINUXKM)) || defined(__MACH__)
         #define DO_MEM_LIST
     #endif
 #endif
@@ -133,29 +142,11 @@ static memoryStats ourMemStats;
 #endif
 #endif
 
-
-/* if defined to not using inline then declare function prototypes */
-#ifdef NO_INLINE
-    #define WC_STATIC
-    #ifdef WOLFSSL_DEBUG_MEMORY
-            WOLFSSL_LOCAL void* TrackMalloc(size_t sz, const char* func, unsigned int line);
-            WOLFSSL_LOCAL void TrackFree(void* ptr, const char* func, unsigned int line);
-            WOLFSSL_LOCAL void* TrackRealloc(void* ptr, size_t sz, const char* func, unsigned int line);
-    #else
-            WOLFSSL_LOCAL void* TrackMalloc(size_t sz);
-            WOLFSSL_LOCAL void TrackFree(void* ptr);
-            WOLFSSL_LOCAL void* TrackRealloc(void* ptr, size_t sz);
-    #endif
-    WOLFSSL_LOCAL int InitMemoryTracker(void);
-    WOLFSSL_LOCAL void ShowMemoryTracker(void);
-#else
-    #define WC_STATIC static
-#endif
-
 #ifdef WOLFSSL_DEBUG_MEMORY
-WC_STATIC WC_INLINE void* TrackMalloc(size_t sz, const char* func, unsigned int line)
+static WC_INLINE void* TrackMalloc(size_t sz, const char* func,
+                                   unsigned int line)
 #else
-WC_STATIC WC_INLINE void* TrackMalloc(size_t sz)
+static WC_INLINE void* TrackMalloc(size_t sz)
 #endif
 {
     memoryTrack* mt;
@@ -178,7 +169,7 @@ WC_STATIC WC_INLINE void* TrackMalloc(size_t sz)
 
 #ifdef WOLFSSL_DEBUG_MEMORY
 #ifdef WOLFSSL_DEBUG_MEMORY_PRINT
-    fprintf(stderr, "Alloc: %p -> %u at %s:%d\n", header->thisMemory, (word32)sz, func, line);
+    wc_mem_printf("Alloc: %p -> %u at %s:%d\n", header->thisMemory, (word32)sz, func, line);
 #else
     (void)func;
     (void)line;
@@ -230,9 +221,9 @@ WC_STATIC WC_INLINE void* TrackMalloc(size_t sz)
 
 
 #ifdef WOLFSSL_DEBUG_MEMORY
-WC_STATIC WC_INLINE void TrackFree(void* ptr, const char* func, unsigned int line)
+static WC_INLINE void TrackFree(void* ptr, const char* func, unsigned int line)
 #else
-WC_STATIC WC_INLINE void TrackFree(void* ptr)
+static WC_INLINE void TrackFree(void* ptr)
 #endif
 {
     memoryTrack* mt;
@@ -286,7 +277,7 @@ WC_STATIC WC_INLINE void TrackFree(void* ptr)
 
 #ifdef WOLFSSL_DEBUG_MEMORY
 #ifdef WOLFSSL_DEBUG_MEMORY_PRINT
-    fprintf(stderr, "Free: %p -> %u at %s:%d\n", ptr, (word32)sz, func, line);
+    wc_mem_printf("Free: %p -> %u at %s:%d\n", ptr, (word32)sz, func, line);
 #else
     (void)func;
     (void)line;
@@ -303,9 +294,10 @@ WC_STATIC WC_INLINE void TrackFree(void* ptr)
 
 
 #ifdef WOLFSSL_DEBUG_MEMORY
-WC_STATIC WC_INLINE void* TrackRealloc(void* ptr, size_t sz, const char* func, unsigned int line)
+static WC_INLINE void* TrackRealloc(void* ptr, size_t sz, const char* func,
+                                    unsigned int line)
 #else
-WC_STATIC WC_INLINE void* TrackRealloc(void* ptr, size_t sz)
+static WC_INLINE void* TrackRealloc(void* ptr, size_t sz)
 #endif
 {
 #ifdef WOLFSSL_DEBUG_MEMORY
@@ -345,17 +337,17 @@ static wolfSSL_Malloc_cb mfDefault = NULL;
 static wolfSSL_Free_cb ffDefault = NULL;
 static wolfSSL_Realloc_cb rfDefault = NULL;
 
-WC_STATIC WC_INLINE int InitMemoryTracker(void)
+static WC_INLINE int InitMemoryTracker(void)
 {
     int ret;
 
     ret = wolfSSL_GetAllocators(&mfDefault, &ffDefault, &rfDefault);
     if (ret < 0) {
-        fprintf(stderr, "wolfSSL GetAllocators failed to get the defaults\n");
+        wc_mem_printf("wolfSSL GetAllocators failed to get the defaults\n");
     }
     ret = wolfSSL_SetAllocators(TrackMalloc, TrackFree, TrackRealloc);
     if (ret < 0) {
-        fprintf(stderr, "wolfSSL SetAllocators failed for track memory\n");
+        wc_mem_printf("wolfSSL SetAllocators failed for track memory\n");
         return ret;
     }
 
@@ -386,7 +378,7 @@ WC_STATIC WC_INLINE int InitMemoryTracker(void)
     return ret;
 }
 
-WC_STATIC WC_INLINE void ShowMemoryTracker(void)
+static WC_INLINE void ShowMemoryTracker(void)
 {
 #ifdef DO_MEM_LIST
     if (pthread_mutex_lock(&memLock) == 0)
@@ -394,11 +386,11 @@ WC_STATIC WC_INLINE void ShowMemoryTracker(void)
 #endif
 
 #ifdef DO_MEM_STATS
-    fprintf(stderr, "total   Allocs   = %9ld\n", ourMemStats.totalAllocs);
-    fprintf(stderr, "total   Deallocs = %9ld\n", ourMemStats.totalDeallocs);
-    fprintf(stderr, "total   Bytes    = %9ld\n", ourMemStats.totalBytes);
-    fprintf(stderr, "peak    Bytes    = %9ld\n", ourMemStats.peakBytes);
-    fprintf(stderr, "current Bytes    = %9ld\n", ourMemStats.currentBytes);
+    wc_mem_printf("total   Allocs   = %9ld\n", ourMemStats.totalAllocs);
+    wc_mem_printf("total   Deallocs = %9ld\n", ourMemStats.totalDeallocs);
+    wc_mem_printf("total   Bytes    = %9ld\n", ourMemStats.totalBytes);
+    wc_mem_printf("peak    Bytes    = %9ld\n", ourMemStats.peakBytes);
+    wc_mem_printf("current Bytes    = %9ld\n", ourMemStats.currentBytes);
 #endif
 
 #ifdef DO_MEM_LIST
@@ -406,16 +398,14 @@ WC_STATIC WC_INLINE void ShowMemoryTracker(void)
         /* print list of allocations */
         memHint* header;
         for (header = ourMemList.head; header != NULL; header = header->next) {
-            fprintf(stderr, "Leak: Ptr %p, Size %u"
             #ifdef WOLFSSL_DEBUG_MEMORY
-                ", Func %s, Line %d"
-            #endif
-                "\n",
-                (byte*)header + sizeof(memHint), (unsigned int)header->thisSize
-            #ifdef WOLFSSL_DEBUG_MEMORY
-                , header->func, header->line
-            #endif
-            );
+            wc_mem_printf("Leak: Ptr %p, Size %u, Func %s, Line %d\n",
+                (byte*)header + sizeof(memHint), (unsigned int)header->thisSize,
+                header->func, header->line);
+#else
+            wc_mem_printf("Leak: Ptr %p, Size %u\n",
+               (byte*)header + sizeof(memHint), (unsigned int)header->thisSize);
+#endif
         }
     }
 
@@ -424,7 +414,7 @@ WC_STATIC WC_INLINE void ShowMemoryTracker(void)
 #endif
 }
 
-WC_STATIC WC_INLINE int CleanupMemoryTracker(void)
+static WC_INLINE int CleanupMemoryTracker(void)
 {
     /* restore default allocators */
     return wolfSSL_SetAllocators(mfDefault, ffDefault, rfDefault);
@@ -555,7 +545,7 @@ int StackSizeHWMReset(void)
 
 #define STACK_SIZE_CHECKPOINT_MSG(msg) ({             \
     ssize_t HWM = StackSizeHWM_OffsetCorrected();     \
-    fprintf(stderr, "%ld\t%s\n", (long int)HWM, msg); \
+    wc_mem_printf("%ld\t%s\n", (long int)HWM, msg);   \
     StackSizeHWMReset();                              \
     })
 
@@ -566,7 +556,7 @@ int StackSizeHWMReset(void)
     printf("    relative stack peak usage = %ld bytes\n", (long int)HWM);  \
     _ret = StackSizeHWMReset();                      \
     if ((max >= 0) && (HWM > (ssize_t)(max))) {      \
-        fprintf(stderr,                              \
+        wc_mem_printf(                               \
             "    relative stack usage at %s L%d exceeds designated max %ld bytes.\n", \
             __FILE__, __LINE__, (long int)(max));    \
         _ret = -1;                                   \
@@ -602,7 +592,7 @@ static WC_INLINE int StackSizeCheck(struct func_args* args, thread_func tf)
 
     ret = posix_memalign((void**)&myStack, sysconf(_SC_PAGESIZE), stackSize);
     if (ret != 0 || myStack == NULL) {
-        fprintf(stderr, "posix_memalign failed\n");
+        wc_mem_printf("posix_memalign failed\n");
         return -1;
     }
 
@@ -610,13 +600,13 @@ static WC_INLINE int StackSizeCheck(struct func_args* args, thread_func tf)
 
     ret = pthread_attr_init(&myAttr);
     if (ret != 0) {
-        fprintf(stderr, "attr_init failed\n");
+        wc_mem_printf("attr_init failed\n");
         return ret;
     }
 
     ret = pthread_attr_setstack(&myAttr, myStack, stackSize);
     if (ret != 0) {
-        fprintf(stderr, "attr_setstackaddr failed\n");
+        wc_mem_printf("attr_setstackaddr failed\n");
         return ret;
     }
 
@@ -640,7 +630,7 @@ static WC_INLINE int StackSizeCheck(struct func_args* args, thread_func tf)
 
     ret = pthread_join(threadId, &status);
     if (ret != 0) {
-        fprintf(stderr, "pthread_join failed\n");
+        wc_mem_printf("pthread_join failed\n");
         return ret;
     }
 
@@ -689,7 +679,7 @@ static WC_INLINE int StackSizeCheck_launch(struct func_args* args,
 
     ret = posix_memalign((void**)&myStack, sysconf(_SC_PAGESIZE), stackSize);
     if (ret != 0 || myStack == NULL) {
-        fprintf(stderr, "posix_memalign failed\n");
+        wc_mem_printf("posix_memalign failed\n");
         free(shim_args);
         return -1;
     }
@@ -698,7 +688,7 @@ static WC_INLINE int StackSizeCheck_launch(struct func_args* args,
 
     ret = pthread_attr_init(&myAttr);
     if (ret != 0) {
-        fprintf(stderr, "attr_init failed\n");
+        wc_mem_printf("attr_init failed\n");
         free(shim_args);
         free(myStack);
         return ret;
@@ -706,7 +696,7 @@ static WC_INLINE int StackSizeCheck_launch(struct func_args* args,
 
     ret = pthread_attr_setstack(&myAttr, myStack, stackSize);
     if (ret != 0) {
-        fprintf(stderr, "attr_setstackaddr failed\n");
+        wc_mem_printf("attr_setstackaddr failed\n");
     }
 
     shim_args->myStack = myStack;
@@ -738,7 +728,7 @@ static WC_INLINE int StackSizeCheck_reap(pthread_t threadId, void *stack_context
     void *status;
     int ret = pthread_join(threadId, &status);
     if (ret != 0) {
-        fprintf(stderr, "pthread_join failed\n");
+        wc_mem_printf("pthread_join failed\n");
         return ret;
     }
 
@@ -787,12 +777,12 @@ static WC_INLINE void StackTrap(void)
 {
     struct rlimit  rl;
     if (getrlimit(RLIMIT_STACK, &rl) != 0) {
-        fprintf(stderr, "getrlimit failed\n");
+        wc_mem_printf("getrlimit failed\n");
     }
     printf("rlim_cur = %llu\n", rl.rlim_cur);
     rl.rlim_cur = 1024*21;  /* adjust trap size here */
     if (setrlimit(RLIMIT_STACK, &rl) != 0) {
-        fprintf(stderr, "setrlimit failed\n");
+        wc_mem_printf("setrlimit failed\n");
     }
 }
 

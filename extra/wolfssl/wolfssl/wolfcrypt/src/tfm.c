@@ -1,6 +1,6 @@
 /* tfm.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -643,7 +643,8 @@ int fp_div(fp_int *a, fp_int *b, fp_int *c, fp_int *d)
     return FP_OKAY;
   }
 
-#ifdef WOLFSSL_SMALL_STACK
+#ifdef WOLFSSL_SMALL_STACK          /* 0  1  2  3   4  */
+  /* allocate 5 elements of fp_int for q, x, y, t1, t2 */
   q = (fp_int*)XMALLOC(sizeof(fp_int) * 5, NULL, DYNAMIC_TYPE_BIGINT);
   if (q == NULL) {
       return FP_MEM;
@@ -657,8 +658,18 @@ int fp_div(fp_int *a, fp_int *b, fp_int *c, fp_int *d)
 
   fp_init(t1);
   fp_init(t2);
-  fp_init_copy(x, a);
-  fp_init_copy(y, b);
+
+  /* Init a copy (y) of the input (b) and
+  ** Init a copy (x) of the input (a)
+  **
+  ** ALERT: Not calling fp_init_copy() as some compiler optimization settings
+  ** such as -O2 will complain that (x) or (y) "may be used uninitialized".
+  ** The fp_init() is here only to appease the compiler.  */
+  fp_init(x);
+  fp_copy(a, x); /* copy (src = a) to (dst = x) */
+
+  fp_init(y);
+  fp_copy(b, y); /* copy (src = b) to (dst = y) */
 
   /* fix the sign */
   neg = (a->sign == b->sign) ? FP_ZPOS : FP_NEG;
@@ -999,6 +1010,13 @@ void fp_mod_2d(fp_int *a, int b, fp_int *c)
    }
 
    bmax = ((unsigned int)b + DIGIT_BIT - 1) / DIGIT_BIT;
+
+   /* If a is negative and bmax is larger than FP_SIZE, then the
+    * result can't fit within c. Just return. */
+   if (c->sign == FP_NEG && bmax > FP_SIZE) {
+      return;
+   }
+
   /* zero digits above the last digit of the modulus */
    for (x = bmax; x < (unsigned int)c->used; x++) {
     c->dp[x] = 0;
@@ -1067,6 +1085,14 @@ static int fp_invmod_slow (fp_int * a, fp_int * b, fp_int * c)
     return err;
   }
   fp_copy(b, y);
+
+  if (fp_iszero(x) == FP_YES) {
+    /* invmod doesn't exist for this a and b */
+  #ifdef WOLFSSL_SMALL_STACK
+    XFREE(x, NULL, DYNAMIC_TYPE_BIGINT);
+  #endif
+    return FP_VAL;
+  }
 
   /* 2. [modified] if x,y are both even then return an error! */
   if (fp_iseven(x) == FP_YES && fp_iseven(y) == FP_YES) {
@@ -1240,7 +1266,6 @@ int fp_invmod(fp_int *a, fp_int *b, fp_int *c)
 #else
   fp_int  *x, *y, *u, *v, *B, *D;
 #endif
-  int     neg;
   int     err;
 
   if (b->sign == FP_NEG || fp_iszero(b) == FP_YES) {
@@ -1270,17 +1295,6 @@ int fp_invmod(fp_int *a, fp_int *b, fp_int *c)
   fp_init(u);  fp_init(v);
   fp_init(B);  fp_init(D);
 
-  if (fp_cmp(a, b) != MP_LT) {
-    err = mp_mod(a, b, y);
-    if (err != FP_OKAY) {
-    #ifdef WOLFSSL_SMALL_STACK
-      XFREE(x, NULL, DYNAMIC_TYPE_BIGINT);
-    #endif
-      return err;
-    }
-    a = y;
-  }
-
   if (fp_iszero(a) == FP_YES) {
   #ifdef WOLFSSL_SMALL_STACK
     XFREE(x, NULL, DYNAMIC_TYPE_BIGINT);
@@ -1292,7 +1306,20 @@ int fp_invmod(fp_int *a, fp_int *b, fp_int *c)
   fp_copy(b, x);
 
   /* we need y = |a| */
-  fp_abs(a, y);
+  if ((err = mp_mod(a, b, y)) != FP_OKAY) {
+  #ifdef WOLFSSL_SMALL_STACK
+    XFREE(x, NULL, DYNAMIC_TYPE_BIGINT);
+  #endif
+    return err;
+  }
+
+  if (fp_iszero(y) == FP_YES) {
+    /* invmod doesn't exist for this a and b */
+  #ifdef WOLFSSL_SMALL_STACK
+    XFREE(x, NULL, DYNAMIC_TYPE_BIGINT);
+  #endif
+    return FP_VAL;
+  }
 
   /* 3. u=x, v=y, A=1, B=0, C=0,D=1 */
   fp_copy(x, u);
@@ -1390,7 +1417,6 @@ top:
   }
 
   /* b is now the inverse */
-  neg = a->sign;
   while (D->sign == FP_NEG) {
     err = fp_add (D, b, D);
     if (err != FP_OKAY) {
@@ -1411,7 +1437,6 @@ top:
     }
   }
   fp_copy (D, c);
-  c->sign = neg;
 #ifdef WOLFSSL_SMALL_STACK
   XFREE(x, NULL, DYNAMIC_TYPE_BIGINT);
 #endif
@@ -1952,6 +1977,8 @@ int fp_exptmod_nb(exptModNb_t* nb, fp_int* G, fp_int* X, fp_int* P, fp_int* Y)
 #endif /* WC_RSA_NONBLOCK */
 
 
+#ifndef WC_PROTECT_ENCRYPTED_MEM
+
 /* timing resistant montgomery ladder based exptmod
    Based on work by Marc Joye, Sung-Ming Yen, "The Montgomery Powering Ladder",
    Cryptographic Hardware and Embedded Systems, CHES 2002
@@ -2133,6 +2160,171 @@ static int _fp_exptmod_ct(fp_int * G, fp_int * X, int digits, fp_int * P,
 #endif
    return err;
 }
+
+#else
+
+/* Copy from a1 and a2 into r1 and r2 based on y in constant time.
+ * When y is 1, r1 = a1 and r2 = a2.
+ * When y is 0, r1 = a2 and r2 = a1.
+ * Always copy size digits as that is the maximum size for a1 and a2.
+ */
+static void fp_copy_2_ct(fp_int* a1, fp_int* a2, fp_int* r1, fp_int* r2, int y,
+    int size)
+{
+    int i;
+
+    /* Copy data - constant time. */
+    for (i = 0; i < size; i++) {
+        r1->dp[i] = (a1->dp[i] & ((fp_digit)wc_off_on_addr[y  ])) +
+                    (a2->dp[i] & ((fp_digit)wc_off_on_addr[y^1]));
+        r2->dp[i] = (a1->dp[i] & ((fp_digit)wc_off_on_addr[y^1])) +
+                    (a2->dp[i] & ((fp_digit)wc_off_on_addr[y  ]));
+    }
+    /* Copy used. */
+    r1->used = (a1->used & ((int)wc_off_on_addr[y  ])) +
+               (a2->used & ((int)wc_off_on_addr[y^1]));
+    r2->used = (a1->used & ((int)wc_off_on_addr[y^1])) +
+               (a2->used & ((int)wc_off_on_addr[y  ]));
+    /* Copy sign. */
+    r1->sign = (a1->sign & ((int)wc_off_on_addr[y  ])) +
+               (a2->sign & ((int)wc_off_on_addr[y^1]));
+    r2->sign = (a1->sign & ((int)wc_off_on_addr[y^1])) +
+               (a2->sign & ((int)wc_off_on_addr[y  ]));
+}
+
+/* timing resistant montgomery ladder based exptmod
+   Based on work by Marc Joye, Sung-Ming Yen, "The Montgomery Powering Ladder",
+   Cryptographic Hardware and Embedded Systems, CHES 2002
+*/
+static int _fp_exptmod_ct(fp_int * G, fp_int * X, int digits, fp_int * P,
+                          fp_int * Y)
+{
+#ifndef WOLFSSL_SMALL_STACK
+  fp_int   R[4];   /* need a temp for cache resistance */
+#else
+  fp_int  *R;
+#endif
+  fp_digit buf, mp;
+  int      err, bitcnt, digidx, y;
+
+  /* now setup montgomery  */
+  if ((err = fp_montgomery_setup (P, &mp)) != FP_OKAY) {
+     return err;
+  }
+
+#ifdef WOLFSSL_SMALL_STACK
+   R = (fp_int*)XMALLOC(sizeof(fp_int) * 4, NULL, DYNAMIC_TYPE_BIGINT);
+   if (R == NULL)
+       return FP_MEM;
+#endif
+  fp_init(&R[0]);
+  fp_init(&R[1]);
+  fp_init(&R[2]);
+  fp_init(&R[3]);
+
+  /* now we need R mod m */
+  err = fp_montgomery_calc_normalization (&R[0], P);
+  if (err != FP_OKAY) {
+  #ifdef WOLFSSL_SMALL_STACK
+    XFREE(R, NULL, DYNAMIC_TYPE_BIGINT);
+  #endif
+    return err;
+  }
+
+  /* now set R[0][1] to G * R mod m */
+  if (fp_cmp_mag(P, G) != FP_GT) {
+     /* G > P so we reduce it first */
+     err = fp_mod(G, P, &R[1]);
+     if (err != FP_OKAY) {
+#ifdef WOLFSSL_SMALL_STACK
+         XFREE(R, NULL, DYNAMIC_TYPE_BIGINT);
+#endif
+         return err;
+     }
+  } else {
+     fp_copy(G, &R[1]);
+  }
+  err = fp_mulmod (&R[1], &R[0], P, &R[1]);
+  if (err != FP_OKAY) {
+#ifdef WOLFSSL_SMALL_STACK
+      XFREE(R, NULL, DYNAMIC_TYPE_BIGINT);
+#endif
+      return err;
+  }
+
+  /* for j = t-1 downto 0 do
+        r_!k = R0*R1; r_k = r_k^2
+  */
+
+  /* set initial mode and bit cnt */
+  bitcnt = 1;
+  buf    = 0;
+  digidx = digits - 1;
+
+  for (;;) {
+    /* grab next digit as required */
+    if (--bitcnt == 0) {
+      /* if digidx == -1 we are out of digits so break */
+      if (digidx == -1) {
+        break;
+      }
+      /* read next digit and reset bitcnt */
+      buf    = X->dp[digidx--];
+      bitcnt = (int)DIGIT_BIT;
+    }
+
+    /* grab the next msb from the exponent */
+    y     = (int)(buf >> (DIGIT_BIT - 1)) & 1;
+    buf <<= (fp_digit)1;
+
+    /* do ops */
+    err = fp_mul(&R[0], &R[1], &R[2]);
+    if (err != FP_OKAY) {
+    #ifdef WOLFSSL_SMALL_STACK
+      XFREE(R, NULL, DYNAMIC_TYPE_BIGINT);
+    #endif
+      return err;
+    }
+    err = fp_montgomery_reduce(&R[2], P, mp);
+    if (err != FP_OKAY) {
+    #ifdef WOLFSSL_SMALL_STACK
+      XFREE(R, NULL, DYNAMIC_TYPE_BIGINT);
+    #endif
+      return err;
+    }
+
+    /* instead of using R[y] for sqr, which leaks key bit to cache monitor,
+     * use R[3] as temp, make sure address calc is constant, keep
+     * &R[0] and &R[1] in cache */
+    fp_copy((fp_int*) ( ((wc_ptr_t)&R[0] & wc_off_on_addr[y^1]) +
+                        ((wc_ptr_t)&R[1] & wc_off_on_addr[y]) ),
+            &R[3]);
+    err = fp_sqr(&R[3], &R[3]);
+    if (err != FP_OKAY) {
+    #ifdef WOLFSSL_SMALL_STACK
+      XFREE(R, NULL, DYNAMIC_TYPE_BIGINT);
+    #endif
+      return err;
+    }
+    err = fp_montgomery_reduce(&R[3], P, mp);
+    if (err != FP_OKAY) {
+    #ifdef WOLFSSL_SMALL_STACK
+      XFREE(R, NULL, DYNAMIC_TYPE_BIGINT);
+    #endif
+      return err;
+    }
+    fp_copy_2_ct(&R[2], &R[3], &R[0], &R[1], y, P->used);
+  }
+
+  err = fp_montgomery_reduce(&R[0], P, mp);
+  fp_copy(&R[0], Y);
+#ifdef WOLFSSL_SMALL_STACK
+  XFREE(R, NULL, DYNAMIC_TYPE_BIGINT);
+#endif
+  return err;
+}
+
+#endif /* WC_PROTECT_ENCRYPTED_MEM */
 
 #endif /* TFM_TIMING_RESISTANT */
 
@@ -3820,7 +4012,7 @@ int fp_to_unsigned_bin(fp_int *a, unsigned char *b)
 
 int fp_to_unsigned_bin_len(fp_int *a, unsigned char *b, int c)
 {
-#if DIGIT_BIT == 64 || DIGIT_BIT == 32
+#if DIGIT_BIT == 64 || DIGIT_BIT == 32 || DIGIT_BIT == 16
   int i = 0;
   int j = 0;
   int x;
@@ -3833,6 +4025,12 @@ int fp_to_unsigned_bin_len(fp_int *a, unsigned char *b, int c)
   }
   for (; x >= 0; x--) {
      b[x] = 0;
+  }
+  if (i < a->used - 1) {
+      return FP_VAL;
+  }
+  if ((i == a->used - 1) && ((a->dp[i] >> j) != 0)) {
+      return FP_VAL;
   }
 
   return FP_OKAY;
@@ -3861,6 +4059,9 @@ int fp_to_unsigned_bin_len(fp_int *a, unsigned char *b, int c)
 #ifdef WOLFSSL_SMALL_STACK
   XFREE(t, NULL, DYNAMIC_TYPE_BIGINT);
 #endif
+  if (!fp_iszero(t)) {
+      return FP_VAL;
+  }
   return FP_OKAY;
 #endif
 }
@@ -4448,6 +4649,7 @@ int mp_div_2d(fp_int* a, int b, fp_int* c, fp_int* d)
   return MP_OKAY;
 }
 
+/* copy (src = a) to (dst = b) */
 void fp_copy(const fp_int *a, fp_int *b)
 {
     /* if source and destination are different */
@@ -4485,11 +4687,13 @@ int mp_init_copy(fp_int * a, fp_int * b)
     return MP_OKAY;
 }
 
+/* Copy (dst = a) from (src = b) */
 void fp_init_copy(fp_int *a, fp_int* b)
 {
     if (a != b) {
         fp_init(a);
-        fp_copy(b, a);
+        /* Note reversed parameter order! */
+        fp_copy(b, a); /* copy (src = b) to (dst = a) */
     }
 }
 
@@ -5081,6 +5285,8 @@ int mp_prime_is_prime_ex(mp_int* a, int t, int* result, WC_RNG* rng)
         return FP_VAL;
     if (a->sign == FP_NEG)
         return FP_VAL;
+    if (t <= 0 || t > FP_PRIME_SIZE)
+        return FP_VAL;
 
     if (fp_isone(a)) {
         *result = FP_NO;
@@ -5499,7 +5705,7 @@ static wcchar fp_s_rmap = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
                                     "abcdefghijklmnopqrstuvwxyz+/";
 #endif
 
-#if !defined(NO_DSA) || defined(HAVE_ECC)
+#if defined(OPENSSL_EXTRA) || !defined(NO_DSA) || defined(HAVE_ECC)
 #if DIGIT_BIT == 64 || DIGIT_BIT == 32
 static int fp_read_radix_16(fp_int *a, const char *str)
 {
@@ -5726,8 +5932,13 @@ int mp_radix_size (mp_int *a, int radix, int *size)
         return FP_MEM;
 #endif
 
-    /* init a copy of the input */
-    fp_init_copy (t, a);
+    /* Init a copy (t) of the input (a)
+    **
+    ** ALERT: Not calling fp_init_copy() as some compiler optimization settings
+    ** such as -O2 will complain that (t) "may be used uninitialized"
+    ** The fp_init() is here only to appease the compiler.  */
+    fp_init(t);
+    fp_copy(a, t); /* copy (src = a) to (dst = t)*/
 
     /* force temp to positive */
     t->sign = FP_ZPOS;
@@ -5799,8 +6010,13 @@ int mp_toradix (mp_int *a, char *str, int radix)
         return FP_MEM;
 #endif
 
-    /* init a copy of the input */
-    fp_init_copy (t, a);
+    /* Init a copy (t) of the input (a)
+    **
+    ** ALERT: Not calling fp_init_copy() as some compiler optimization settings
+    ** such as -O2 will complain that (t) "may be used uninitialized"
+    ** The fp_init() is here only to appease the compiler.  */
+    fp_init(t);
+    fp_copy(a, t); /* copy (src = a) to (dst = t) */
 
     /* if it is negative output a - */
     if (t->sign == FP_NEG) {

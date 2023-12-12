@@ -1,6 +1,6 @@
 /* wolfio.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -51,6 +51,14 @@ Possible IO enable options:
  * HAVE_HTTP_CLIENT:    Enables HTTP client API's                 default: off
                                      (unless HAVE_OCSP or HAVE_CRL_IO defined)
  * HAVE_IO_TIMEOUT:     Enables support for connect timeout       default: off
+ *
+ * DTLS_RECEIVEFROM_NO_TIMEOUT_ON_INVALID_PEER: This flag has effect only if
+ * ASN_NO_TIME is enabled. If enabled invalid peers messages are ignored
+ * indefinetely. If not enabled EmbedReceiveFrom will return timeout after
+ * DTLS_RECEIVEFROM_MAX_INVALID_PEER number of packets from invalid peers. When
+ * enabled, without a timer, EmbedReceivefrom can't check if the timeout is
+ * expired and it may never return under a continuous flow of invalid packets.
+ *                                                                default: off
  */
 
 
@@ -58,6 +66,11 @@ Possible IO enable options:
    automatic setting of default I/O functions EmbedSend() and EmbedReceive()
    but they'll still need SetCallback xxx() at end of file
 */
+
+#if defined(NO_ASN_TIME) && !defined(DTLS_RECEIVEFROM_NO_TIMEOUT_ON_INVALID_PEER) \
+  && !defined(DTLS_RECEIVEFROM_MAX_INVALID_PEER)
+#define DTLS_RECEIVEFROM_MAX_INVALID_PEER 10
+#endif
 
 #if defined(USE_WOLFSSL_IO) || defined(HAVE_HTTP_CLIENT)
 
@@ -333,7 +346,7 @@ static int sockAddrEqual(
     if (a->ss_family != b->ss_family)
         return 0;
 
-    if (a->ss_family == AF_INET) {
+    if (a->ss_family == WOLFSSL_IP4) {
 
         if (aLen < (XSOCKLENT)sizeof(SOCKADDR_IN))
             return 0;
@@ -349,7 +362,7 @@ static int sockAddrEqual(
     }
 
 #ifdef WOLFSSL_IPV6
-    if (a->ss_family == AF_INET6) {
+    if (a->ss_family == WOLFSSL_IP6) {
         SOCKADDR_IN6 *a6, *b6;
 
         if (aLen < (XSOCKLENT)sizeof(SOCKADDR_IN6))
@@ -367,10 +380,19 @@ static int sockAddrEqual(
 
         return 1;
     }
-#endif /* WOLFSSL_HAVE_IPV6 */
+#endif /* WOLFSSL_IPV6 */
 
     return 0;
 }
+
+#ifndef WOLFSSL_IPV6
+static int PeerIsIpv6(const SOCKADDR_S *peer, XSOCKLENT len)
+{
+    if (len < (XSOCKLENT)sizeof(peer->ss_family))
+        return 0;
+    return peer->ss_family == WOLFSSL_IP6;
+}
+#endif /* !WOLFSSL_IPV6 */
 
 static int isDGramSock(int sfd)
 {
@@ -400,13 +422,24 @@ int EmbedReceiveFrom(WOLFSSL *ssl, char *buf, int sz, void *ctx)
     SOCKADDR_S lclPeer;
     SOCKADDR_S* peer;
     XSOCKLENT peerSz = 0;
+#ifndef NO_ASN_TIME
+    word32 start = 0;
+#elif !defined(DTLS_RECEIVEFROM_NO_TIMEOUT_ON_INVALID_PEER)
+    word32 invalidPeerPackets = 0;
+#endif
 
-    WOLFSSL_ENTER("EmbedReceiveFrom()");
+    WOLFSSL_ENTER("EmbedReceiveFrom");
 
     if (dtlsCtx->connected) {
         peer = NULL;
     }
     else if (dtlsCtx->userSet) {
+#ifndef WOLFSSL_IPV6
+        if (PeerIsIpv6((SOCKADDR_S*)dtlsCtx->peer.sa, dtlsCtx->peer.sz)) {
+            WOLFSSL_MSG("ipv6 dtls peer set but no ipv6 support compiled");
+            return NOT_COMPILED_IN;
+        }
+#endif
         peer = &lclPeer;
         XMEMSET(&lclPeer, 0, sizeof(lclPeer));
         peerSz = sizeof(lclPeer);
@@ -438,10 +471,26 @@ int EmbedReceiveFrom(WOLFSSL *ssl, char *buf, int sz, void *ctx)
     }
 #endif /* WOLFSSL_DTLS13 */
 
-    if (!doDtlsTimeout)
-        dtls_timeout = 0;
+    do {
 
-    if (!wolfSSL_get_using_nonblock(ssl)) {
+        if (!doDtlsTimeout) {
+            dtls_timeout = 0;
+        }
+        else {
+#ifndef NO_ASN_TIME
+            if (start == 0) {
+                start = LowResTimer();
+            }
+            else {
+                dtls_timeout -= LowResTimer() - start;
+                start = LowResTimer();
+                if (dtls_timeout < 0 || dtls_timeout > DTLS_TIMEOUT_MAX)
+                    return WOLFSSL_CBIO_ERR_TIMEOUT;
+            }
+#endif
+        }
+
+        if (!wolfSSL_get_using_nonblock(ssl)) {
         #ifdef USE_WINDOWS_API
             DWORD timeout = dtls_timeout * 1000;
             #ifdef WOLFSSL_DTLS13
@@ -464,87 +513,101 @@ int EmbedReceiveFrom(WOLFSSL *ssl, char *buf, int sz, void *ctx)
             #endif /* WOLFSSL_DTLS13 */
                 timeout.tv_sec = dtls_timeout;
         #endif
-        if (setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout,
-                       sizeof(timeout)) != 0) {
+            if (setsockopt(sd, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout,
+                    sizeof(timeout)) != 0) {
                 WOLFSSL_MSG("setsockopt rcvtimeo failed");
+            }
         }
-    }
 #ifndef NO_ASN_TIME
-    else if(IsSCR(ssl)) {
-        if (ssl->dtls_start_timeout &&
-                LowResTimer() - ssl->dtls_start_timeout > (word32)dtls_timeout) {
-            ssl->dtls_start_timeout = 0;
-            return WOLFSSL_CBIO_ERR_TIMEOUT;
+        else if (IsSCR(ssl)) {
+            if (ssl->dtls_start_timeout &&
+                LowResTimer() - ssl->dtls_start_timeout >
+                    (word32)dtls_timeout) {
+                ssl->dtls_start_timeout = 0;
+                return WOLFSSL_CBIO_ERR_TIMEOUT;
+            }
+            else if (!ssl->dtls_start_timeout) {
+                ssl->dtls_start_timeout = LowResTimer();
+            }
         }
-        else if (!ssl->dtls_start_timeout) {
-            ssl->dtls_start_timeout = LowResTimer();
-        }
-    }
 #endif /* !NO_ASN_TIME */
 
-    recvd = (int)DTLS_RECVFROM_FUNCTION(sd, buf, sz, ssl->rflags,
-                      (SOCKADDR*)peer, peer != NULL ? &peerSz : NULL);
+        recvd = (int)DTLS_RECVFROM_FUNCTION(sd, buf, sz, ssl->rflags,
+            (SOCKADDR*)peer, peer != NULL ? &peerSz : NULL);
 
-    /* From the RECV(2) man page
-     * The returned address is truncated if the buffer provided is too small; in
-     * this case, addrlen will return a value greater than was supplied to the
-     * call.
-     */
-    if (dtlsCtx->connected) {
-        /* No need to sanitize the value of peerSz */
-    }
-    else if (dtlsCtx->userSet) {
-        /* Truncate peer size */
-        if (peerSz > (XSOCKLENT)sizeof(lclPeer))
-            peerSz = (XSOCKLENT)sizeof(lclPeer);
-    }
-    else {
-        /* Truncate peer size */
-        if (peerSz > (XSOCKLENT)dtlsCtx->peer.bufSz)
-            peerSz = (XSOCKLENT)dtlsCtx->peer.bufSz;
-    }
-
-    recvd = TranslateReturnCode(recvd, sd);
-
-    if (recvd < 0) {
-        WOLFSSL_MSG("Embed Receive From error");
-        recvd = TranslateIoError(recvd);
-        if (recvd == WOLFSSL_CBIO_ERR_WANT_READ &&
-            !wolfSSL_dtls_get_using_nonblock(ssl)) {
-            recvd = WOLFSSL_CBIO_ERR_TIMEOUT;
+        /* From the RECV(2) man page
+         * The returned address is truncated if the buffer provided is too
+         * small; in this case, addrlen will return a value greater than was
+         * supplied to the call.
+         */
+        if (dtlsCtx->connected) {
+            /* No need to sanitize the value of peerSz */
         }
-        return recvd;
-    }
-    else if (recvd == 0) {
-        if (!isDGramSock(sd)) {
-            /* Closed TCP connection */
-            recvd = WOLFSSL_CBIO_ERR_CONN_CLOSE;
+        else if (dtlsCtx->userSet) {
+            /* Truncate peer size */
+            if (peerSz > (XSOCKLENT)sizeof(lclPeer))
+                peerSz = (XSOCKLENT)sizeof(lclPeer);
         }
         else {
-            WOLFSSL_MSG("Ignoring 0-length datagram");
+            /* Truncate peer size */
+            if (peerSz > (XSOCKLENT)dtlsCtx->peer.bufSz)
+                peerSz = (XSOCKLENT)dtlsCtx->peer.bufSz;
         }
-        return recvd;
-    }
-    else if (dtlsCtx->connected) {
-        /* Nothing to do */
-    }
-    else if (dtlsCtx->userSet) {
-        /* Check we received the packet from the correct peer */
-        if (dtlsCtx->peer.sz > 0 &&
-            (peerSz != (XSOCKLENT)dtlsCtx->peer.sz ||
-                !sockAddrEqual(peer, peerSz, (SOCKADDR_S*)dtlsCtx->peer.sa,
-                    dtlsCtx->peer.sz))) {
-            WOLFSSL_MSG("    Ignored packet from invalid peer");
-            return WOLFSSL_CBIO_ERR_WANT_READ;
+
+        recvd = TranslateReturnCode(recvd, sd);
+
+        if (recvd < 0) {
+            WOLFSSL_MSG("Embed Receive From error");
+            recvd = TranslateIoError(recvd);
+            if (recvd == WOLFSSL_CBIO_ERR_WANT_READ &&
+                !wolfSSL_dtls_get_using_nonblock(ssl)) {
+                recvd = WOLFSSL_CBIO_ERR_TIMEOUT;
+            }
+            return recvd;
         }
-    }
-    else {
-        /* Store size of saved address */
-        dtlsCtx->peer.sz = peerSz;
-    }
+        else if (recvd == 0) {
+            if (!isDGramSock(sd)) {
+                /* Closed TCP connection */
+                recvd = WOLFSSL_CBIO_ERR_CONN_CLOSE;
+            }
+            else {
+                WOLFSSL_MSG("Ignoring 0-length datagram");
+                continue;
+            }
+            return recvd;
+        }
+        else if (dtlsCtx->connected) {
+            /* Nothing to do */
+        }
+        else if (dtlsCtx->userSet) {
+            /* Check we received the packet from the correct peer */
+            if (dtlsCtx->peer.sz > 0 &&
+                (peerSz != (XSOCKLENT)dtlsCtx->peer.sz ||
+                    !sockAddrEqual(peer, peerSz, (SOCKADDR_S*)dtlsCtx->peer.sa,
+                        dtlsCtx->peer.sz))) {
+                WOLFSSL_MSG("    Ignored packet from invalid peer");
+#if defined(NO_ASN_TIME) &&                                                    \
+    !defined(DTLS_RECEIVEFROM_NO_TIMEOUT_ON_INVALID_PEER)
+                if (doDtlsTimeout) {
+                    invalidPeerPackets++;
+                    if (invalidPeerPackets > DTLS_RECEIVEFROM_MAX_INVALID_PEER)
+                        return wolfSSL_dtls_get_using_nonblock(ssl)
+                                   ? WOLFSSL_CBIO_ERR_WANT_READ
+                                   : WOLFSSL_CBIO_ERR_TIMEOUT;
+                }
+#endif /* NO_ASN_TIME && !DTLS_RECEIVEFROM_NO_TIMEOUT_ON_INVALID_PEER */
+                continue;
+            }
+        }
+        else {
+            /* Store size of saved address */
+            dtlsCtx->peer.sz = peerSz;
+        }
 #ifndef NO_ASN_TIME
-    ssl->dtls_start_timeout = 0;
+        ssl->dtls_start_timeout = 0;
 #endif /* !NO_ASN_TIME */
+        break;
+    } while (1);
 
     return recvd;
 }
@@ -561,7 +624,7 @@ int EmbedSendTo(WOLFSSL* ssl, char *buf, int sz, void *ctx)
     const SOCKADDR_S* peer = NULL;
     XSOCKLENT peerSz = 0;
 
-    WOLFSSL_ENTER("EmbedSendTo()");
+    WOLFSSL_ENTER("EmbedSendTo");
 
     if (!isDGramSock(sd)) {
         /* Probably a TCP socket. peer and peerSz MUST be NULL and 0 */
@@ -569,6 +632,12 @@ int EmbedSendTo(WOLFSSL* ssl, char *buf, int sz, void *ctx)
     else if (!dtlsCtx->connected) {
         peer   = (const SOCKADDR_S*)dtlsCtx->peer.sa;
         peerSz = dtlsCtx->peer.sz;
+#ifndef WOLFSSL_IPV6
+        if (PeerIsIpv6(peer, peerSz)) {
+            WOLFSSL_MSG("ipv6 dtls peer setted but no ipv6 support compiled");
+            return NOT_COMPILED_IN;
+        }
+#endif
     }
 
     sent = (int)DTLS_SENDTO_FUNCTION(sd, buf, sz, ssl->wflags,
@@ -596,7 +665,7 @@ int EmbedReceiveFromMcast(WOLFSSL *ssl, char *buf, int sz, void *ctx)
     int recvd;
     int sd = dtlsCtx->rfd;
 
-    WOLFSSL_ENTER("EmbedReceiveFromMcast()");
+    WOLFSSL_ENTER("EmbedReceiveFromMcast");
 
     recvd = (int)DTLS_RECVFROM_FUNCTION(sd, buf, sz, ssl->rflags, NULL, NULL);
 
@@ -1529,12 +1598,6 @@ int wolfIO_HttpProcessResponse(int sfd, const char** appStrList,
                 case phr_http_start:
                 case phr_have_length:
                 case phr_have_type:
-                    if (XSTRLEN(start) < 13) { /* 13 is the shortest of the following
-                                          next lines we're checking for. */
-                        WOLFSSL_MSG("wolfIO_HttpProcessResponse content type is too short.");
-                        return HTTP_VERSION_ERR;
-                    }
-
                     if (XSTRNCASECMP(start, "Content-Type:", 13) == 0) {
                         int i;
 
@@ -2296,7 +2359,7 @@ int MicriumReceiveFrom(WOLFSSL *ssl, char *buf, int sz, void *ctx)
     NET_SOCK_RTN_CODE ret;
     NET_ERR err;
 
-    WOLFSSL_ENTER("MicriumReceiveFrom()");
+    WOLFSSL_ENTER("MicriumReceiveFrom");
 
 #ifdef WOLFSSL_DTLS
     {
@@ -2375,7 +2438,7 @@ int MicriumSendTo(WOLFSSL* ssl, char *buf, int sz, void *ctx)
     NET_SOCK_RTN_CODE ret;
     NET_ERR err;
 
-    WOLFSSL_ENTER("MicriumSendTo()");
+    WOLFSSL_ENTER("MicriumSendTo");
 
     ret = NetSock_TxDataTo(sd, buf, sz, ssl->wflags,
                            (NET_SOCK_ADDR*)dtlsCtx->peer.sa,
@@ -2653,13 +2716,12 @@ void wolfSSL_SetIO_Mynewt(WOLFSSL* ssl, struct mn_socket* mnSocket, struct mn_so
 int uIPSend(WOLFSSL* ssl, char* buf, int sz, void* _ctx)
 {
     uip_wolfssl_ctx *ctx = (struct uip_wolfssl_ctx *)_ctx;
-    int ret;
-    unsigned int max_sendlen;
     int total_written = 0;
     (void)ssl;
     do {
+        int ret;
         unsigned int bytes_left = sz - total_written;
-        max_sendlen = tcp_socket_max_sendlen(&ctx->conn.tcp);
+        unsigned int max_sendlen = tcp_socket_max_sendlen(&ctx->conn.tcp);
         if (bytes_left > max_sendlen) {
             fprintf(stderr, "uIPSend: Send limited by buffer\r\n");
             bytes_left = max_sendlen;
@@ -2883,7 +2945,7 @@ int LwIPNativeReceive(WOLFSSL* ssl, char* buf, int sz, void* ctx)
             /* read enough break out */
             if (read >= sz) {
                 /* if more pbuf's are left in the chain then increment the
-                 * ref count for next in chain and free all from begining till
+                 * ref count for next in chain and free all from beginning till
                  * next */
                 if (current != NULL) {
                     pbuf_ref(current);

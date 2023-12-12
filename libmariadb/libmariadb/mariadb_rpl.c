@@ -33,6 +33,8 @@
 
 #ifdef WIN32
 #include <malloc.h>
+#undef alloca
+#define alloca _malloca
 #endif
 
 #define RPL_EVENT_HEADER_SIZE 19
@@ -367,6 +369,7 @@ mariadb_rpl_extract_rows(MARIADB_RPL *rpl,
   while (pos < end)
   {
     uchar *n_bitmap;
+    uint32_t i;
 
     uchar *metadata= (uchar *)tm_event->event.table_map.metadata.str;
 
@@ -387,7 +390,7 @@ mariadb_rpl_extract_rows(MARIADB_RPL *rpl,
     n_bitmap= pos;
     pos+= (column_count + 7) / 8;
 
-    for (uint32_t i= 0; i < column_count; i++)
+    for (i= 0; i < column_count; i++)
     {
       MARIADB_RPL_VALUE *column= &c_row->columns[i];
       column->field_type= (uchar)tm_event->event.table_map.column_types.str[i];
@@ -690,9 +693,9 @@ MARIADB_RPL * STDCALL mariadb_rpl_init_ex(MYSQL *mysql, unsigned int version)
 
   if ((rpl->mysql= mysql))
   {
+    MYSQL_RES *result;
     if (!mysql_query(mysql, "select @@binlog_checksum"))
     {
-      MYSQL_RES *result;
       if ((result= mysql_store_result(mysql)))
       {
         MYSQL_ROW row= mysql_fetch_row(result);
@@ -795,6 +798,35 @@ int STDCALL mariadb_rpl_open(MARIADB_RPL *rpl)
     uint32_t replica_id= rpl->server_id;
     ptr= buf= (unsigned char *)alloca(rpl->filename_length + 11);
 
+    if (!ptr)
+    {
+      rpl_set_error(rpl, CR_OUT_OF_MEMORY, 0);
+    }
+
+    if (rpl->is_semi_sync)
+    {
+      if (mysql_query(rpl->mysql, "SET @rpl_semi_sync_slave=1"))
+      {
+        rpl_set_error(rpl, mysql_errno(rpl->mysql), 0, mysql_error(rpl->mysql));
+        return 1;
+      }
+    }
+    else {
+      MYSQL_RES* result;
+      MYSQL_ROW row;
+      if (mysql_query(rpl->mysql, "SELECT @rpl_semi_sync_slave=1"))
+      {
+        rpl_set_error(rpl, mysql_errno(rpl->mysql), 0, mysql_error(rpl->mysql));
+        return 1;
+      }
+      if ((result = mysql_store_result(rpl->mysql)))
+      {
+        if ((row = mysql_fetch_row(result)))
+          rpl->is_semi_sync = (row[0] != NULL && row[0][0] == '1');
+        mysql_free_result(result);
+      }
+    }
+
     int4store(ptr, (unsigned int)rpl->start_position);
     ptr+= 4;
     int2store(ptr, rpl->flags);
@@ -811,6 +843,9 @@ int STDCALL mariadb_rpl_open(MARIADB_RPL *rpl)
   {
     char *buf[RPL_BINLOG_MAGIC_SIZE];
     MYSQL mysql;
+
+    /* Semi sync doesn't work when processing files */
+    rpl->is_semi_sync = 0;
 
     if (rpl->fp)
       ma_close(rpl->fp);
@@ -907,6 +942,50 @@ static uint32_t get_compression_info(const unsigned char *buf,
 
   *header_size += 1;
   return len;
+}
+
+static uint8_t mariadb_rpl_send_semisync_ack(MARIADB_RPL* rpl, MARIADB_RPL_EVENT* event)
+{
+  size_t buf_size = 0;
+  uchar* buf;
+
+  if (!rpl)
+    return 1;
+
+  if (!event)
+  {
+    rpl_set_error(rpl, CR_BINLOG_SEMI_SYNC_ERROR, 0, "Invalid event");
+    return 1;
+  }
+
+  if (!rpl->is_semi_sync)
+  {
+    rpl_set_error(rpl, CR_BINLOG_SEMI_SYNC_ERROR, 0, "semi synchronous replication is not enabled");
+    return 1;
+  }
+  if (!event->is_semi_sync || (event->semi_sync_flags != SEMI_SYNC_ACK_REQ))
+  {
+    rpl_set_error(rpl, CR_BINLOG_SEMI_SYNC_ERROR, 0, "This event doesn't require to send semi synchronous acknoledgement");
+    return 1;
+  }
+
+  buf_size = rpl->filename_length + 9;
+  buf = alloca(buf_size);
+
+  buf[0] = SEMI_SYNC_INDICATOR;
+  int8store(buf + 1, (uint64_t)event->next_event_pos);
+  memcpy(buf + 9, rpl->filename, rpl->filename_length);
+
+  ma_net_clear(&rpl->mysql->net);
+
+  if (ma_net_write(&rpl->mysql->net, buf, buf_size) ||
+    (ma_net_flush(&rpl->mysql->net)))
+  {
+    rpl_set_error(rpl, CR_CONNECTION_ERROR, 0);
+    return 1;
+  }
+
+  return 0;
 }
 
 MARIADB_RPL_EVENT * STDCALL mariadb_rpl_fetch(MARIADB_RPL *rpl, MARIADB_RPL_EVENT *event)
@@ -1032,7 +1111,7 @@ MARIADB_RPL_EVENT * STDCALL mariadb_rpl_fetch(MARIADB_RPL *rpl, MARIADB_RPL_EVEN
       rpl_event->ok= *ev++;
 
       /* CONC-470: add support for semi snychronous replication */
-      if ((rpl_event->is_semi_sync= (*ev == SEMI_SYNC_INDICATOR)))
+      if (rpl->is_semi_sync && (rpl_event->is_semi_sync= (*ev == SEMI_SYNC_INDICATOR)))
       {
         RPL_CHECK_POS(ev, ev_end, 1);
         ev++;
@@ -1360,7 +1439,6 @@ MARIADB_RPL_EVENT * STDCALL mariadb_rpl_fetch(MARIADB_RPL *rpl, MARIADB_RPL_EVEN
       ev+= len;
 
       len= ev_end - ev - (rpl->use_checksum ? 4 : 0);
-      RPL_CHECK_POS(ev, ev_end, len);
 
       if (len > 0)  /* optional metadata */
       {
@@ -1482,7 +1560,6 @@ MARIADB_RPL_EVENT * STDCALL mariadb_rpl_fetch(MARIADB_RPL *rpl, MARIADB_RPL_EVEN
           rpl_event->checksum= (uint32_t) crc32(crc, checksum_start, (uint32_t)(ev_end - checksum_start));
         }
       }
-      RPL_CHECK_POS(ev, ev_end, len);
       rpl_set_string_and_len(&rpl_event->event.rotate.filename, ev, len);
       if (ma_set_rpl_filename(rpl, ev, len))
         goto mem_error;
@@ -1611,6 +1688,21 @@ MARIADB_RPL_EVENT * STDCALL mariadb_rpl_fetch(MARIADB_RPL *rpl, MARIADB_RPL_EVEN
         rpl_event->event.gtid.commit_id= uint8korr(ev);
         ev+= 8;
       }
+      else if (rpl_event->event.gtid.flags & (FL_PREPARED_XA | FL_COMPLETED_XA))
+      {
+        uint16_t len;
+        RPL_CHECK_POS(ev, ev_end, 6);
+        rpl_event->event.gtid.format_id= uint4korr(ev);
+        ev+= 4;
+        rpl_event->event.gtid.gtrid_len= *ev;
+        ev++;
+        rpl_event->event.gtid.bqual_len= *ev;
+        ev++;
+        len= rpl_event->event.gtid.gtrid_len + rpl_event->event.gtid.bqual_len;
+        RPL_CHECK_POS(ev, ev_end, len);
+        rpl_set_string_and_len(&rpl_event->event.gtid.xid, ev, len);
+        ev+= len;
+      }
       else
         ev+= 6;
       break;
@@ -1643,11 +1735,12 @@ MARIADB_RPL_EVENT * STDCALL mariadb_rpl_fetch(MARIADB_RPL *rpl, MARIADB_RPL_EVEN
       /* Payload */
       if (rpl_event->event.gtid_list.gtid_cnt)        
       {
+        uint32_t i;
         if (!(rpl_event->event.gtid_list.gtid= 
          (MARIADB_GTID *)ma_calloc_root(&rpl_event->memroot,
                                         sizeof(MARIADB_GTID) * rpl_event->event.gtid_list.gtid_cnt)))
           goto mem_error;
-        for (uint32_t i=0; i < rpl_event->event.gtid_list.gtid_cnt; i++)
+        for (i=0; i < rpl_event->event.gtid_list.gtid_cnt; i++)
         {
           rpl_event->event.gtid_list.gtid[i].domain_id= uint4korr(ev);
           ev+= 4;
@@ -1741,7 +1834,7 @@ MARIADB_RPL_EVENT * STDCALL mariadb_rpl_fetch(MARIADB_RPL *rpl, MARIADB_RPL_EVEN
         RPL_CHECK_POS(ev, ev_end, rpl_event->event.rows.extra_data_size);
         if (rpl_event->event.rows.extra_data_size - 2 > 0)
         {
-          rpl_set_string_and_len(rpl_event->event.rows.extra_data, ev, rpl_event->event.rows.extra_data_size - 2);
+          rpl_alloc_set_string_and_len(rpl_event, rpl_event->event.rows.extra_data, ev, rpl_event->event.rows.extra_data_size - 2);
           ev+= rpl_event->event.rows.extra_data_size;
         }
       }
@@ -1813,19 +1906,11 @@ MARIADB_RPL_EVENT * STDCALL mariadb_rpl_fetch(MARIADB_RPL *rpl, MARIADB_RPL_EVEN
     if (rpl_event->is_semi_sync &&
         rpl_event->semi_sync_flags == SEMI_SYNC_ACK_REQ)
     {
-      size_t buf_size= rpl->filename_length + 1 + 8;
-      uchar *buffer= alloca(buf_size);
-
-      buffer[0]= SEMI_SYNC_INDICATOR;
-      int8store(buffer + 1, (int64_t)rpl_event->next_event_pos);
-      memcpy(buffer + 9, rpl->filename, rpl->filename_length);
-
-      /* clear network buffer before sending the reply packet*/
-      ma_net_clear(&rpl->mysql->net);
-
-      if (ma_net_write(&rpl->mysql->net, buffer, buf_size) ||
-         (ma_net_flush(&rpl->mysql->net)))
-        goto net_error;
+      if (mariadb_rpl_send_semisync_ack(rpl, rpl_event))
+      {
+        /* ACK failed and rpl->error was set */
+        return rpl_event;
+      }
     }
 
     if (rpl->use_checksum && !rpl_event->checksum)
@@ -1851,10 +1936,6 @@ MARIADB_RPL_EVENT * STDCALL mariadb_rpl_fetch(MARIADB_RPL *rpl, MARIADB_RPL_EVEN
 mem_error:
   mariadb_free_rpl_event(rpl_event);
   rpl_set_error(rpl, CR_OUT_OF_MEMORY, 0);
-  return 0;
-net_error:
-  mariadb_free_rpl_event(rpl_event);
-  rpl_set_error(rpl, CR_CONNECTION_ERROR, 0);
   return 0;
 malformed_packet:
   rpl_set_error(rpl, CR_BINLOG_ERROR, 0, RPL_ERR_POS(rpl),
@@ -1948,6 +2029,11 @@ int STDCALL mariadb_rpl_optionsv(MARIADB_RPL *rpl,
     rpl->extract_values= (uint8_t)va_arg(ap, uint32_t);
     break;
   }
+  case MARIADB_RPL_SEMI_SYNC:
+  {
+    rpl->is_semi_sync = (uint8_t)va_arg(ap, uint32_t);
+    break;
+  }
   default:
     rc= -1;
     goto end;
@@ -1996,6 +2082,13 @@ int STDCALL mariadb_rpl_get_optionsv(MARIADB_RPL *rpl,
     *start= rpl->start_position;
     break;
   }
+  case MARIADB_RPL_SEMI_SYNC:
+  {
+    unsigned int* semi_sync = va_arg(ap, unsigned int*);
+    *semi_sync = rpl->is_semi_sync;
+    break;
+  }
+
   default:
     va_end(ap);
     return 1;

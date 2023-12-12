@@ -1,6 +1,6 @@
 /* ksdk_port.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -23,13 +23,7 @@
 #define _KSDK_PORT_H_
 
 #include <wolfssl/wolfcrypt/settings.h>
-#ifdef USE_FAST_MATH
-    #include <wolfssl/wolfcrypt/tfm.h>
-#elif defined WOLFSSL_SP_MATH
-    #include <wolfssl/wolfcrypt/sp_int.h>
-#else
-    #include <wolfssl/wolfcrypt/integer.h>
-#endif
+#include <wolfssl/wolfcrypt/wolfmath.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/curve25519.h>
 #include <wolfssl/wolfcrypt/ed25519.h>

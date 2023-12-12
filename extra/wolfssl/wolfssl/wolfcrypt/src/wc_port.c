@@ -1,6 +1,6 @@
 /* port.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -61,8 +61,12 @@
 #if defined(WOLFSSL_RENESAS_TSIP)
     #include <wolfssl/wolfcrypt/port/Renesas/renesas-tsip-crypt.h>
 #endif
-#if defined(WOLFSSL_RENESAS_SCE)
+#if defined(WOLFSSL_RENESAS_SCEPROTECT) || \
+            defined(WOLFSSL_RENESAS_SCEPROTECT_CRYPTONLY)
     #include <wolfssl/wolfcrypt/port/Renesas/renesas-sce-crypt.h>
+#endif
+#if defined(WOLFSSL_RENESAS_RX64_HASH)
+    #include <wolfssl/wolfcrypt/port/Renesas/renesas-rx64-hw-crypt.h>
 #endif
 #if defined(WOLFSSL_STSAFEA100)
     #include <wolfssl/wolfcrypt/port/st/stsafe.h>
@@ -73,14 +77,12 @@
     #include <wolfssl/openssl/evp.h>
 #endif
 
+#include <wolfssl/wolfcrypt/memory.h>
 #if defined(USE_WOLFSSL_MEMORY) && defined(WOLFSSL_TRACK_MEMORY)
-    #include <wolfssl/wolfcrypt/memory.h>
     #include <wolfssl/wolfcrypt/mem_track.h>
 #endif
 
-#if defined(WOLFSSL_IMX6_CAAM) || defined(WOLFSSL_IMX6_CAAM_RNG) || \
-    defined(WOLFSSL_IMX6UL_CAAM) || defined(WOLFSSL_IMX6_CAAM_BLOB) || \
-    defined(WOLFSSL_SECO_CAAM)
+#if defined(WOLFSSL_CAAM)
     #include <wolfssl/wolfcrypt/port/caam/wolfcaam.h>
 #endif
 #if defined(WOLFSSL_DEVCRYPTO)
@@ -142,6 +144,9 @@ int wolfCrypt_Init(void)
          * must be freed. */
         wc_MemZero_Init();
     #endif
+    #ifdef WOLFSSL_MEM_FAIL_COUNT
+        wc_MemFailCount_Init();
+    #endif
 
     #ifdef WOLFSSL_FORCE_MALLOC_FAIL_TEST
         {
@@ -176,7 +181,18 @@ int wolfCrypt_Init(void)
         }
     #endif
 
-    #if defined(WOLFSSL_RENESAS_SCEPROTECT)
+    #if defined(WOLFSSL_RENESAS_RX64_HASH)
+    ret = rx64_hw_Open();
+    if( ret != 0 ) {
+        WOLFSSL_MSG("Renesas RX64 HW Open failed");
+        /* not return 1 since WOLFSSL_SUCCESS=1*/
+        ret = -1;/* FATAL ERROR */
+        return ret;
+    }
+    #endif
+
+    #if defined(WOLFSSL_RENESAS_SCEPROTECT) || \
+            defined(WOLFSSL_RENESAS_SCEPROTECT_CRYPTONLY)
         ret = wc_sce_Open( );
         if( ret != FSP_SUCCESS ) {
             WOLFSSL_MSG("RENESAS SCE Open failed");
@@ -194,7 +210,7 @@ int wolfCrypt_Init(void)
         }
     #endif
 
-    #if defined(WOLFSSL_LINUXKM_SIMD_X86)
+    #ifdef WOLFSSL_LINUXKM_USE_SAVE_VECTOR_REGISTERS
         ret = allocate_wolfcrypt_linuxkm_fpu_states();
         if (ret != 0) {
             WOLFSSL_MSG("allocate_wolfcrypt_linuxkm_fpu_states failed");
@@ -345,9 +361,7 @@ int wolfCrypt_Init(void)
         }
 #endif
 
-#if defined(WOLFSSL_IMX6_CAAM) || defined(WOLFSSL_IMX6_CAAM_RNG) || \
-    defined(WOLFSSL_IMX6UL_CAAM) || defined(WOLFSSL_IMX6_CAAM_BLOB) || \
-    defined(WOLFSSL_SECO_CAAM)
+#if defined(WOLFSSL_CAAM)
         if ((ret = wc_caamInit()) != 0) {
             return ret;
         }
@@ -423,7 +437,12 @@ int wolfCrypt_Cleanup(void)
         tsip_Close();
     #endif
 
-    #ifdef WOLFSSL_RENESAS_SCEPROTECT
+    #if defined(WOLFSSL_RENESAS_RX64_HASH)
+        rx64_hw_Close();
+    #endif
+
+    #if defined(WOLFSSL_RENESAS_SCEPROTECT) || \
+        defined(WOLFSSL_RENESAS_SCEPROTECT_CRYPTONLY)
         wc_sce_Close();
     #endif
 
@@ -431,9 +450,7 @@ int wolfCrypt_Cleanup(void)
         WOLFSSL_SCE_GSCE_HANDLE.p_api->close(WOLFSSL_SCE_GSCE_HANDLE.p_ctrl);
     #endif
 
-    #if defined(WOLFSSL_IMX6_CAAM) || defined(WOLFSSL_IMX6_CAAM_RNG) || \
-        defined(WOLFSSL_IMX6_CAAM_BLOB)  || \
-        defined(WOLFSSL_SECO_CAAM)
+    #if defined(WOLFSSL_CAAM)
         wc_caamFree();
     #endif
     #if defined(WOLFSSL_CRYPTOCELL)
@@ -452,7 +469,7 @@ int wolfCrypt_Cleanup(void)
         rpcmem_deinit();
         wolfSSL_CleanupHandle();
     #endif
-    #if defined(WOLFSSL_LINUXKM_SIMD_X86)
+    #ifdef WOLFSSL_LINUXKM_USE_SAVE_VECTOR_REGISTERS
         free_wolfcrypt_linuxkm_fpu_states();
     #endif
 
@@ -460,6 +477,9 @@ int wolfCrypt_Cleanup(void)
         Entropy_Final();
     #endif
 
+    #ifdef WOLFSSL_MEM_FAIL_COUNT
+        wc_MemFailCount_Free();
+    #endif
     #ifdef WOLFSSL_CHECK_MEM_ZERO
         /* Free the mutex for access to the list of memory locations that
          * must be freed. */
@@ -477,7 +497,7 @@ int wc_FileLoad(const char* fname, unsigned char** buf, size_t* bufLen,
     void* heap)
 {
     int ret;
-    size_t fileSz;
+    ssize_t fileSz;
     XFILE f;
 
     if (fname == NULL || buf == NULL || bufLen == NULL) {
@@ -501,9 +521,18 @@ int wc_FileLoad(const char* fname, unsigned char** buf, size_t* bufLen,
         return BAD_PATH_ERROR;
     }
     fileSz = XFTELL(f);
-    XREWIND(f);
+    if (fileSz < 0) {
+        WOLFSSL_MSG("wc_LoadFile ftell error");
+        XFCLOSE(f);
+        return BAD_PATH_ERROR;
+    }
+    if (XFSEEK(f, 0, XSEEK_SET) != 0) {
+        WOLFSSL_MSG("wc_LoadFile file seek error");
+        XFCLOSE(f);
+        return BAD_PATH_ERROR;
+    }
     if (fileSz > 0) {
-        *bufLen = fileSz;
+        *bufLen = (size_t)fileSz;
         *buf = (byte*)XMALLOC(*bufLen, heap, DYNAMIC_TYPE_TMP_BUFFER);
         if (*buf == NULL) {
             WOLFSSL_MSG("wc_LoadFile memory error");
@@ -570,7 +599,6 @@ int wc_ReadDirFirst(ReadDirCtx* ctx, const char* path, char** name)
 {
     int ret = WC_READDIR_NOFILE; /* default to no files found */
     int pathLen = 0;
-    int dnameLen = 0;
 
     if (name)
         *name = NULL;
@@ -587,7 +615,7 @@ int wc_ReadDirFirst(ReadDirCtx* ctx, const char* path, char** name)
         return BAD_PATH_ERROR;
 
     XSTRNCPY(ctx->name, path, MAX_FILENAME_SZ - 3);
-    XSTRNCPY(ctx->name + pathLen, "\\*", MAX_FILENAME_SZ - pathLen);
+    XSTRNCPY(ctx->name + pathLen, "\\*", (size_t)(MAX_FILENAME_SZ - pathLen));
 
     ctx->hFind = FindFirstFileA(ctx->name, &ctx->FindFileData);
     if (ctx->hFind == INVALID_HANDLE_VALUE) {
@@ -597,16 +625,16 @@ int wc_ReadDirFirst(ReadDirCtx* ctx, const char* path, char** name)
 
     do {
         if (!(ctx->FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            dnameLen = (int)XSTRLEN(ctx->FindFileData.cFileName);
+            int dnameLen = (int)XSTRLEN(ctx->FindFileData.cFileName);
 
             if (pathLen + dnameLen + 2 > MAX_FILENAME_SZ) {
                 return BAD_PATH_ERROR;
             }
-            XSTRNCPY(ctx->name, path, pathLen + 1);
+            XSTRNCPY(ctx->name, path, (size_t)pathLen + 1);
             ctx->name[pathLen] = '\\';
             XSTRNCPY(ctx->name + pathLen + 1,
                      ctx->FindFileData.cFileName,
-                     MAX_FILENAME_SZ - pathLen - 1);
+                     (size_t)(MAX_FILENAME_SZ - pathLen - 1));
             if (name)
                 *name = ctx->name;
             return 0;
@@ -626,7 +654,7 @@ int wc_ReadDirFirst(ReadDirCtx* ctx, const char* path, char** name)
     }
 
     do {
-        dnameLen = (int)XSTRLEN(IntimeFilename(ctx));
+        int dnameLen = (int)XSTRLEN(IntimeFilename(ctx));
 
         if (pathLen + dnameLen + 2 > MAX_FILENAME_SZ) {
             return BAD_PATH_ERROR;
@@ -651,7 +679,7 @@ int wc_ReadDirFirst(ReadDirCtx* ctx, const char* path, char** name)
     ctx->dirp = &ctx->dir;
 
     while ((fs_readdir(&ctx->dir, &ctx->entry)) != 0) {
-        dnameLen = (int)XSTRLEN(ctx->entry.name);
+        int dnameLen = (int)XSTRLEN(ctx->entry.name);
 
         if (pathLen + dnameLen + 2 >= MAX_FILENAME_SZ) {
             ret = BAD_PATH_ERROR;
@@ -678,7 +706,7 @@ int wc_ReadDirFirst(ReadDirCtx* ctx, const char* path, char** name)
     }
 
     while ((ctx->entry = m2mb_fs_readdir(ctx->dir)) != NULL) {
-        dnameLen = (int)XSTRLEN(ctx->entry->d_name);
+        int dnameLen = (int)XSTRLEN(ctx->entry->d_name);
 
         if (pathLen + dnameLen + 2 >= MAX_FILENAME_SZ) {
             ret = BAD_PATH_ERROR;
@@ -706,19 +734,19 @@ int wc_ReadDirFirst(ReadDirCtx* ctx, const char* path, char** name)
     }
 
     while ((ctx->entry = readdir(ctx->dir)) != NULL) {
-        dnameLen = (int)XSTRLEN(ctx->entry->d_name);
+        int dnameLen = (int)XSTRLEN(ctx->entry->d_name);
 
         if (pathLen + dnameLen + 2 >= MAX_FILENAME_SZ) {
             ret = BAD_PATH_ERROR;
             break;
         }
-        XSTRNCPY(ctx->name, path, pathLen + 1);
+        XSTRNCPY(ctx->name, path, (size_t)pathLen + 1);
         ctx->name[pathLen] = '/';
 
         /* Use dnameLen + 1 for GCC 8 warnings of truncating d_name. Because
          * of earlier check it is known that dnameLen is less than
          * MAX_FILENAME_SZ - (pathLen + 2)  so dnameLen +1 will fit */
-        XSTRNCPY(ctx->name + pathLen + 1, ctx->entry->d_name, dnameLen + 1);
+        XSTRNCPY(ctx->name + pathLen + 1, ctx->entry->d_name, (size_t)dnameLen + 1);
         if ((ret = wc_FileExists(ctx->name)) == 0) {
             if (name)
                 *name = ctx->name;
@@ -736,7 +764,6 @@ int wc_ReadDirNext(ReadDirCtx* ctx, const char* path, char** name)
 {
     int ret = WC_READDIR_NOFILE; /* default to no file found */
     int pathLen = 0;
-    int dnameLen = 0;
 
     if (name)
         *name = NULL;
@@ -751,16 +778,16 @@ int wc_ReadDirNext(ReadDirCtx* ctx, const char* path, char** name)
 #ifdef USE_WINDOWS_API
     while (FindNextFileA(ctx->hFind, &ctx->FindFileData)) {
         if (!(ctx->FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            dnameLen = (int)XSTRLEN(ctx->FindFileData.cFileName);
+            int dnameLen = (int)XSTRLEN(ctx->FindFileData.cFileName);
 
             if (pathLen + dnameLen + 2 > MAX_FILENAME_SZ) {
                 return BAD_PATH_ERROR;
             }
-            XSTRNCPY(ctx->name, path, pathLen + 1);
+            XSTRNCPY(ctx->name, path, (size_t)pathLen + 1);
             ctx->name[pathLen] = '\\';
             XSTRNCPY(ctx->name + pathLen + 1,
                      ctx->FindFileData.cFileName,
-                     MAX_FILENAME_SZ - pathLen - 1);
+                     (size_t)(MAX_FILENAME_SZ - pathLen - 1));
             if (name)
                 *name = ctx->name;
             return 0;
@@ -769,7 +796,7 @@ int wc_ReadDirNext(ReadDirCtx* ctx, const char* path, char** name)
 
 #elif defined(INTIME_RTOS)
     while (IntimeFindNext(&ctx->FindFileData)) {
-        dnameLen = (int)XSTRLEN(IntimeFilename(ctx));
+        int dnameLen = (int)XSTRLEN(IntimeFilename(ctx));
 
         if (pathLen + dnameLen + 2 > MAX_FILENAME_SZ) {
             return BAD_PATH_ERROR;
@@ -788,7 +815,7 @@ int wc_ReadDirNext(ReadDirCtx* ctx, const char* path, char** name)
 
 #elif defined(WOLFSSL_ZEPHYR)
     while ((fs_readdir(&ctx->dir, &ctx->entry)) != 0) {
-        dnameLen = (int)XSTRLEN(ctx->entry.name);
+        int dnameLen = (int)XSTRLEN(ctx->entry.name);
 
         if (pathLen + dnameLen + 2 >= MAX_FILENAME_SZ) {
             ret = BAD_PATH_ERROR;
@@ -809,7 +836,7 @@ int wc_ReadDirNext(ReadDirCtx* ctx, const char* path, char** name)
     }
 #elif defined(WOLFSSL_TELIT_M2MB)
     while ((ctx->entry = m2mb_fs_readdir(ctx->dir)) != NULL) {
-        dnameLen = (int)XSTRLEN(ctx->entry->d_name);
+        int dnameLen = (int)XSTRLEN(ctx->entry->d_name);
 
         if (pathLen + dnameLen + 2 >= MAX_FILENAME_SZ) {
             ret = BAD_PATH_ERROR;
@@ -831,18 +858,18 @@ int wc_ReadDirNext(ReadDirCtx* ctx, const char* path, char** name)
     }
 #else
     while ((ctx->entry = readdir(ctx->dir)) != NULL) {
-        dnameLen = (int)XSTRLEN(ctx->entry->d_name);
+        int dnameLen = (int)XSTRLEN(ctx->entry->d_name);
 
         if (pathLen + dnameLen + 2 >= MAX_FILENAME_SZ) {
             ret = BAD_PATH_ERROR;
             break;
         }
-        XSTRNCPY(ctx->name, path, pathLen + 1);
+        XSTRNCPY(ctx->name, path, (size_t)pathLen + 1);
         ctx->name[pathLen] = '/';
         /* Use dnameLen + 1 for GCC 8 warnings of truncating d_name. Because
          * of earlier check it is known that dnameLen is less than
          * MAX_FILENAME_SZ - (pathLen + 2) so that dnameLen +1 will fit */
-        XSTRNCPY(ctx->name + pathLen + 1, ctx->entry->d_name, dnameLen + 1);
+        XSTRNCPY(ctx->name + pathLen + 1, ctx->entry->d_name, (size_t)dnameLen + 1);
 
         if ((ret = wc_FileExists(ctx->name)) == 0) {
             if (name)
@@ -895,13 +922,48 @@ void wc_ReadDirClose(ReadDirCtx* ctx)
 #endif /* !NO_FILESYSTEM */
 
 #if !defined(NO_FILESYSTEM) && defined(WOLFSSL_ZEPHYR)
-XFILE z_fs_open(const char* filename, const char* perm)
+XFILE z_fs_open(const char* filename, const char* mode)
 {
     XFILE file;
+    fs_mode_t flags = 0;
+
+    if (mode == NULL)
+        return NULL;
+
+    /* Parse mode */
+    switch (*mode++) {
+        case 'r':
+            flags |= FS_O_READ;
+            break;
+        case 'w':
+            flags |= FS_O_WRITE|FS_O_CREATE;
+            break;
+        case 'a':
+            flags |= FS_O_APPEND|FS_O_CREATE;
+            break;
+        default:
+            return NULL;
+    }
+
+    /* Ignore binary flag */
+    if (*mode == 'b')
+        mode++;
+    if (*mode == '+') {
+        flags |= FS_O_READ;
+        /* Don't add write flag if already appending */
+        if (!(flags & FS_O_APPEND))
+            flags |= FS_O_RDWR;
+    }
+    /* Ignore binary flag */
+    if (*mode == 'b')
+        mode++;
+    /* Incorrect mode string */
+    if (*mode != '\0')
+        return NULL;
 
     file = (XFILE)XMALLOC(sizeof(*file), NULL, DYNAMIC_TYPE_FILE);
     if (file != NULL) {
-        if (fs_open(file, filename) != 0) {
+        if (fs_open(file, filename, flags) != 0) {
             XFREE(file, NULL, DYNAMIC_TYPE_FILE);
             file = NULL;
         }
@@ -1061,7 +1123,103 @@ size_t wc_strlcat(char *dst, const char *src, size_t dstSize)
 }
 #endif /* USE_WOLF_STRLCAT */
 
-#if !defined(SINGLE_THREADED) && !defined(HAVE_C___ATOMIC)
+#ifdef USE_WOLF_STRCASECMP
+int wc_strcasecmp(const char *s1, const char *s2)
+{
+    char c1, c2;
+    for (;;++s1, ++s2) {
+        c1 = *s1;
+        if ((c1 >= 'a') && (c1 <= 'z'))
+            c1 -= ('a' - 'A');
+        c2 = *s2;
+        if ((c2 >= 'a') && (c2 <= 'z'))
+            c2 -= ('a' - 'A');
+        if ((c1 != c2) || (c1 == 0))
+            break;
+    }
+    return (c1 - c2);
+}
+#endif /* USE_WOLF_STRCASECMP */
+
+#ifdef USE_WOLF_STRNCASECMP
+int wc_strncasecmp(const char *s1, const char *s2, size_t n)
+{
+    char c1, c2;
+    for (c1 = 0, c2 = 0; n > 0; --n, ++s1, ++s2) {
+        c1 = *s1;
+        if ((c1 >= 'a') && (c1 <= 'z'))
+            c1 -= ('a' - 'A');
+        c2 = *s2;
+        if ((c2 >= 'a') && (c2 <= 'z'))
+            c2 -= ('a' - 'A');
+        if ((c1 != c2) || (c1 == 0))
+            break;
+    }
+    return (c1 - c2);
+}
+#endif /* USE_WOLF_STRNCASECMP */
+
+#ifdef WOLFSSL_ATOMIC_OPS
+
+#ifdef HAVE_C___ATOMIC
+/* Atomic ops using standard C lib */
+#ifdef __cplusplus
+/* C++ using direct calls to compiler built-in functions */
+void wolfSSL_Atomic_Int_Init(wolfSSL_Atomic_Int* c, int i)
+{
+    *c = i;
+}
+
+int wolfSSL_Atomic_Int_FetchAdd(wolfSSL_Atomic_Int* c, int i)
+{
+    return __atomic_fetch_add(c, i, __ATOMIC_RELAXED);
+}
+
+int wolfSSL_Atomic_Int_FetchSub(wolfSSL_Atomic_Int* c, int i)
+{
+    return __atomic_fetch_sub(c, i, __ATOMIC_RELAXED);
+}
+#else
+/* Default C Implementation */
+void wolfSSL_Atomic_Int_Init(wolfSSL_Atomic_Int* c, int i)
+{
+    atomic_init(c, i);
+}
+
+int wolfSSL_Atomic_Int_FetchAdd(wolfSSL_Atomic_Int* c, int i)
+{
+    return atomic_fetch_add_explicit(c, i, memory_order_relaxed);
+}
+
+int wolfSSL_Atomic_Int_FetchSub(wolfSSL_Atomic_Int* c, int i)
+{
+    return atomic_fetch_sub_explicit(c, i, memory_order_relaxed);
+}
+#endif /* __cplusplus */
+
+#elif defined(_MSC_VER)
+
+/* Default C Implementation */
+void wolfSSL_Atomic_Int_Init(wolfSSL_Atomic_Int* c, int i)
+{
+    *c = i;
+}
+
+int wolfSSL_Atomic_Int_FetchAdd(wolfSSL_Atomic_Int* c, int i)
+{
+    return (int)_InterlockedExchangeAdd(c, (long)i);
+}
+
+int wolfSSL_Atomic_Int_FetchSub(wolfSSL_Atomic_Int* c, int i)
+{
+    return (int)_InterlockedExchangeAdd(c, (long)-i);
+}
+
+#endif
+
+#endif /* WOLFSSL_ATOMIC_OPS */
+
+#if !defined(SINGLE_THREADED) && !defined(WOLFSSL_ATOMIC_OPS)
 void wolfSSL_RefInit(wolfSSL_Ref* ref, int* err)
 {
     int ret = wc_InitMutex(&ref->mutex);
@@ -1098,9 +1256,13 @@ void wolfSSL_RefDec(wolfSSL_Ref* ref, int* isZero, int* err)
     int ret = wc_LockMutex(&ref->mutex);
     if (ret != 0) {
         WOLFSSL_MSG("Failed to lock mutex for reference decrement!");
+        /* Can't say count is zero. */
+        *isZero = 0;
     }
     else {
-        ref->count--;
+        if (ref->count > 0) {
+            ref->count--;
+        }
         *isZero = (ref->count == 0);
         wc_UnLockMutex(&ref->mutex);
     }
@@ -1556,6 +1718,48 @@ int wolfSSL_CryptHwMutexUnLock(void)
 
 #elif defined(WOLFSSL_PTHREADS)
 
+    #ifdef WOLFSSL_USE_RWLOCK
+        int wc_InitRwLock(wolfSSL_RwLock* m)
+        {
+            if (pthread_rwlock_init(m, 0) == 0)
+                return 0;
+            else
+                return BAD_MUTEX_E;
+        }
+
+        int wc_FreeRwLock(wolfSSL_RwLock* m)
+        {
+            if (pthread_rwlock_destroy(m) == 0)
+                return 0;
+            else
+                return BAD_MUTEX_E;
+        }
+
+        int wc_LockRwLock_Wr(wolfSSL_RwLock* m)
+        {
+            if (pthread_rwlock_wrlock(m) == 0)
+                return 0;
+            else
+                return BAD_MUTEX_E;
+        }
+
+        int wc_LockRwLock_Rd(wolfSSL_RwLock* m)
+        {
+            if (pthread_rwlock_rdlock(m) == 0)
+                return 0;
+            else
+                return BAD_MUTEX_E;
+        }
+
+        int wc_UnLockRwLock(wolfSSL_RwLock* m)
+        {
+            if (pthread_rwlock_unlock(m) == 0)
+                return 0;
+            else
+                return BAD_MUTEX_E;
+        }
+    #endif
+
     int wc_InitMutex(wolfSSL_Mutex* m)
     {
         if (pthread_mutex_init(m, 0) == 0)
@@ -1590,7 +1794,6 @@ int wolfSSL_CryptHwMutexUnLock(void)
         else
             return BAD_MUTEX_E;
     }
-
 #elif defined(WOLFSSL_LINUXKM)
 
     /* Linux kernel mutex routines are voids, alas. */
@@ -2542,6 +2745,32 @@ int wolfSSL_CryptHwMutexUnLock(void)
     #warning No mutex handling defined
 
 #endif
+#if !defined(WOLFSSL_USE_RWLOCK) || defined(SINGLE_THREADED)
+    int wc_InitRwLock(wolfSSL_RwLock* m)
+    {
+        return wc_InitMutex(m);
+    }
+
+    int wc_FreeRwLock(wolfSSL_RwLock* m)
+    {
+        return wc_FreeMutex(m);
+    }
+
+    int wc_LockRwLock_Wr(wolfSSL_RwLock* m)
+    {
+        return wc_LockMutex(m);
+    }
+
+    int wc_LockRwLock_Rd(wolfSSL_RwLock* m)
+    {
+        return wc_LockMutex(m);
+    }
+
+    int wc_UnLockRwLock(wolfSSL_RwLock* m)
+    {
+        return wc_UnLockMutex(m);
+    }
+#endif
 
 #ifndef NO_ASN_TIME
 #if defined(_WIN32_WCE)
@@ -2714,6 +2943,34 @@ time_t fsl_time(time_t* t)
 {
     *t = RTC_GetSecondsTimerCount(RTC);
     return *t;
+}
+#endif
+
+#if defined(FREESCALE_SNVS_RTC)
+time_t fsl_time(time_t* t)
+{
+    struct tm tm_time;
+    time_t ret;
+
+    snvs_hp_rtc_datetime_t rtcDate;
+    snvs_hp_rtc_config_t snvsRtcConfig;
+
+    SNVS_HP_RTC_GetDefaultConfig(&snvsRtcConfig);
+    SNVS_HP_RTC_Init(SNVS, &snvsRtcConfig);
+
+    SNVS_HP_RTC_GetDatetime(SNVS, &rtcDate);
+
+    tm_time.tm_year  = rtcDate.year;
+    tm_time.tm_mon   = rtcDate.month;
+    tm_time.tm_mday  = rtcDate.day;
+    tm_time.tm_hour  = rtcDate.hour;
+    tm_time.tm_min   = rtcDate.minute;
+    tm_time.tm_sec   = rtcDate.second;
+
+    ret = mktime(&tm_time);
+    if (t != NULL)
+        *t = ret;
+    return ret;
 }
 #endif
 
@@ -2912,7 +3169,7 @@ time_t stm32_hal_time(time_t *t1)
     RTC_TimeTypeDef time;
     RTC_DateTypeDef date;
 
-    XMEMSET(tm_time, 0, sizeof(struct tm));
+    XMEMSET(&tm_time, 0, sizeof(struct tm));
 
     /* order of GetTime followed by GetDate required here due to STM32 HW
      * requirement */
@@ -3013,56 +3270,6 @@ char* mystrnstr(const char* s1, const char* s2, unsigned int n)
     }
 
 #endif /* WOLFSSL_NUCLEUS_1_2 */
-
-#if defined(WOLFSSL_LINUXKM) && defined(HAVE_KVMALLOC)
-    /* adapted from kvrealloc() draft by Changli Gao, 2010-05-13 */
-    void *lkm_realloc(void *ptr, size_t newsize) {
-        void *nptr;
-        size_t oldsize;
-
-        if (unlikely(newsize == 0)) {
-            kvfree(ptr);
-            return ZERO_SIZE_PTR;
-        }
-
-        if (unlikely(ptr == NULL))
-            return kvmalloc_node(newsize, GFP_KERNEL, NUMA_NO_NODE);
-
-        if (is_vmalloc_addr(ptr)) {
-            /* no way to discern the size of the old allocation,
-             * because the kernel doesn't export find_vm_area().  if
-             * it did, we could then call get_vm_area_size() on the
-             * returned struct vm_struct.
-             */
-            return NULL;
-        } else {
-#ifndef __PIE__
-            struct page *page;
-
-            page = virt_to_head_page(ptr);
-            if (PageSlab(page) || PageCompound(page)) {
-                if (newsize < PAGE_SIZE)
-#endif /* ! __PIE__ */
-                    return krealloc(ptr, newsize, GFP_KERNEL);
-#ifndef __PIE__
-                oldsize = ksize(ptr);
-            } else {
-                oldsize = page->private;
-                if (newsize <= oldsize)
-                    return ptr;
-            }
-#endif /* ! __PIE__ */
-        }
-
-        nptr = kvmalloc_node(newsize, GFP_KERNEL, NUMA_NO_NODE);
-        if (nptr != NULL) {
-            memcpy(nptr, ptr, oldsize);
-            kvfree(ptr);
-        }
-
-        return nptr;
-    }
-#endif /* WOLFSSL_LINUXKM && HAVE_KVMALLOC */
 
 #if defined(WOLFSSL_TI_CRYPT) || defined(WOLFSSL_TI_HASH)
     #include <wolfcrypt/src/port/ti/ti-ccm.c>  /* initialize and Mutex for TI Crypt Engine */

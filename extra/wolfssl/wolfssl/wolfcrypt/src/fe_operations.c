@@ -1,6 +1,6 @@
 /* fe_operations.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -142,7 +142,6 @@ int curve25519(byte* q, const byte* n, const byte* p)
   fe tmp1 = {0};
   int pos = 0;
   unsigned int swap = 0;
-  unsigned int b = 0;
 
   /* Clamp already done during key generation and import */
 #if 0
@@ -163,6 +162,7 @@ int curve25519(byte* q, const byte* n, const byte* p)
 
   swap = 0;
   for (pos = 254;pos >= 0;--pos) {
+    unsigned int b;
 #if 0
     b = e[pos / 8] >> (pos & 7);
 #else
