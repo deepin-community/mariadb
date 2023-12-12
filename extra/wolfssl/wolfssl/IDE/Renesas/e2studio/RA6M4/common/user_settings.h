@@ -1,6 +1,6 @@
 /* user_settings.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -77,4 +77,8 @@
 #define SCEKEY_INSTALLED
 #if defined(WOLFSSL_RENESAS_SCEPROTECT) && defined(SCEKEY_INSTALLED)
     #define HAVE_RENESAS_SYNC
+#endif
+
+#if defined(WOLFSSL_RENESAS_SCEPROTECT_CRYPTONLY)
+    #define WOLFSSL_KEY_GEN
 #endif

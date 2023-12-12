@@ -1,6 +1,6 @@
 /* xil-sha3.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -202,7 +202,9 @@ void wc_Sha3_384_Free(wc_Sha3* sha)
  */
 int wc_Sha3_384_GetHash(wc_Sha3* sha, byte* out)
 {
+#ifdef WOLFSSL_XILINX_CRYPTO_OLD
     wc_Sha3 s;
+#endif
 
     if (sha == NULL || out == NULL) {
         return BAD_FUNC_ARG;

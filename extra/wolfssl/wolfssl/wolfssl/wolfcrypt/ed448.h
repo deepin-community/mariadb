@@ -1,6 +1,6 @@
 /* ed448.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -69,7 +69,7 @@
 
 enum {
     Ed448    = 0,
-    Ed448ph  = 1,
+    Ed448ph  = 1
 };
 
 #ifndef WC_ED448KEY_TYPE_DEFINED

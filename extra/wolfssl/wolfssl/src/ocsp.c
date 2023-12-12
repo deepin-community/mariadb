@@ -1,6 +1,6 @@
 /* ocsp.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -395,7 +395,11 @@ int CheckOcspResponse(WOLFSSL_OCSP *ocsp, byte *response, int responseSz,
 end:
     if (ret == 0 && validated == 1) {
         WOLFSSL_MSG("New OcspResponse validated");
+    } else if ((ret == ocsp->error) && (ocspResponse->single->status->status == CERT_UNKNOWN)) {
+        WOLFSSL_MSG("OCSP unknown");
+        ret = OCSP_CERT_UNKNOWN;
     } else if (ret != OCSP_CERT_REVOKED) {
+        WOLFSSL_MSG("OCSP lookup failure");
         ret = OCSP_LOOKUP_FAIL;
     }
 
@@ -463,7 +467,7 @@ int CheckOcspRequest(WOLFSSL_OCSP* ocsp, OcspRequest* ocspRequest,
             return ret;
         }
         WOLFSSL_LEAVE("CheckOcspRequest", ocsp->error);
-        return OCSP_LOOKUP_FAIL;
+        return ret;
     }
 #endif
 
@@ -934,8 +938,10 @@ WOLFSSL_OCSP_BASICRESP* wolfSSL_OCSP_response_get1_basic(OcspResponse* response)
                                     DYNAMIC_TYPE_OCSP_ENTRY);
     bs->source = (byte*)XMALLOC(bs->maxIdx, NULL, DYNAMIC_TYPE_TMP_BUFFER);
     if (bs->single == NULL || bs->source == NULL) {
-        if (bs->single) XFREE(bs->single, NULL, DYNAMIC_TYPE_OCSP_ENTRY);
-        if (bs->source) XFREE(bs->source, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        if (bs->single) {
+            XFREE(bs->single, NULL, DYNAMIC_TYPE_OCSP_ENTRY);
+            bs->single = NULL;
+        }
         wolfSSL_OCSP_RESPONSE_free(bs);
         bs = NULL;
     }
@@ -1256,9 +1262,6 @@ int wolfSSL_OCSP_id_get0_info(WOLFSSL_ASN1_STRING **name,
   WOLFSSL_ASN1_OBJECT **pmd, WOLFSSL_ASN1_STRING **keyHash,
   WOLFSSL_ASN1_INTEGER **serial, WOLFSSL_OCSP_CERTID *cid)
 {
-    int i = 0;
-    WOLFSSL_ASN1_INTEGER* ser;
-
     WOLFSSL_ENTER("wolfSSL_OCSP_id_get0_info");
 
     if (cid == NULL)
@@ -1266,6 +1269,9 @@ int wolfSSL_OCSP_id_get0_info(WOLFSSL_ASN1_STRING **name,
 
     /* build up ASN1_INTEGER for serial */
     if (serial != NULL) {
+        int i = 0;
+        WOLFSSL_ASN1_INTEGER* ser;
+
         ser = wolfSSL_ASN1_INTEGER_new();
         if (ser == NULL)
             return 0;

@@ -1,6 +1,6 @@
 /* wolfcaam_qnx.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -34,9 +34,11 @@
 #include <sys/ioctl.h>
 #include <devctl.h>
 
+#include <errno.h>
+
 /* for devctl use */
 int caamFd = -1;
-wolfSSL_Mutex caamMutex;
+static wolfSSL_Mutex caamMutex;
 
 /* return 0 on success */
 int wc_CAAMInitInterface()

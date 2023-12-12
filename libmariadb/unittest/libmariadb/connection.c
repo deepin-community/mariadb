@@ -647,14 +647,14 @@ int test_conc26(MYSQL *unused __attribute__((unused)))
   MYSQL *mysql= mysql_init(NULL);
   mysql_options(mysql, MYSQL_SET_CHARSET_NAME, "ascii");
 
-  FAIL_IF(my_test_connect(mysql, hostname, "notexistinguser", "password", schema, port, NULL, CLIENT_REMEMBER_OPTIONS), 
+  FAIL_IF(my_test_connect(mysql, hostname, "notexistinguser", "password", schema, port, socketname, CLIENT_REMEMBER_OPTIONS),
           "Error expected");
   FAIL_IF(!mysql->options.charset_name || strcmp(mysql->options.charset_name, "ascii") != 0,
           "expected charsetname=ascii");
   mysql_close(mysql);
 
   mysql= mysql_init(NULL);
-  FAIL_IF(my_test_connect(mysql, hostname, "notexistinguser", "password", schema, port, NULL, 0), 
+  FAIL_IF(my_test_connect(mysql, hostname, "notexistinguser", "password", schema, port, socketname, 0), 
           "Error expected");
   FAIL_IF(mysql->options.charset_name, "Error: options not freed");
   mysql_close(mysql);
@@ -669,7 +669,7 @@ int test_connection_timeout(MYSQL *unused __attribute__((unused)))
   MYSQL *mysql= mysql_init(NULL);
   mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (unsigned int *)&timeout);
   start= time(NULL);
-  if (my_test_connect(mysql, "192.168.1.101", "notexistinguser", "password", schema, port, NULL, CLIENT_REMEMBER_OPTIONS))
+  if (my_test_connect(mysql, "192.168.1.101", "notexistinguser", "password", schema, port, socketname, CLIENT_REMEMBER_OPTIONS))
   {
     diag("Error expected - maybe you have to change hostname");
     return FAIL;
@@ -695,7 +695,7 @@ int test_connection_timeout2(MYSQL *unused __attribute__((unused)))
   mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (unsigned int *)&timeout);
   mysql_options(mysql, MYSQL_INIT_COMMAND, "set @a:=SLEEP(7)");
   start= time(NULL);
-  if (my_test_connect(mysql, hostname, username, password, schema, port, NULL, CLIENT_REMEMBER_OPTIONS))
+  if (my_test_connect(mysql, hostname, username, password, schema, port, socketname, CLIENT_REMEMBER_OPTIONS))
   {
   elapsed= time(NULL) - start;
   diag("elapsed: %lu", (unsigned long)elapsed);
@@ -2041,13 +2041,7 @@ static int test_conn_str_1(MYSQL *my __attribute__((unused)))
 
   sprintf(conn_str, "connection=host=%s;user=%s;password=%s;port=%d;ssl_enforce=1;socket=%s",
                 hostname ? hostname : "localhost", username ? username : "", 
-                password ? password : "", port, socketname ? socketname : "");
-
-  /* SkySQL requires secure connection */
-  if (IS_SKYSQL(hostname))
-  {
-    strcat(conn_str, ";ssl_enforce=1");
-  }
+                password ? password : "", ssl_port, socketname ? socketname : "");
 
   fprintf(fp, "[client]\n");
   fprintf(fp, "%s\n", conn_str);
@@ -2132,16 +2126,22 @@ static int test_conc365_reconnect(MYSQL *my)
   MYSQL *mysql= mysql_init(NULL);
   char tmp[1024];
   my_bool reconnect= 1;
+  SKIP_MAXSCALE;
 
   mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
 
-  snprintf(tmp, sizeof(tmp) - 1,
-   "host=127.0.0.1:3300,%s;user=%s;password=%s;port=%d;socket=%s",
-   hostname ? hostname : "localhost", username ? username : "", password ? password : "",
-   port, socketname ? socketname : "");
-
- if (IS_SKYSQL(hostname))
-   strcat(tmp, ";ssl_enforce=1");
+  if (IS_SKYSQL(hostname))
+  {
+    snprintf(tmp, sizeof(tmp) - 1,
+      "host=127.0.0.1:3300,%s;user=%s;password=%s;port=%d;socket=%s;ssl_enforce=1",
+      hostname ? hostname : "localhost", username ? username : "", password ? password : "",
+      ssl_port, socketname ? socketname : "");
+  } else {
+    snprintf(tmp, sizeof(tmp) - 1,
+      "host=127.0.0.1:3300,%s;user=%s;password=%s;port=%d;socket=%s",
+      hostname ? hostname : "localhost", username ? username : "", password ? password : "",
+      port, socketname ? socketname : "");
+  }
 
   if (!my_test_connect(mysql, tmp, username,
                              password, schema, port, socketname, CLIENT_REMEMBER_OPTIONS))

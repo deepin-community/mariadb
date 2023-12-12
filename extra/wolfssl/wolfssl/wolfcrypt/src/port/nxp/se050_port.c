@@ -1,6 +1,6 @@
 /* se050_port.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -29,7 +29,7 @@
 
 #ifdef WOLFSSL_SE050
 
-#include <wolfssl/wolfcrypt/types.h>
+#include <wolfssl/wolfcrypt/types.h> /* for MATH_INT_T */
 #include <wolfssl/wolfcrypt/wc_port.h>
 #include <wolfssl/wolfcrypt/aes.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
@@ -47,16 +47,6 @@
     #include "ex_sss_boot.h"
 #endif
 
-#if defined(WOLFSSL_SP_MATH) || defined(WOLFSSL_SP_MATH_ALL)
-    struct sp_int;
-    #define MATH_INT_T struct sp_int
-#elif defined(USE_FAST_MATH)
-    struct fp_int;
-    #define MATH_INT_T struct fp_int
-#else
-    struct mp_int;
-    #define MATH_INT_T struct mp_int
-#endif
 #ifdef HAVE_ECC
     #include <wolfssl/wolfcrypt/ecc.h>
     struct ecc_key;
@@ -657,8 +647,8 @@ int wc_se050_get_binary_object(word32 keyId, byte* out, word32* outSz)
     }
     if (status == kStatus_SSS_Success) {
         outBitSz = (*outSz) * 8;
-        status = sss_key_store_get_key(&host_keystore, &object, out, outSz,
-                                       &outBitSz);
+        status = sss_key_store_get_key(&host_keystore, &object, out,
+                                       (size_t*)outSz, &outBitSz);
     }
     wolfSSL_CryptHwMutexUnLock();
 
@@ -1365,7 +1355,7 @@ int se050_rsa_verify(const byte* in, word32 inLen, byte* out, word32 outLen,
         if (key->keyIdSet == 0) {
             /* key was not generated in SE050, export RsaKey to DER
              * and use that to store into SE050 keystore */
-            derSz = wc_RsaKeyToDer(key, NULL, 0);
+            derSz = wc_RsaKeyToPublicDer(key, NULL, 0);
             if (derSz < 0) {
                 status = kStatus_SSS_Fail;
                 ret = derSz;
@@ -1380,7 +1370,7 @@ int se050_rsa_verify(const byte* in, word32 inLen, byte* out, word32 outLen,
                 }
             }
             if (status == kStatus_SSS_Success) {
-                derSz = wc_RsaKeyToDer(key, derBuf, derSz);
+                derSz = wc_RsaKeyToPublicDer(key, derBuf, derSz);
                 if (derSz < 0) {
                     status = kStatus_SSS_Fail;
                     ret = derSz;
@@ -1389,7 +1379,7 @@ int se050_rsa_verify(const byte* in, word32 inLen, byte* out, word32 outLen,
             if (status == kStatus_SSS_Success) {
                 keyId = se050_allocate_key(SE050_RSA_KEY);
                 status = sss_key_object_allocate_handle(&newKey, keyId,
-                    kSSS_KeyPart_Pair, kSSS_CipherType_RSA, keySz,
+                    kSSS_KeyPart_Public, kSSS_CipherType_RSA, keySz,
                     kKeyObject_Mode_Persistent);
             }
             if (status == kStatus_SSS_Success) {
@@ -1548,7 +1538,7 @@ int se050_rsa_public_encrypt(const byte* in, word32 inLen, byte* out,
         if (key->keyIdSet == 0) {
             /* key was not generated in SE050, export RsaKey to DER
              * and use that to store into SE050 keystore */
-            derSz = wc_RsaKeyToDer(key, NULL, 0);
+            derSz = wc_RsaKeyToPublicDer(key, NULL, 0);
             if (derSz < 0) {
                 status = kStatus_SSS_Fail;
                 ret = derSz;
@@ -1563,7 +1553,7 @@ int se050_rsa_public_encrypt(const byte* in, word32 inLen, byte* out,
                 }
             }
             if (status == kStatus_SSS_Success) {
-                derSz = wc_RsaKeyToDer(key, derBuf, derSz);
+                derSz = wc_RsaKeyToPublicDer(key, derBuf, derSz);
                 if (derSz < 0) {
                     status = kStatus_SSS_Fail;
                     ret = derSz;
@@ -1572,7 +1562,7 @@ int se050_rsa_public_encrypt(const byte* in, word32 inLen, byte* out,
             if (status == kStatus_SSS_Success) {
                 keyId = se050_allocate_key(SE050_RSA_KEY);
                 status = sss_key_object_allocate_handle(&newKey, keyId,
-                    kSSS_KeyPart_Pair, kSSS_CipherType_RSA, keySz,
+                    kSSS_KeyPart_Public, kSSS_CipherType_RSA, keySz,
                     kKeyObject_Mode_Persistent);
             }
             if (status == kStatus_SSS_Success) {
@@ -1979,7 +1969,7 @@ int wc_se050_ecc_insert_private_key(word32 keyId, const byte* eccDer,
     return se050_ecc_insert_key(keyId, eccDer, eccDerSize, ECC_PRIVATEKEY);
 }
 
-int se050_ecc_sign_hash_ex(const byte* in, word32 inLen, mp_int* r, mp_int* s,
+int se050_ecc_sign_hash_ex(const byte* in, word32 inLen, MATH_INT_T* r, MATH_INT_T* s,
                            byte* out, word32 *outLen, struct ecc_key* key)
 {
     int                 ret = 0;
@@ -2151,8 +2141,8 @@ int se050_ecc_sign_hash_ex(const byte* in, word32 inLen, mp_int* r, mp_int* s,
     return ret;
 }
 
-int se050_ecc_verify_hash_ex(const byte* hash, word32 hashLen, mp_int* r,
-                             mp_int* s, struct ecc_key* key, int* res)
+int se050_ecc_verify_hash_ex(const byte* hash, word32 hashLen, MATH_INT_T* r,
+                             MATH_INT_T* s, struct ecc_key* key, int* res)
 {
     int                 ret = 0;
     sss_status_t        status;

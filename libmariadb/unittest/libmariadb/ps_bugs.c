@@ -22,6 +22,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
 */
 #include "my_test.h"
+#include <math.h>
 
 #define MY_INT64_NUM_DECIMAL_DIGITS 21
 #define MAX_INDEXES 64
@@ -3271,7 +3272,7 @@ static int test_mem_overun(MYSQL *mysql)
   strcpy(buffer, "create table t_mem_overun(");
   for (i= 0; i < 1000; i++)
   {
-    sprintf(field, "c%d int, ", i);
+    snprintf(field, sizeof(field), "c%d int, ", i);
     strcat(buffer, field);
   }
   length= (int)strlen(buffer);
@@ -5603,7 +5604,7 @@ static int test_conc623(MYSQL *mysql)
 
   MYSQL_STMT *stmt= mysql_stmt_init(mysql);
 
-  rc= mysql_query(mysql, "CREATE OR REPLACE TEMPORARY TABLE t1 (a int)");
+  rc= mysql_query(mysql, "CREATE TEMPORARY TABLE t1 (a int)");
 
   rc= mysql_stmt_attr_set(stmt, STMT_ATTR_CB_USER_DATA, mysql);
   check_stmt_rc(rc, stmt);
@@ -5663,10 +5664,14 @@ static int test_conc627(MYSQL *mysql)
 
 static int test_conc633(MYSQL *mysql)
 {
-  MYSQL_STMT *stmt= mysql_stmt_init(mysql);
+  MYSQL_STMT *stmt;
   MYSQL *my= NULL;
   int ret= FAIL;
   int rc;
+
+  SKIP_MYSQL(mysql);
+
+  stmt= mysql_stmt_init(mysql);
 
   if (!mariadb_stmt_execute_direct(stmt, SL("SÄLECT 1")))
   {

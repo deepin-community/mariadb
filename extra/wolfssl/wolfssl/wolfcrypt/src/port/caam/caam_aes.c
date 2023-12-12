@@ -1,6 +1,6 @@
 /* caam_aes.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -58,7 +58,6 @@ int  wc_AesSetKey(Aes* aes, const byte* key, word32 len,
     if (len > 32) {
         byte out[32]; /* max AES key size */
         word32 outSz;
-        int ret;
 
         if (len != 64 && len != 72 && len != 80) {
             return BAD_FUNC_ARG;

@@ -7,7 +7,7 @@ Subject: [PATCH] Properly introduce wsrep_sst_backup script in project
 
 The script wsrep_sst_backup was introduced on MariaDB 10.3 in commit
 9b2fa2a. The new script was automatically included in RPM packages but not
-in Debian packages (which started to fail on waring about stray file).
+in Debian packages (which started to fail on warning about stray file).
 
 Include wsrep_sst_backup in the mariadb-server-10.{3..8} package, and
 also include a stub man page so that packaging of a new script is complete.

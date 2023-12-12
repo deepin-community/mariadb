@@ -92,7 +92,7 @@ void stmt_set_error(MYSQL_STMT *stmt,
 {
   va_list ap;
 
-  const char *errmsg;
+  const char *errmsg= format;
 
   stmt->last_errno= error_nr;
   ma_strmake(stmt->sqlstate, sqlstate, SQLSTATE_LENGTH);
@@ -118,8 +118,7 @@ void stmt_set_error(MYSQL_STMT *stmt,
   }
 
   va_start(ap, format);
-  vsnprintf(stmt->last_error, MYSQL_ERRMSG_SIZE - 1,
-            format ? format : errmsg, ap);
+  vsnprintf(stmt->last_error, MYSQL_ERRMSG_SIZE - 1, errmsg, ap);
   va_end(ap);
   return;
 }
@@ -493,7 +492,7 @@ MYSQL_RES *_mysql_stmt_use_result(MYSQL_STMT *stmt)
   return(NULL);
 }
 
-unsigned char *mysql_net_store_length(unsigned char *packet, size_t length)
+unsigned char *mysql_net_store_length(unsigned char *packet, ulonglong length)
 {
   if (length < (unsigned long long) L64(251)) {
     *packet = (unsigned char) length;

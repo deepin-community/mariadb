@@ -1,6 +1,6 @@
 /* asn1.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -96,7 +96,7 @@
 #define ASN1_STRING_FLAG_EMBED           0x080
 
 /* X.509 PKI size limits from RFC2459 (appendix A) */
-/* internally our limit is CTC_NAME_SIZE (64) - overriden with WC_CTC_NAME_SIZE */
+/* internally our limit is CTC_NAME_SIZE (64) - overridden with WC_CTC_NAME_SIZE */
 #define ub_name                    CTC_NAME_SIZE /* 32768 */
 #define ub_common_name             CTC_NAME_SIZE /* 64 */
 #define ub_locality_name           CTC_NAME_SIZE /* 128 */
@@ -140,6 +140,7 @@ typedef struct {
 typedef enum {
     WOLFSSL_X509_ALGOR_ASN1 = 0,
     WOLFSSL_ASN1_BIT_STRING_ASN1,
+    WOLFSSL_ASN1_INTEGER_ASN1,
 } WOLFSSL_ASN1_TYPES;
 
 #define ASN1_SEQUENCE(type) \
@@ -185,5 +186,7 @@ WOLFSSL_API int wolfSSL_ASN1_item_i2d(const void *src, byte **dest,
 
 #define BN_to_ASN1_INTEGER          wolfSSL_BN_to_ASN1_INTEGER
 #define ASN1_TYPE_set               wolfSSL_ASN1_TYPE_set
+#define ASN1_TYPE_new               wolfSSL_ASN1_TYPE_new
+#define ASN1_TYPE_free              wolfSSL_ASN1_TYPE_free
 
 #endif /* WOLFSSL_ASN1_H_ */

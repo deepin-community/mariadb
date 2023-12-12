@@ -1,6 +1,6 @@
 /* memory.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -237,6 +237,11 @@ WOLFSSL_API int wolfSSL_GetAllocators(wolfSSL_Malloc_cb* mf,
     WOLFSSL_API void __attribute__((no_instrument_function))
             __cyg_profile_func_exit(void *func, void *caller);
 #endif /* WOLFSSL_STACK_LOG */
+
+#ifdef WOLFSSL_MEM_FAIL_COUNT
+WOLFSSL_LOCAL void wc_MemFailCount_Init(void);
+WOLFSSL_LOCAL void wc_MemFailCount_Free(void);
+#endif
 
 #ifdef WOLFSSL_CHECK_MEM_ZERO
 WOLFSSL_LOCAL void wc_MemZero_Init(void);

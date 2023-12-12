@@ -6,3 +6,6 @@ fix-reproducible-builds-rocksdb.patch
 mroonga-mrn-lib-dirs-path-reproducible-build.patch
 2129-new-script-wsrep-sst-backup-fixes.patch
 2541-fix-stack-overflow-in-pinbox-allocator.patch
+fix-spelling-libmarias3.patch
+fix-spelling-libmariadb.patch
+2777-fix-disks-disk-test.patch

@@ -1,6 +1,6 @@
 # Linux kernel-native Makefile ("Kbuild") for libwolfssl.ko
 #
-# Copyright (C) 2006-2022 wolfSSL Inc.
+# Copyright (C) 2006-2023 wolfSSL Inc.
 #
 # This file is part of wolfSSL.
 #
@@ -88,6 +88,11 @@ ifeq "$(ENABLED_LINUXKM_PIE)" "yes"
     # disabling retpoline generation leads to profuse warnings without this:
     $(WOLFCRYPT_PIE_FILES): OBJECT_FILES_NON_STANDARD := y
     $(obj)/linuxkm/module_hooks.o: ccflags-y += $(PIE_SUPPORT_FLAGS)
+endif
+
+ifeq "$(ENABLED_LINUXKM_BENCHMARKS)" "yes"
+    $(obj)/linuxkm/module_hooks.o: ccflags-y = $(WOLFSSL_CFLAGS) $(CFLAGS_FPU_ENABLE) $(CFLAGS_SIMD_ENABLE) $(PIE_SUPPORT_FLAGS)
+    $(obj)/linuxkm/module_hooks.o: asflags-y = $(WOLFSSL_ASFLAGS) $(ASFLAGS_FPU_ENABLE_SIMD_DISABLE)
 endif
 
 asflags-y := $(WOLFSSL_ASFLAGS) $(ASFLAGS_FPUSIMD_DISABLE)

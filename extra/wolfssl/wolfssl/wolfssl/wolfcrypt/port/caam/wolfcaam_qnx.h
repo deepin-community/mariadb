@@ -1,6 +1,6 @@
 /* wolfcaam_qnx.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -51,11 +51,6 @@
     } CAAM_BUFFER;
 #endif
 
-
-/* IMX6UL */
-#define CAAM_BASE 0x02140000
-#define CAAM_PAGE 0x00100000
-
 #define DataBuffer 0
 #define LastBuffer 0
 #define Success 1
@@ -66,6 +61,7 @@
 #include <wolfssl/wolfcrypt/port/caam/wolfcaam_ecdsa.h>
 #include <wolfssl/wolfcrypt/port/caam/wolfcaam_cmac.h>
 #include <wolfssl/wolfcrypt/port/caam/wolfcaam_aes.h>
+#include <wolfssl/wolfcrypt/port/caam/wolfcaam_hash.h>
 #include <wolfssl/wolfcrypt/cryptocb.h>
 
 #define ResourceNotAvailable -3

@@ -27,14 +27,9 @@
 #include <stdlib.h>
 #define strcasecmp _stricmp
 #define strtok_r strtok_s
+#define strdup _strdup
 #define sleep(x) Sleep(1000*(x))
-#ifdef _MSC_VER
-#define inline __inline
-#if _MSC_VER < 1900
-#define snprintf _snprintf
-#endif
 #define strerror_r(errno,buf,len) strerror_s(buf,len,errno)
-#endif
 #define STDCALL __stdcall 
 #endif
 
@@ -790,9 +785,9 @@ typedef char		bool;	/* Ordinary boolean values 0 1 */
 #define uint8korr(A)	(*((ulonglong *) (A)))
 #define sint8korr(A)	(*((longlong *) (A)))
 #define int2store(T,A)	*((uint16*) (T))= (uint16) (A)
-#define int3store(T,A)  do { *(T)=  (uchar) ((A));\
-                            *(T+1)=(uchar) (((uint) (A) >> 8));\
-                            *(T+2)=(uchar) (((A) >> 16)); } while (0)
+#define int3store(T,A)  do { *(T)=  (uchar) ((A) & 0xff);\
+                            *(T+1)=(uchar) (((uint) (A) >> 8) & 0xff);\
+                            *(T+2)=(uchar) (((A) >> 16)  & 0xff); } while (0)
 #define int4store(T,A)	*((long *) (T))= (long) (A)
 #define int5store(T,A)  do { *(T)= (uchar)((A));\
                              *((T)+1)=(uchar) (((A) >> 8));\
@@ -963,7 +958,7 @@ do { doubleget_union _tmp; \
 
 #define float8get(V,M)   doubleget((V),(M))
 #define float8store(V,M) doublestore((V),(M))
-#endif /* WORDS_BIGENDIAN */
+#endif /* HAVE_BIGENDIAN */
 
 #endif /* __i386__ OR _WIN32 */
 
@@ -1033,7 +1028,7 @@ do { doubleget_union _tmp; \
 #define longlongget(V,M) memcpy(&V, (M), sizeof(ulonglong))
 #define longlongstore(T,V) memcpy((T), &V, sizeof(ulonglong))
 
-#endif /* WORDS_BIGENDIAN */
+#endif /* HAVE_BIGENDIAN */
 
 #ifndef THREAD
 #define thread_safe_increment(V,L) ((V)++)

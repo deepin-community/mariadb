@@ -225,7 +225,6 @@ static int test_conc467(MYSQL *my __attribute__((unused)))
   mysql_query(mysql, "SET @slave_gtid_ignore_duplicates=1");
   mysql_query(mysql, "SET NAMES utf8");
   mysql_query(mysql, "SET @master_binlog_checksum= @@global.binlog_checksum");
-  mysql_query(mysql, "SET @rpl_semi_sync_slave=1");
   rpl->server_id= 12;
   rpl->start_position= 4;
   rpl->flags= MARIADB_RPL_BINLOG_SEND_ANNOTATE_ROWS;

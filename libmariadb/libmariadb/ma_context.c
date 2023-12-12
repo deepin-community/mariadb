@@ -30,6 +30,9 @@
 #endif
 
 #ifdef MY_CONTEXT_USE_UCONTEXT
+
+typedef void (*uc_func_t)(void);
+
 /*
   The makecontext() only allows to pass integers into the created context :-(
   We want to pass pointers, so we do it this kinda hackish way.
@@ -47,8 +50,7 @@ union pass_void_ptr_as_2_int {
   the actual type (as the actual type can differ from call to call).
 */
 static void
-my_context_spawn_internal(i0, i1)
-int i0, i1;
+my_context_spawn_internal(int i0, int i1)
 {
   int err;
   struct my_context *c;
@@ -101,7 +103,7 @@ my_context_spawn(struct my_context *c, void (*f)(void *), void *d)
   c->user_data= d;
   c->active= 1;
   u.p= c;
-  makecontext(&c->spawned_context, my_context_spawn_internal, 2,
+  makecontext(&c->spawned_context, (uc_func_t)my_context_spawn_internal, 2,
               u.a[0], u.a[1]);
 
   return my_context_continue(c);

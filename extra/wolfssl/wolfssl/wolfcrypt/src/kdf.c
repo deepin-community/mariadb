@@ -1,6 +1,6 @@
 /* kdf.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -54,7 +54,7 @@
 #include <wolfssl/wolfcrypt/kdf.h>
 
 
-#ifdef WOLFSSL_HAVE_PRF
+#if defined(WOLFSSL_HAVE_PRF) && !defined(NO_HMAC)
 
 #ifdef WOLFSSL_SHA512
     #define P_HASH_MAX_SIZE WC_SHA512_DIGEST_SIZE
@@ -73,8 +73,6 @@ int wc_PRF(byte* result, word32 resLen, const byte* secret,
     word32 times;
     word32 lastLen;
     word32 lastTime;
-    word32 i;
-    word32 idx = 0;
     int    ret = 0;
 #ifdef WOLFSSL_SMALL_STACK
     byte*  previous;
@@ -149,8 +147,8 @@ int wc_PRF(byte* result, word32 resLen, const byte* secret,
         return MEMORY_E;
     }
 #endif
-
 #ifdef WOLFSSL_CHECK_MEM_ZERO
+    XMEMSET(previous, 0xff, P_HASH_MAX_SIZE);
     wc_MemZero_Add("wc_PRF previous", previous, P_HASH_MAX_SIZE);
     wc_MemZero_Add("wc_PRF current", current, P_HASH_MAX_SIZE);
     wc_MemZero_Add("wc_PRF hmac", hmac, sizeof(Hmac));
@@ -164,6 +162,9 @@ int wc_PRF(byte* result, word32 resLen, const byte* secret,
         if (ret == 0)
             ret = wc_HmacFinal(hmac, previous);       /* A1 */
         if (ret == 0) {
+            word32 i;
+            word32 idx = 0;
+
             for (i = 0; i < times; i++) {
                 ret = wc_HmacUpdate(hmac, previous, len);
                 if (ret != 0)
@@ -335,7 +336,7 @@ int wc_PRF_TLS(byte* digest, word32 digLen, const byte* secret, word32 secLen,
 
     return ret;
 }
-#endif /* WOLFSSL_HAVE_PRF */
+#endif /* WOLFSSL_HAVE_PRF && !NO_HMAC */
 
 
 #if defined(HAVE_HKDF) && !defined(NO_HMAC)
@@ -351,11 +352,11 @@ int wc_PRF_TLS(byte* digest, word32 digLen, const byte* secret, word32 secLen,
      * digest   The type of digest to use.
      * returns 0 on success, otherwise failure.
      */
-    int wc_Tls13_HKDF_Extract(byte* prk, const byte* salt, int saltLen,
-                                 byte* ikm, int ikmLen, int digest)
+    int wc_Tls13_HKDF_Extract(byte* prk, const byte* salt, word32 saltLen,
+                                 byte* ikm, word32 ikmLen, int digest)
     {
         int ret;
-        int len = 0;
+        word32 len = 0;
 
         switch (digest) {
             #ifndef NO_SHA256
@@ -425,7 +426,7 @@ int wc_PRF_TLS(byte* digest, word32 digLen, const byte* secret, word32 secLen,
                                  int digest)
     {
         int    ret = 0;
-        int    idx = 0;
+        word32 idx = 0;
     #ifdef WOLFSSL_SMALL_STACK
         byte*  data;
     #else
@@ -486,7 +487,7 @@ int wc_PRF_TLS(byte* digest, word32 digLen, const byte* secret, word32 secLen,
         ForceZero(data, idx);
 
     #ifdef WOLFSSL_CHECK_MEM_ZERO
-        wc_MemZero_Check(data, MAX_TLS13_HKDF_LABEL_SZ);
+        wc_MemZero_Check(data, idx);
     #endif
     #ifdef WOLFSSL_SMALL_STACK
         XFREE(data, NULL, DYNAMIC_TYPE_TMP_BUFFER);
@@ -755,7 +756,7 @@ int wc_SSH_KDF(byte hashId, byte keyId, byte* key, word32 keySz,
     byte kPad = 0;
     byte pad = 0;
     byte kSzFlat[LENGTH_SZ];
-    int digestSz;
+    word32 digestSz;
     int ret;
 
     if (key == NULL || keySz == 0 ||
@@ -766,10 +767,11 @@ int wc_SSH_KDF(byte hashId, byte keyId, byte* key, word32 keySz,
         return BAD_FUNC_ARG;
     }
 
-    digestSz = wc_HmacSizeByType(enmhashId);
-    if (digestSz < 0) {
+    ret = wc_HmacSizeByType(enmhashId);
+    if (ret <= 0) {
         return BAD_FUNC_ARG;
     }
+    digestSz = (word32)ret;
 
     if (k[0] & 0x80) kPad = 1;
     c32toa(kSz + kPad, kSzFlat);

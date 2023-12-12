@@ -1,6 +1,6 @@
 /* integer.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -47,7 +47,7 @@
     #include <wolfcrypt/src/misc.c>
 #endif
 
-#include <wolfssl/wolfcrypt/integer.h>
+#include <wolfssl/wolfcrypt/wolfmath.h>
 
 #if defined(FREESCALE_LTC_TFM)
     #include <wolfssl/wolfcrypt/port/nxp/ksdk_port.h>
@@ -423,7 +423,7 @@ int mp_grow (mp_int * a, int size)
      * in case the operation failed we don't want
      * to overwrite the dp member of a.
      */
-    tmp = OPT_CAST(mp_digit) XREALLOC (a->dp, sizeof (mp_digit) * size, NULL,
+    tmp = (mp_digit *)XREALLOC (a->dp, sizeof (mp_digit) * size, NULL,
                                                            DYNAMIC_TYPE_BIGINT);
     if (tmp == NULL) {
       /* reallocation failed but "a" is still valid [can be freed] */
@@ -1058,7 +1058,7 @@ int mp_invmod (mp_int * a, mp_int * b, mp_int * c)
 int fast_mp_invmod (mp_int * a, mp_int * b, mp_int * c)
 {
   mp_int  x, y, u, v, B, D;
-  int     res, neg, loop_check = 0;
+  int     res, loop_check = 0;
 
   /* 2. [modified] b must be odd   */
   if (mp_iseven (b) == MP_YES) {
@@ -1077,6 +1077,12 @@ int fast_mp_invmod (mp_int * a, mp_int * b, mp_int * c)
 
   /* we need y = |a| */
   if ((res = mp_mod (a, b, &y)) != MP_OKAY) {
+    goto LBL_ERR;
+  }
+
+  if (mp_iszero (&y) == MP_YES) {
+    /* invmod doesn't exist for this a and b */
+    res = MP_VAL;
     goto LBL_ERR;
   }
 
@@ -1168,7 +1174,6 @@ top:
   }
 
   /* b is now the inverse */
-  neg = a->sign;
   while (D.sign == MP_NEG) {
     if ((res = mp_add (&D, b, &D)) != MP_OKAY) {
       goto LBL_ERR;
@@ -1181,7 +1186,6 @@ top:
       }
   }
   mp_exch (&D, c);
-  c->sign = neg;
   res = MP_OKAY;
 
 LBL_ERR:mp_clear(&x);
@@ -1226,6 +1230,13 @@ int mp_invmod_slow (mp_int * a, mp_int * b, mp_int * c)
   if ((res = mp_mod(a, b, &x)) != MP_OKAY) {
     goto LBL_ERR;
   }
+
+  if (mp_iszero (&x) == MP_YES) {
+    /* invmod doesn't exist for this a and b */
+    res = MP_VAL;
+    goto LBL_ERR;
+  }
+
   if (mp_isone(&x)) {
     res = mp_set(c, 1);
     goto LBL_ERR;
@@ -2512,13 +2523,13 @@ int fast_mp_montgomery_reduce (mp_int * x, mp_int * n, mp_digit rho)
   }
 
 #ifdef WOLFSSL_SMALL_STACK
-  W = (mp_word*)XMALLOC(sizeof(mp_word) * (n->used * 2 + 1), NULL,
+  W = (mp_word*)XMALLOC(sizeof(mp_word) * (n->used * 2 + 2), NULL,
     DYNAMIC_TYPE_BIGINT);
   if (W == NULL)
     return MP_MEM;
 #endif
 
-  XMEMSET(W, 0, sizeof(mp_word) * (n->used * 2 + 1));
+  XMEMSET(W, 0, sizeof(mp_word) * (n->used * 2 + 2));
 
   /* first we have to get the digits of the input into
    * an array of double precision words W[...]
@@ -3280,7 +3291,7 @@ int mp_init_size (mp_int * a, int size)
   size += (MP_PREC * 2) - (size % MP_PREC);
 
   /* alloc mem */
-  a->dp = OPT_CAST(mp_digit) XMALLOC (sizeof (mp_digit) * size, NULL,
+  a->dp = (mp_digit *)XMALLOC (sizeof (mp_digit) * size, NULL,
                                       DYNAMIC_TYPE_BIGINT);
   if (a->dp == NULL) {
     return MP_MEM;
@@ -3334,6 +3345,12 @@ int fast_s_mp_sqr (mp_int * a, mp_int * b)
 
   if (pa > (int)MP_WARRAY)
     return MP_RANGE;  /* TAO range check */
+
+  if (pa == 0) {
+    /* Nothing to do. Zero result and return. */
+    mp_zero(b);
+    return MP_OKAY;
+  }
 
 #ifdef WOLFSSL_SMALL_STACK
   W = (mp_digit*)XMALLOC(sizeof(mp_digit) * pa, NULL, DYNAMIC_TYPE_BIGINT);
@@ -3453,6 +3470,12 @@ int fast_s_mp_mul_digs (mp_int * a, mp_int * b, mp_int * c, int digs)
   pa = MIN(digs, a->used + b->used);
   if (pa > (int)MP_WARRAY)
     return MP_RANGE;  /* TAO range check */
+
+  if (pa == 0) {
+    /* Nothing to do. Zero result and return. */
+    mp_zero(c);
+    return MP_OKAY;
+  }
 
 #ifdef WOLFSSL_SMALL_STACK
   W = (mp_digit*)XMALLOC(sizeof(mp_digit) * pa, NULL, DYNAMIC_TYPE_BIGINT);
@@ -5006,7 +5029,7 @@ LBL_B:mp_clear (&b);
 
 #endif /* (WOLFSSL_KEY_GEN && !NO_RSA) || !NO_DH || !NO_DSA */
 
-#ifdef WOLFSSL_KEY_GEN
+#if defined(WOLFSSL_KEY_GEN) && (!defined(NO_DH) || !defined(NO_DSA))
 
 static const int USE_BBS = 1;
 
@@ -5077,6 +5100,9 @@ int mp_rand_prime(mp_int* a, int len, WC_RNG* rng, void* heap)
     return MP_OKAY;
 }
 
+#endif
+
+#if defined(WOLFSSL_KEY_GEN)
 
 /* computes least common multiple as |a*b|/(a, b) */
 int mp_lcm (mp_int * a, mp_int * b, mp_int * c)
@@ -5225,7 +5251,7 @@ const char *mp_s_rmap = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
                         "abcdefghijklmnopqrstuvwxyz+/";
 #endif
 
-#if !defined(NO_DSA) || defined(HAVE_ECC)
+#if !defined(NO_DSA) || defined(HAVE_ECC) || defined(OPENSSL_EXTRA)
 /* read a string [ASCII] in a given radix */
 int mp_read_radix (mp_int * a, const char *str, int radix)
 {

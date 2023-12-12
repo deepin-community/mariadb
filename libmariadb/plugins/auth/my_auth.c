@@ -12,7 +12,7 @@ static int dummy_fallback_auth_client(MYSQL_PLUGIN_VIO *vio, MYSQL *mysql __attr
 extern void read_user_name(char *name);
 extern char *ma_send_connect_attr(MYSQL *mysql, unsigned char *buffer);
 extern int ma_read_ok_packet(MYSQL *mysql, uchar *pos, ulong length);
-extern unsigned char *mysql_net_store_length(unsigned char *packet, size_t length);
+extern unsigned char *mysql_net_store_length(unsigned char *packet, ulonglong length);
 
 typedef struct {
   int (*read_packet)(struct st_plugin_vio *vio, uchar **buf);
@@ -120,7 +120,7 @@ static int dummy_fallback_auth_client(MYSQL_PLUGIN_VIO *vio, MYSQL *mysql __attr
   unsigned int i, last_errno= ((MCPVIO_EXT *)vio)->mysql->net.last_errno;
   if (last_errno)
   {
-    strncpy(last_error, ((MCPVIO_EXT *)vio)->mysql->net.last_error,
+    memcpy(last_error, ((MCPVIO_EXT *)vio)->mysql->net.last_error,
             sizeof(last_error) - 1);
     last_error[sizeof(last_error) - 1]= 0;
   }
@@ -137,7 +137,7 @@ static int dummy_fallback_auth_client(MYSQL_PLUGIN_VIO *vio, MYSQL *mysql __attr
   if (last_errno)
   {
     MYSQL *mysql= ((MCPVIO_EXT *)vio)->mysql;
-    strncpy(mysql->net.last_error, last_error,
+    memcpy(mysql->net.last_error, last_error,
             sizeof(mysql->net.last_error) - 1);
     mysql->net.last_error[sizeof(mysql->net.last_error) - 1]= 0;
   }
@@ -223,7 +223,7 @@ static int send_client_reply_packet(MCPVIO_EXT *mpvio,
   if (mysql->options.ssl_key || mysql->options.ssl_cert ||
       mysql->options.ssl_ca || mysql->options.ssl_capath ||
       mysql->options.ssl_cipher || mysql->options.use_ssl ||
-      (mysql->options.client_flag & CLIENT_SSL_VERIFY_SERVER_CERT))
+      mysql->options.extension->tls_verify_server_cert)
     mysql->options.use_ssl= 1;
   if (mysql->options.use_ssl)
     mysql->client_flag|= CLIENT_SSL;
@@ -249,7 +249,7 @@ static int send_client_reply_packet(MCPVIO_EXT *mpvio,
      was set to mandatory, we need to return an error */
   if (mysql->options.use_ssl && !(mysql->server_capabilities & CLIENT_SSL))
   {
-    if ((mysql->client_flag & CLIENT_SSL_VERIFY_SERVER_CERT) ||
+    if (mysql->options.extension->tls_verify_server_cert ||
         (mysql->options.extension && (mysql->options.extension->tls_fp || 
                                       mysql->options.extension->tls_fp_list)))
     {

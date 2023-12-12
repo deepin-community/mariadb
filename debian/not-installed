@@ -15,13 +15,10 @@ usr/bin/mariadb-embedded # Shipping the embedded server in distro packaging does
 usr/bin/mysql_config # Debian packaging has mysql_config as symlink to mariadb_config
 usr/bin/mysql_embedded # Symlink to mariadb-embedded which is intentionally not included
 usr/bin/sst_dump # Use the one from rocksdb-tools package
-usr/bin/test-connect-t
 usr/lib/*/libdbbc.a # ColumnStore header file
 usr/lib/*/libidbboot.a # ColumnStore header file
 usr/lib/*/libprocessor.a # ColumnStore header file
 usr/lib/*/libwe_xml.a # ColumnStore header file
-usr/lib/mysql/plugin/type_test.so
-usr/lib/*/pkgconfig/mariadb.pc # Server (not client) helper has confusing naming https://jira.mariadb.org/browse/MDEV-23538
 usr/lib/sysusers.d/mariadb.conf # Not used (yet) in Debian systemd
 usr/lib/tmpfiles.d/mariadb.conf # Not used (yet) in Debian systemd
 usr/sbin/rcmysql
@@ -47,8 +44,6 @@ usr/share/mysql/JdbcInterface.jar # These are only built if JNI/libjawt.so is in
 usr/share/mysql/mariadb.logrotate
 usr/share/mysql/magic
 usr/share/mysql/maria_add_gis_sp.sql # mariadb-server-core.install has *_bootstrap.sql
-usr/share/mysql/Mongo2.jar
-usr/share/mysql/Mongo3.jar
 usr/share/mysql/mysqld_multi.server
 usr/share/mysql/mysql.server # Debian packaging uses mariadb-server.mariadb.init
 usr/share/mysql/mysql-test/asan.supp

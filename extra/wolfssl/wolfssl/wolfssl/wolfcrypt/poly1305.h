@@ -1,6 +1,6 @@
 /* poly1305.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -59,7 +59,7 @@
 enum {
     POLY1305 = 7,
     POLY1305_BLOCK_SIZE = 16,
-    POLY1305_DIGEST_SIZE = 16,
+    POLY1305_DIGEST_SIZE = 16
 };
 
 #define WC_POLY1305_PAD_SZ 16

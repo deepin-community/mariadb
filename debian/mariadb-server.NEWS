@@ -18,7 +18,7 @@ mariadb (1:10.11.2-1) unstable; urgency=medium
   * https://mariadb.com/kb/en/changes-improvements-in-mariadb-108/
   * https://mariadb.com/kb/en/changes-improvements-in-mariadb-107/
 
-  Noteable new features:
+  Notable new features:
   - New datatypes UUID and INET4
   - New functions SFORMAT (text formatting), NATURAL_SORT_KEY, RANDOM_BYTES and
     several related to JSON
@@ -89,7 +89,7 @@ mariadb (1:10.11.2-1) unstable; urgency=medium
   - innodb_change_buffering
   - innodb-buffer-pool-chunk-size: defaults to 0 (instead of 134217728) in
     server variables because the server automatically sizes it
-  - keep_files_on_create:	orphan files are now deleted automatically, so this
+  - keep_files_on_create: orphan files are now deleted automatically, so this
     setting should never be needed
 
   Note also that the MariaDB client settings have changed to now use SSL/TLS

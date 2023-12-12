@@ -1,6 +1,6 @@
 /* error-crypt.h
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -257,7 +257,10 @@ enum {
     ENTROPY_RT_E        = -294,  /* Entropy Repetition Test failed */
     ENTROPY_APT_E       = -295,  /* Entropy Adaptive Proportion Test failed */
 
-    WC_LAST_E           = -295,  /* Update this to indicate last error */
+    ASN_DEPTH_E         = -296,  /* Invalid ASN.1 - depth check */
+    ASN_LEN_E           = -297,  /* ASN.1 length invalid */
+
+    WC_LAST_E           = -297,  /* Update this to indicate last error */
     MIN_CODE_E          = -300   /* errors -101 - -299 */
 
     /* add new companion error id strings for any new error codes

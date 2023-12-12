@@ -1,6 +1,6 @@
 /* renesas_sce_sha.c
  *
- * Copyright (C) 2006-2022 wolfSSL Inc.
+ * Copyright (C) 2006-2023 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -30,7 +30,8 @@
 
 #include <wolfssl/wolfcrypt/logging.h>
 
-#if defined(WOLFSSL_RENESAS_SCEPROTECT)
+#if defined(WOLFSSL_RENESAS_SCEPROTECT) || \
+    defined(WOLFSSL_RENESAS_SCEPROTECT_CRYPTONLY)
 
 #include <wolfssl/wolfcrypt/error-crypt.h>
 #include <wolfssl/wolfcrypt/port/Renesas/renesas-sce-crypt.h>
