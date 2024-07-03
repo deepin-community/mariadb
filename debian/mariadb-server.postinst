@@ -10,7 +10,7 @@ then
   DEBIAN_SCRIPT_TRACE=1
 fi
 
-${DEBIAN_SCRIPT_TRACE:+ echo "#42#DEBUG# RUNNING $0 $*" 1>&2}
+${DEBIAN_SCRIPT_TRACE:+ echo "#42#DEBUG# RUNNING $0 $*" 1>&2 }
 
 export PATH=$PATH:/sbin:/usr/sbin:/bin:/usr/bin
 
@@ -60,7 +60,7 @@ case "$1" in
       fi
     fi
 
-    mysql_statedir=/usr/share/mysql
+    mysql_statedir=/usr/share/mariadb
     mysql_datadir=/var/lib/mysql
     mysql_logdir=/var/log/mysql
     mysql_cfgdir=/etc/mysql
@@ -112,7 +112,7 @@ EOF
       fi
       rmdir $mysql_upgradedir 2>/dev/null || true
 
-    done # end 'for dir' loop
+    done
 
     # Upgrading from mysql.com needs might have the root user as auth_socket.
     # auto.cnf is a sign of a mysql install, that doesn't exist in mariadb.
@@ -123,12 +123,12 @@ EOF
     # perform mariadb-upgrade, (MDEV-22678).  To keep the impact minimal, we
     # skip innodb and set key-buffer-size to 0 as it isn't reused.
     if [ -f "$mysql_datadir/auto.cnf" ] &&
-       [ -f "$mysql_datadir/mysql/user.MYD" ] &&
-       ! lsof -nt "$mysql_datadir"/mysql/user.MYD > /dev/null &&
-       [ ! -f "$mysql_datadir/undo_001" ]
+    [ -f "$mysql_datadir/mysql/user.MYD" ] &&
+    ! lsof -nt "$mysql_datadir"/mysql/user.MYD > /dev/null &&
+    [ ! -f "$mysql_datadir/undo_001" ]
     then
-      echo "UPDATE mysql.user SET plugin='unix_socket' WHERE plugin='auth_socket';" | \
-        mariadbd --skip-innodb --key_buffer_size=0  --default-storage-engine=MyISAM --bootstrap 2> /dev/null
+      echo "UPDATE mysql.user SET plugin='unix_socket' WHERE plugin='auth_socket';" |
+      mariadbd --skip-innodb --key_buffer_size=0  --default-storage-engine=MyISAM --bootstrap 2> /dev/null
     fi
 
     # Ensure the existence and right permissions for the database and
@@ -141,14 +141,19 @@ EOF
     then
       mkdir -Z "$mysql_datadir"
     fi
-
+    if [ ! -d "$mysql_logdir"   ] && [ ! -L "$mysql_logdir"  ]
+    then
+      mkdir -Z "$mysql_logdir"
+    fi
     # When creating an ext3 jounal on an already mounted filesystem like e.g.
     # /var/lib/mysql, you get a .journal file that is not modifiable by chown.
     # The mysql_statedir must not be writable by the mysql user under any
     # circumstances as it contains scripts that are executed by root.
     set +e
-    find $mysql_statedir ! -uid 0 -print0 -or ! -gid 0 -print0 | xargs -0 -r sudo chown 0:0
+    chown -R 0:0 $mysql_statedir
     find $mysql_datadir ! -uid "$(id -u mysql)" -print0 | xargs -0 -r chown mysql
+    chown -R mysql:adm $mysql_logdir
+    chmod 2750 $mysql_logdir
     set -e
 
     ## Set the correct filesystem ownership for the PAM v2 plugin
@@ -178,8 +183,6 @@ EOF
     # Clean up old flags before setting new one
     rm -f $mysql_datadir/debian-*.flag
     # Flag data dir to avoid downgrades
-    # @TODO: Rewrite this to use the new upstream /var/lib/mysql_upgrade_info file
-    # instead of the legacy /var/lib/debian-XX.X.flag file
     touch "$mysql_datadir/debian-__MARIADB_MAJOR_VER__.flag"
 
     # initiate databases. Output is not allowed by debconf :-(
@@ -188,13 +191,9 @@ EOF
     # handle things.
     # Debian: beware of the bashisms...
     # Debian: can safely run on upgrades with existing databases
-    # Workaround for Debian Bug #1022994: failure to create database when
-    # working with libpam-tmpdir (by setting TMPDIR to empty value).
     set +e
-    TMPDIR='' bash /usr/bin/mariadb-install-db \
-      --rpm --cross-bootstrap \
-      --user=mysql --disable-log-bin \
-      --skip-test-db 2>&1 | \
+    bash /usr/bin/mariadb-install-db --rpm --cross-bootstrap --user=mysql \
+      --disable-log-bin  --skip-test-db 2>&1 | \
       $ERR_LOGGER
     set -e
 
@@ -211,7 +210,6 @@ EOF
     then
       install -o 0 -g 0 -m 0755 -d $mysql_cfgdir
     fi
-
     if [ ! -e "$dc" ]
     then
       cat /dev/null > $dc
@@ -243,13 +241,13 @@ EOF
     # on by default) to work both to disable a default profile, and to keep
     # any profile installed and maintained by users themselves.
     profile="/etc/apparmor.d/usr.sbin.mariadbd"
-    if [ -f "$profile" ] && aa-status --enabled 2> /dev/null
+    if [ -f "$profile" ] && aa-status --enabled 2>/dev/null
     then
-      if grep -q /usr/sbin/mariadbd "$profile" 2> /dev/null
+      if grep -q /usr/sbin/mariadbd "$profile" 2>/dev/null
       then
         apparmor_parser -r "$profile" || true
       else
-        echo "/usr/sbin/mariadbd { }" | apparmor_parser --remove 2> /dev/null || true
+        echo "/usr/sbin/mariadbd { }" | apparmor_parser --remove 2>/dev/null || true
       fi
     fi
 
@@ -260,24 +258,11 @@ EOF
       mv -vf /etc/logrotate.d/mysql-server /etc/logrotate.d/mysql-server.dpkg-bak
     fi
 
-    # The introduction of versionless server package is not fully backwards
-    # compatible as the purge of an old mariadb-server-x.y package would
-    # commands such as 'deb-systemd-helper purge mariadb.service' and
-    # 'update-rc.d mariadb remove'. Fix it by simly deleting any existing postrm
-    # stanzas opportunistically.
-    for old_postrm_file in /var/lib/dpkg/info/mariadb-server-10.?.postrm
-    do
-      # For loop will always run, but the globbing pattern will be expanded into
-      # something only if there are files that match the pattern, so we need to
-      # not act on it if the result is just the globbing pattern itself.
-      if [ "$old_postrm_file" != "/var/lib/dpkg/info/mariadb-server-10.?.postrm" ]
-      then
-        sed '/Automatically added by dh_installinit/,/End automatically added section/d' \
-          -i "$old_postrm_file" || true
-        sed '/Automatically added by dh_systemd_enable/,/End automatically added section/d' \
-          -i "$old_postrm_file" || true
-      fi
-    done
+    # @TODO: Remove once buildbot.askmonty.org has been updated not to expect this file
+    mkdir -p /etc/systemd/system/mariadb.service.d/
+    # Note that file cannot be empty, otherwise systemd version in Ubuntu Bionic
+    # will think the service is masked
+    echo "# empty placeholder" > /etc/systemd/system/mariadb.service.d/migrated-from-my.cnf-settings.conf
     ;;
 
   abort-upgrade|abort-remove|abort-configure)
@@ -287,8 +272,7 @@ EOF
     if [ -d /run/systemd/system ]
     then
       systemctl --system daemon-reload
-    elif [ -x /etc/init.d/mariadb ]
-    then
+    else
       invoke-rc.d mariadb restart
     fi
     ;;
@@ -301,28 +285,5 @@ esac
 
 db_stop # in case invoke fails
 
-# dh_systemd_start doesn't emit anything since we still ship /etc/init.d/mariadb.
-# Thus MariaDB server is started via init.d script, which in turn redirects to
-# systemctl. If we upgrade from MySQL mysql.service may be masked, which also
-# means init.d script is disabled. Unmask mysql service explicitly.
-# Check first that the command exists, to avoid emitting any warning messages.
-if [ -x "$(command -v deb-systemd-helper)" ]
-then
-  deb-systemd-helper unmask mysql.service > /dev/null
-fi
-
 #DEBHELPER#
 
-# Modified dh_systemd_start snippet that's not added automatically
-if [ -d /run/systemd/system ]
-then
-  systemctl --system daemon-reload >/dev/null || true
-  deb-systemd-invoke start mariadb.service >/dev/null || true
-  # Modified dh_installinit snippet to only run with sysvinit
-elif [ -x "/etc/init.d/mariadb" ]
-then
-  if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ]
-  then
-    invoke-rc.d mariadb start || exit $?
-  fi
-fi

@@ -2351,13 +2351,13 @@ void Query_cache::invalidate(THD *thd, const char *key, size_t  key_length,
    Remove all cached queries that uses the given database.
 */
 
-void Query_cache::invalidate(THD *thd, const char *db)
+void Query_cache::invalidate(THD *thd, const LEX_CSTRING &db)
 {
   DBUG_ENTER("Query_cache::invalidate (db)");
   if (is_disabled())
     DBUG_VOID_RETURN;
 
-  DBUG_SLOW_ASSERT(ok_for_lower_case_names(db));
+  DBUG_SLOW_ASSERT(Lex_ident_fs(db).ok_for_lower_case_names());
 
   bool restart= FALSE;
   /*
@@ -2377,7 +2377,7 @@ void Query_cache::invalidate(THD *thd, const char *db)
         {
           Query_cache_block *next= table_block->next;
           Query_cache_table *table = table_block->table();
-          if (strcmp(table->db(),db) == 0)
+          if (strcmp(table->db(), db.str) == 0)
           {
             Query_cache_block_table *list_root= table_block->table(0);
             invalidate_query_block_list(list_root);
@@ -2530,14 +2530,9 @@ void Query_cache::destroy()
 
 void Query_cache::disable_query_cache(THD *thd)
 {
+  lock(thd);
   m_cache_status= DISABLE_REQUEST;
-  /*
-    If there is no requests in progress try to free buffer.
-    try_lock(TRY) will exit immediately if there is lock.
-    unlock() should free block.
-  */
-  if (m_requests_in_progress == 0 && !try_lock(thd, TRY))
-    unlock();
+  unlock();
 }
 
 

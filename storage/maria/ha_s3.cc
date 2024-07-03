@@ -121,6 +121,29 @@ static void update_secret_key(MYSQL_THD thd,
   }
 }
 
+static void update_s3_debug(MYSQL_THD thd,
+                            struct st_mysql_sys_var *var
+                            __attribute__((unused)),
+                            void *var_ptr __attribute__((unused)),
+                            const void *save)
+{
+  char new_state= *(char *) save;
+  if (s3_debug != new_state)
+  {
+    s3_debug= new_state;
+    if (s3_hton)                                // If library is initalized
+    {
+      ms3_debug(new_state);
+      if (!new_state)
+      {
+        /* Ensure that all logging is written to log */
+        fflush(stderr);
+      }
+    }
+  }
+}
+
+
 /* Define system variables for S3 */
 
 static MYSQL_SYSVAR_ULONG(block_size, s3_block_size,
@@ -129,9 +152,9 @@ static MYSQL_SYSVAR_ULONG(block_size, s3_block_size,
        4*1024*1024, 65536, 16*1024*1024, 8192);
 
 static MYSQL_SYSVAR_BOOL(debug, s3_debug,
-       PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+       PLUGIN_VAR_RQCMDARG,
       "Generates trace file from libmarias3 on stderr for debugging",
-       0, 0, 0);
+       0, update_s3_debug, 0);
 
 static MYSQL_SYSVAR_BOOL(slave_ignore_updates, s3_slave_ignore_updates,
        PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -147,7 +170,10 @@ static MYSQL_SYSVAR_BOOL(replicate_alter_as_create_select,
 static MYSQL_SYSVAR_ENUM(protocol_version, s3_protocol_version,
                          PLUGIN_VAR_RQCMDARG,
                          "Protocol used to communication with S3. One of "
-                         "\"Auto\", \"Amazon\" or \"Original\".",
+                         "\"Auto\", \"Legacy\", \"Original\", \"Amazon\", "
+                         "\"Path\" or \"Domain\". "
+                         "Note: \"Legacy\", \"Original\" and \"Amazon\" are "
+                         "deprecated",
                          NULL, NULL, 0, &s3_protocol_typelib);
 
 static MYSQL_SYSVAR_ULONG(pagecache_age_threshold,
@@ -155,14 +181,14 @@ static MYSQL_SYSVAR_ULONG(pagecache_age_threshold,
        "This characterizes the number of hits a hot block has to be untouched "
        "until it is considered aged enough to be downgraded to a warm block. "
        "This specifies the percentage ratio of that number of hits to the "
-       "total number of blocks in the page cache.", 0, 0,
+       "total number of blocks in the page cache", 0, 0,
        300, 100, ~ (ulong) 0L, 100);
 
 static MYSQL_SYSVAR_ULONGLONG(pagecache_buffer_size, s3_pagecache_buffer_size,
        PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
        "The size of the buffer used for index blocks for S3 tables. "
        "Increase this to get better index handling (for all reads and "
-       "multiple writes) to as much as you can afford.", 0, 0,
+       "multiple writes) to as much as you can afford", 0, 0,
         128*1024*1024, 1024*1024*32, ~(ulonglong) 0, 8192);
 
 static MYSQL_SYSVAR_ULONG(pagecache_division_limit,
@@ -177,7 +203,7 @@ static MYSQL_SYSVAR_ULONG(pagecache_file_hash_size,
        "Number of hash buckets for open files.  If you have a lot "
        "of S3 files open you should increase this for faster flush of "
        "changes. A good value is probably 1/10 of number of possible open "
-       "S3 files.", 0,0, 512, 32, 16384, 1);
+       "S3 files", 0,0, 512, 32, 16384, 1);
 
 static MYSQL_SYSVAR_STR(bucket, s3_bucket,
        PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -238,6 +264,7 @@ ha_s3::ha_s3(handlerton *hton, TABLE_SHARE *table_arg)
   /* Remove things that S3 doesn't support */
   int_table_flags&= ~(HA_BINLOG_ROW_CAPABLE | HA_BINLOG_STMT_CAPABLE |
                       HA_CAN_EXPORT);
+  int_table_flags|= HA_NO_ONLINE_ALTER;
   can_enable_indexes= 0;
 }
 
@@ -826,7 +853,7 @@ static int s3_discover_table_existence(handlerton *hton, const char *db,
 */
 
 static int s3_discover_table_names(handlerton *hton __attribute__((unused)),
-                                   LEX_CSTRING *db,
+                                   const LEX_CSTRING *db,
                                    MY_DIR *dir __attribute__((unused)),
                                    handlerton::discovered_list *result)
 {
@@ -1048,7 +1075,7 @@ static int ha_s3_init(void *p)
   s3_pagecache.big_block_free= s3_free;
   s3_init_library();
   if (s3_debug)
-    ms3_debug();
+    ms3_debug(1);
 
   struct s3_func s3f_real =
   {

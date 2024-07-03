@@ -67,8 +67,8 @@ static void make_unique_view_field_name(THD *thd, Item *target,
                                         List<Item> &item_list,
                                         Item *last_element)
 {
-  const char *name= (target->orig_name ?
-                     target->orig_name :
+  const char *name= (target->orig_name.str ?
+                     target->orig_name.str :
                      target->name.str);
   size_t name_len;
   uint attempt;
@@ -89,7 +89,7 @@ static void make_unique_view_field_name(THD *thd, Item *target,
     {
       check= itc++;
       if (check != target &&
-          my_strcasecmp(system_charset_info, buff, check->name.str) == 0)
+          check->name.streq(Lex_cstring(buff, name_len)))
       {
         ok= FALSE;
         break;
@@ -100,8 +100,8 @@ static void make_unique_view_field_name(THD *thd, Item *target,
     itc.rewind();
   }
 
-  if (!target->orig_name)
-    target->orig_name= target->name.str;
+  if (!target->orig_name.str)
+    target->orig_name= target->name;
   target->set_name(thd, buff, name_len, system_charset_info);
 }
 
@@ -145,7 +145,7 @@ bool check_duplicate_names(THD *thd, List<Item> &item_list, bool gen_unique_view
     itc.rewind();
     while ((check= itc++) && check != item)
     {
-      if (lex_string_cmp(system_charset_info, &item->name, &check->name) == 0)
+      if (item->name.streq(check->name))
       {
         if (!gen_unique_view_name)
           goto err;
@@ -186,7 +186,7 @@ void make_valid_column_names(THD *thd, List<Item> &item_list)
     if (item->is_explicit_name() || !check_column_name(item->name.str))
       continue;
     name_len= my_snprintf(buff, NAME_LEN, "Name_exp_%u", column_no);
-    item->orig_name= item->name.str;
+    item->orig_name= item->name;
     item->set_name(thd, buff, name_len, system_charset_info);
   }
 
@@ -297,7 +297,8 @@ bool create_view_precheck(THD *thd, TABLE_LIST *tables, TABLE_LIST *view,
     for (tbl= sl->get_table_list(); tbl; tbl= tbl->next_local)
     {
       if (!tbl->with && tbl->select_lex)
-        tbl->with= tbl->select_lex->find_table_def_in_with_clauses(tbl);
+      tbl->with= tbl->select_lex->find_table_def_in_with_clauses(tbl,
+                                                                 NULL);
       /*
         Ensure that we have some privileges on this table, more strict check
         will be done on column level after preparation,
@@ -627,13 +628,13 @@ bool mysql_create_view(THD *thd, TABLE_LIST *views,
         Item_field *fld= item->field_for_view_update();
         privilege_t priv(get_column_grant(thd, &view->grant, view->db.str,
                                           view->table_name.str,
-                                          item->name.str) &
+                                          item->name) &
                     VIEW_ANY_ACL);
 
         if (!fld)
           continue;
         TABLE_SHARE *s= fld->field->table->s;
-        const Lex_ident field_name= fld->field->field_name;
+        const Lex_ident_column field_name= fld->field->field_name;
         if (s->tmp_table ||
             (s->versioned &&
              (field_name.streq(s->vers_start_field()->field_name) ||
@@ -1005,7 +1006,8 @@ static int mysql_register_view(THD *thd, DDL_LOG_STATE *ddl_log_state,
   {
     Sql_mode_save_for_frm_handling sql_mode_save(thd);
 
-    lex->unit.print(&view_query, enum_query_type(QT_VIEW_INTERNAL |
+    lex->unit.print(&view_query, enum_query_type(QT_FOR_FRM |
+                                                 QT_VIEW_INTERNAL |
                                                  QT_ITEM_ORIGINAL_FUNC_NULLIF |
                                                  QT_NO_WRAPPERS_FOR_TVC_IN_VIEW));
     lex->unit.print(&is_query, enum_query_type(QT_TO_SYSTEM_CHARSET |
@@ -1347,12 +1349,8 @@ bool mysql_make_view(THD *thd, TABLE_SHARE *share, TABLE_LIST *table,
        precedent;
        precedent= precedent->referencing_view)
   {
-    if (precedent->view_name.length == table->table_name.length &&
-        precedent->view_db.length == table->db.length &&
-        my_strcasecmp(system_charset_info,
-                      precedent->view_name.str, table->table_name.str) == 0 &&
-        my_strcasecmp(system_charset_info,
-                      precedent->view_db.str, table->db.str) == 0)
+    if (precedent->view_name.streq(table->table_name) &&
+        precedent->view_db.streq(table->db))
     {
       my_error(ER_VIEW_RECURSIVE, MYF(0),
                top_view->view_db.str, top_view->view_name.str);
@@ -1725,7 +1723,7 @@ bool mysql_make_view(THD *thd, TABLE_SHARE *share, TABLE_LIST *table,
         objects of the view.
       */
       if (!(table->view_sctx= (Security_context *)
-            thd->stmt_arena->calloc(sizeof(Security_context))))
+            thd->active_stmt_arena_to_use()->calloc(sizeof(Security_context))))
         goto err;
       security_ctx= table->view_sctx;
     }
@@ -2186,10 +2184,9 @@ bool insert_view_fields(THD *thd, List<Item> *list, TABLE_LIST *view)
     if ((fld= entry->item->field_for_view_update()))
     {
       TABLE_SHARE *s= fld->context->table_list->table->s;
-      Lex_ident field_name= fld->field_name;
       if (s->versioned &&
-          (field_name.streq(s->vers_start_field()->field_name) ||
-           field_name.streq(s->vers_end_field()->field_name)))
+          (fld->field_name.streq(s->vers_start_field()->field_name) ||
+           fld->field_name.streq(s->vers_end_field()->field_name)))
         continue;
       list->push_back(fld, thd->mem_root);
     }
@@ -2237,6 +2234,7 @@ int view_checksum(THD *thd, TABLE_LIST *view)
   @retval HA_ADMIN_OK               OK
   @retval HA_ADMIN_NOT_IMPLEMENTED  it is not VIEW
   @retval HA_ADMIN_WRONG_CHECKSUM   check sum is wrong
+  @retval HA_ADMIN_NEEDS_UPGRADE    We need to recreate the view
 */
 int view_check(THD *thd, TABLE_LIST *view, HA_CHECK_OPT *check_opt)
 {

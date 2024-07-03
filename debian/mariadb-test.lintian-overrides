@@ -1,21 +1,8 @@
 # These should be moved, see https://jira.mariadb.org/browse/MDEV-21653
-arch-dependent-file-in-usr-share [usr/share/mysql/mysql-test/lib/My/SafeProcess/my_safe_process]
-arch-dependent-file-in-usr-share [usr/share/mysql/mysql-test/lib/My/SafeProcess/wsrep_check_version]
-# Duplicate in old Lintian syntax as the FTP of NEW queue still uses it
-arch-dependent-file-in-usr-share usr/share/mysql/mysql-test/lib/My/SafeProcess/my_safe_process
-arch-dependent-file-in-usr-share usr/share/mysql/mysql-test/lib/My/SafeProcess/wsrep_check_version
-# MyISAM stopwords that cannot be changed and spelling errors remain
-spelling-error-in-binary noone no one [usr/bin/*]
-spelling-error-in-binary thats that's [usr/bin/*]
-spelling-error-in-binary theres there's [usr/bin/*]
-# False positive from Lintian, these strings are nowhere in test in source code
-spelling-error-in-binary AfE Safe [usr/bin/*]
-# Valid reason for documentation in context in directory
-package-contains-documentation-outside-usr-share-doc [usr/share/mysql/mysql-test/README*]
-# Test plugins intentionally not fully featured
-shared-library-lacks-prerequisites [usr/lib/mysql/plugin/auth_0x0100.so]
-shared-library-lacks-prerequisites [usr/lib/mysql/plugin/debug_key_management.so]
-shared-library-lacks-prerequisites [usr/lib/mysql/plugin/test_sql_service.so]
-# The file mysql-test-run.pl is a symlink for mariadb-test-run.pl, which does
-# not have a man page, so the man page is indeed used and not a spare one
-spare-manual-page [usr/share/man/man1/mysql-test-run.pl.1.gz]
+arch-dependent-file-in-usr-share [usr/share/mariadb/mariadb-test/lib/My/SafeProcess/my_safe_process]
+arch-dependent-file-in-usr-share [usr/share/mariadb/mariadb-test/lib/My/SafeProcess/wsrep_check_version]
+# Mainly for support for *BSD family. Not right way to do but this is test package and not for production
+incorrect-path-for-interpreter /usr/bin/env perl != /usr/bin/perl [usr/share/mariadb/mariadb-test/lib/process-purecov-annotations.pl]
+incorrect-path-for-interpreter /usr/bin/env perl != /usr/bin/perl [usr/share/mariadb/mariadb-test/lib/v1/mysql-test-run.pl]
+incorrect-path-for-interpreter /usr/bin/env perl != /usr/bin/perl [usr/share/mariadb/mariadb-test/mariadb-stress-test.pl]
+incorrect-path-for-interpreter /usr/bin/env perl != /usr/bin/perl [usr/share/mariadb/mariadb-test/mariadb-test-run.pl]

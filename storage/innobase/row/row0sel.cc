@@ -864,6 +864,11 @@ row_sel_build_committed_vers_for_mysql(
 					column version if any */
 	mtr_t*		mtr)		/*!< in: mtr */
 {
+	if (prebuilt->trx->snapshot_isolation) {
+		*old_vers = rec;
+		return;
+	}
+
 	if (prebuilt->old_vers_heap) {
 		mem_heap_empty(prebuilt->old_vers_heap);
 	} else {
@@ -1184,11 +1189,11 @@ sel_set_rtr_rec_lock(
 	ut_ad(page_align(first_rec) == cur_block->page.frame);
 	ut_ad(match->valid);
 
-	match->block.page.lock.x_lock();
+	match->block->page.lock.x_lock();
 retry:
 	cur_block = btr_pcur_get_block(pcur);
-	ut_ad(match->block.page.lock.have_x()
-	      || match->block.page.lock.have_s());
+	ut_ad(match->block->page.lock.have_x()
+	      || match->block->page.lock.have_s());
 	ut_ad(page_is_leaf(cur_block->page.frame));
 
 	err = lock_sec_rec_read_check_and_lock(
@@ -1222,6 +1227,7 @@ re_scan:
 			if (!cur_block) {
 				goto func_end;
 			}
+			buf_page_make_young_if_needed(&cur_block->page);
 		} else {
 			mtr->start();
 			goto func_end;
@@ -1287,7 +1293,7 @@ re_scan:
 			ULINT_UNDEFINED, &heap);
 
 		err = lock_sec_rec_read_check_and_lock(
-			0, &match->block, rtr_rec->r_rec, index,
+			0, match->block, rtr_rec->r_rec, index,
 			my_offsets, static_cast<lock_mode>(mode),
 			type, thr);
 
@@ -1303,7 +1309,7 @@ re_scan:
 	match->locked = true;
 
 func_end:
-	match->block.page.lock.x_unlock();
+	match->block->page.lock.x_unlock();
 	if (heap != NULL) {
 		mem_heap_free(heap);
 	}
@@ -3400,7 +3406,7 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 		if  (dict_index_is_spatial(sec_index)
 		     && btr_cur->rtr_info->matches
 		     && (page_align(rec)
-			== btr_cur->rtr_info->matches->block.page.frame
+			== btr_cur->rtr_info->matches->block->page.frame
 			|| rec != btr_pcur_get_rec(prebuilt->pcur))) {
 #ifdef UNIV_DEBUG
 			rtr_info_t*	rtr_info = btr_cur->rtr_info;
@@ -4033,7 +4039,8 @@ row_search_idx_cond_check(
 	ut_ad(rec_offs_validate(rec, prebuilt->index, offsets));
 
 	if (!prebuilt->idx_cond) {
-		if (!handler_rowid_filter_is_active(prebuilt->pk_filter)) {
+		if (!prebuilt->pk_filter ||
+                    !handler_rowid_filter_is_active(prebuilt->pk_filter)) {
 			return(CHECK_POS);
 		}
 	} else {
@@ -4075,7 +4082,8 @@ row_search_idx_cond_check(
 
 	switch (result) {
 	case CHECK_POS:
-	        if (handler_rowid_filter_is_active(prebuilt->pk_filter)) {
+	        if (prebuilt->pk_filter &&
+                  handler_rowid_filter_is_active(prebuilt->pk_filter)) {
 		        ut_ad(!prebuilt->index->is_primary());
 		        if (prebuilt->clust_index_was_generated) {
                                ulint len;
@@ -4455,12 +4463,10 @@ early_not_found:
 			DBUG_RETURN(DB_RECORD_NOT_FOUND);
 		}
 
+#if SIZEOF_SIZE_T < 8
+		if (UNIV_LIKELY(~prebuilt->n_rows_fetched))
+#endif
 		prebuilt->n_rows_fetched++;
-
-		if (prebuilt->n_rows_fetched > 1000000000) {
-			/* Prevent wrap-over */
-			prebuilt->n_rows_fetched = 500000000;
-		}
 
 		mode = pcur->search_mode;
 	}
@@ -4761,14 +4767,13 @@ wait_table_again:
 		}
 
 	} else if (dtuple_get_n_fields(search_tuple) > 0) {
-		pcur->btr_cur.thr = thr;
 		pcur->old_rec = nullptr;
 
 		if (index->is_spatial()) {
 			if (!prebuilt->rtr_info) {
 				prebuilt->rtr_info = rtr_create_rtr_info(
-					set_also_gap_locks, true,
-					btr_pcur_get_btr_cur(pcur), index);
+					set_also_gap_locks, true, thr,
+					btr_pcur_get_btr_cur(pcur));
 				prebuilt->rtr_info->search_tuple = search_tuple;
 				prebuilt->rtr_info->search_mode = mode;
 				rtr_info_update_btr(btr_pcur_get_btr_cur(pcur),
@@ -4781,7 +4786,8 @@ wait_table_again:
 				prebuilt->rtr_info->search_mode = mode;
 			}
 
-			err = rtr_search_leaf(pcur, search_tuple, mode, &mtr);
+			err = rtr_search_leaf(pcur, thr, search_tuple, mode,
+					      &mtr);
 		} else {
 			err = btr_pcur_open_with_no_init(search_tuple, mode,
 							 BTR_SEARCH_LEAF,

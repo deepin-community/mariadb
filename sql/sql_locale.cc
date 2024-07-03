@@ -31,7 +31,7 @@ enum err_msgs_index
 {
   en_US= 0, zh_CN, cs_CZ, da_DK, nl_NL, et_EE, fr_FR, de_DE, el_GR, hu_HU, it_IT,
   ja_JP, ko_KR, no_NO, nn_NO, pl_PL, pt_PT, ro_RO, ru_RU, sr_RS,  sk_SK,
-  es_ES, sv_SE, uk_UA, hi_IN, ka_GE
+  es_ES, sv_SE, uk_UA, hi_IN, ka_GE, sw_KE
 } ERR_MSGS_INDEX;
 
 
@@ -63,6 +63,7 @@ MY_LOCALE_ERRMSGS global_errmsgs[]=
   {"ukrainian", NULL},
   {"hindi", NULL},
   {"georgian", NULL},
+  {"swahili", NULL},
   {NULL, NULL}
 };
 
@@ -87,7 +88,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ar_AE =
 MY_LOCALE my_locale_ar_AE
 (
   6,
-  "ar_AE",
+  "ar_AE"_Lex_ident_locale,
   "Arabic - United Arab Emirates",
   FALSE,
   &my_locale_typelib_month_names_ar_AE,
@@ -123,7 +124,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ar_BH =
 MY_LOCALE my_locale_ar_BH
 (
   7,
-  "ar_BH",
+  "ar_BH"_Lex_ident_locale,
   "Arabic - Bahrain",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -159,7 +160,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ar_JO =
 MY_LOCALE my_locale_ar_JO
 (
   8,
-  "ar_JO",
+  "ar_JO"_Lex_ident_locale,
   "Arabic - Jordan",
   FALSE,
   &my_locale_typelib_month_names_ar_JO,
@@ -195,7 +196,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ar_SA =
 MY_LOCALE my_locale_ar_SA
 (
   9,
-  "ar_SA",
+  "ar_SA"_Lex_ident_locale,
   "Arabic - Saudi Arabia",
   FALSE,
   &my_locale_typelib_month_names_ar_SA,
@@ -231,7 +232,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ar_SY =
 MY_LOCALE my_locale_ar_SY
 (
   10,
-  "ar_SY",
+  "ar_SY"_Lex_ident_locale,
   "Arabic - Syria",
   FALSE,
   &my_locale_typelib_month_names_ar_SY,
@@ -267,7 +268,7 @@ static TYPELIB my_locale_typelib_ab_day_names_be_BY =
 MY_LOCALE my_locale_be_BY
 (
   11,
-  "be_BY",
+  "be_BY"_Lex_ident_locale,
   "Belarusian - Belarus",
   FALSE,
   &my_locale_typelib_month_names_be_BY,
@@ -303,7 +304,7 @@ static TYPELIB my_locale_typelib_ab_day_names_bg_BG =
 MY_LOCALE my_locale_bg_BG
 (
   12,
-  "bg_BG",
+  "bg_BG"_Lex_ident_locale,
   "Bulgarian - Bulgaria",
   FALSE,
   &my_locale_typelib_month_names_bg_BG,
@@ -339,7 +340,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ca_ES =
 MY_LOCALE my_locale_ca_ES
 (
   13,
-  "ca_ES",
+  "ca_ES"_Lex_ident_locale,
   "Catalan - Catalan",
   FALSE,
   &my_locale_typelib_month_names_ca_ES,
@@ -375,7 +376,7 @@ static TYPELIB my_locale_typelib_ab_day_names_cs_CZ =
 MY_LOCALE my_locale_cs_CZ
 (
   14,
-  "cs_CZ",
+  "cs_CZ"_Lex_ident_locale,
   "Czech - Czech Republic",
   FALSE,
   &my_locale_typelib_month_names_cs_CZ,
@@ -411,7 +412,7 @@ static TYPELIB my_locale_typelib_ab_day_names_da_DK =
 MY_LOCALE my_locale_da_DK
 (
   15,
-  "da_DK",
+  "da_DK"_Lex_ident_locale,
   "Danish - Denmark",
   FALSE,
   &my_locale_typelib_month_names_da_DK,
@@ -447,7 +448,7 @@ static TYPELIB my_locale_typelib_ab_day_names_de_AT =
 MY_LOCALE my_locale_de_AT
 (
   16,
-  "de_AT",
+  "de_AT"_Lex_ident_locale,
   "German - Austria",
   FALSE,
   &my_locale_typelib_month_names_de_AT,
@@ -483,7 +484,7 @@ static TYPELIB my_locale_typelib_ab_day_names_de_DE =
 MY_LOCALE my_locale_de_DE
 (
   4,
-  "de_DE",
+  "de_DE"_Lex_ident_locale,
   "German - Germany",
   FALSE,
   &my_locale_typelib_month_names_de_DE,
@@ -519,7 +520,7 @@ static TYPELIB my_locale_typelib_ab_day_names_en_US =
 MY_LOCALE my_locale_en_US
 (
   0,
-  "en_US",
+  "en_US"_Lex_ident_locale,
   "English - United States",
   TRUE,
   &my_locale_typelib_month_names_en_US,
@@ -555,7 +556,7 @@ static TYPELIB my_locale_typelib_ab_day_names_es_ES =
 MY_LOCALE my_locale_es_ES
 (
   17,
-  "es_ES",
+  "es_ES"_Lex_ident_locale,
   "Spanish - Spain",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -591,7 +592,7 @@ static TYPELIB my_locale_typelib_ab_day_names_et_EE =
 MY_LOCALE my_locale_et_EE
 (
   18,
-  "et_EE",
+  "et_EE"_Lex_ident_locale,
   "Estonian - Estonia",
   FALSE,
   &my_locale_typelib_month_names_et_EE,
@@ -627,7 +628,7 @@ static TYPELIB my_locale_typelib_ab_day_names_eu_ES =
 MY_LOCALE my_locale_eu_ES
 (
   19,
-  "eu_ES",
+  "eu_ES"_Lex_ident_locale,
   "Basque - Basque",
   TRUE,
   &my_locale_typelib_month_names_eu_ES,
@@ -663,7 +664,7 @@ static TYPELIB my_locale_typelib_ab_day_names_fi_FI =
 MY_LOCALE my_locale_fi_FI
 (
   20,
-  "fi_FI",
+  "fi_FI"_Lex_ident_locale,
   "Finnish - Finland",
   FALSE,
   &my_locale_typelib_month_names_fi_FI,
@@ -699,7 +700,7 @@ static TYPELIB my_locale_typelib_ab_day_names_fo_FO =
 MY_LOCALE my_locale_fo_FO
 (
   21,
-  "fo_FO",
+  "fo_FO"_Lex_ident_locale,
   "Faroese - Faroe Islands",
   FALSE,
   &my_locale_typelib_month_names_fo_FO,
@@ -735,7 +736,7 @@ static TYPELIB my_locale_typelib_ab_day_names_fr_FR =
 MY_LOCALE my_locale_fr_FR
 (
   5,
-  "fr_FR",
+  "fr_FR"_Lex_ident_locale,
   "French - France",
   FALSE,
   &my_locale_typelib_month_names_fr_FR,
@@ -771,7 +772,7 @@ static TYPELIB my_locale_typelib_ab_day_names_gl_ES =
 MY_LOCALE my_locale_gl_ES
 (
   22,
-  "gl_ES",
+  "gl_ES"_Lex_ident_locale,
   "Galician - Galician",
   FALSE,
   &my_locale_typelib_month_names_gl_ES,
@@ -807,7 +808,7 @@ static TYPELIB my_locale_typelib_ab_day_names_gu_IN =
 MY_LOCALE my_locale_gu_IN
 (
   23,
-  "gu_IN",
+  "gu_IN"_Lex_ident_locale,
   "Gujarati - India",
   FALSE,
   &my_locale_typelib_month_names_gu_IN,
@@ -843,7 +844,7 @@ static TYPELIB my_locale_typelib_ab_day_names_he_IL =
 MY_LOCALE my_locale_he_IL
 (
   24,
-  "he_IL",
+  "he_IL"_Lex_ident_locale,
   "Hebrew - Israel",
   FALSE,
   &my_locale_typelib_month_names_he_IL,
@@ -879,7 +880,7 @@ static TYPELIB my_locale_typelib_ab_day_names_hi_IN =
 MY_LOCALE my_locale_hi_IN
 (
   25,
-  "hi_IN",
+  "hi_IN"_Lex_ident_locale,
   "Hindi - India",
   FALSE,
   &my_locale_typelib_month_names_hi_IN,
@@ -915,7 +916,7 @@ static TYPELIB my_locale_typelib_ab_day_names_hr_HR =
 MY_LOCALE my_locale_hr_HR
 (
   26,
-  "hr_HR",
+  "hr_HR"_Lex_ident_locale,
   "Croatian - Croatia",
   FALSE,
   &my_locale_typelib_month_names_hr_HR,
@@ -951,7 +952,7 @@ static TYPELIB my_locale_typelib_ab_day_names_hu_HU =
 MY_LOCALE my_locale_hu_HU
 (
   27,
-  "hu_HU",
+  "hu_HU"_Lex_ident_locale,
   "Hungarian - Hungary",
   FALSE,
   &my_locale_typelib_month_names_hu_HU,
@@ -987,7 +988,7 @@ static TYPELIB my_locale_typelib_ab_day_names_id_ID =
 MY_LOCALE my_locale_id_ID
 (
   28,
-  "id_ID",
+  "id_ID"_Lex_ident_locale,
   "Indonesian - Indonesia",
   TRUE,
   &my_locale_typelib_month_names_id_ID,
@@ -1023,7 +1024,7 @@ static TYPELIB my_locale_typelib_ab_day_names_is_IS =
 MY_LOCALE my_locale_is_IS
 (
   29,
-  "is_IS",
+  "is_IS"_Lex_ident_locale,
   "Icelandic - Iceland",
   FALSE,
   &my_locale_typelib_month_names_is_IS,
@@ -1059,7 +1060,7 @@ static TYPELIB my_locale_typelib_ab_day_names_it_CH =
 MY_LOCALE my_locale_it_CH
 (
   30,
-  "it_CH",
+  "it_CH"_Lex_ident_locale,
   "Italian - Switzerland",
   FALSE,
   &my_locale_typelib_month_names_it_CH,
@@ -1095,7 +1096,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ja_JP =
 MY_LOCALE my_locale_ja_JP
 (
   2,
-  "ja_JP",
+  "ja_JP"_Lex_ident_locale,
   "Japanese - Japan",
   FALSE,
   &my_locale_typelib_month_names_ja_JP,
@@ -1131,7 +1132,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ko_KR =
 MY_LOCALE my_locale_ko_KR
 (
   31,
-  "ko_KR",
+  "ko_KR"_Lex_ident_locale,
   "Korean - Korea",
   FALSE,
   &my_locale_typelib_month_names_ko_KR,
@@ -1167,7 +1168,7 @@ static TYPELIB my_locale_typelib_ab_day_names_lt_LT =
 MY_LOCALE my_locale_lt_LT
 (
   32,
-  "lt_LT",
+  "lt_LT"_Lex_ident_locale,
   "Lithuanian - Lithuania",
   FALSE,
   &my_locale_typelib_month_names_lt_LT,
@@ -1203,7 +1204,7 @@ static TYPELIB my_locale_typelib_ab_day_names_lv_LV =
 MY_LOCALE my_locale_lv_LV
 (
   33,
-  "lv_LV",
+  "lv_LV"_Lex_ident_locale,
   "Latvian - Latvia",
   FALSE,
   &my_locale_typelib_month_names_lv_LV,
@@ -1239,7 +1240,7 @@ static TYPELIB my_locale_typelib_ab_day_names_mk_MK =
 MY_LOCALE my_locale_mk_MK
 (
   34,
-  "mk_MK",
+  "mk_MK"_Lex_ident_locale,
   "Macedonian - FYROM",
   FALSE,
   &my_locale_typelib_month_names_mk_MK,
@@ -1275,7 +1276,7 @@ static TYPELIB my_locale_typelib_ab_day_names_mn_MN =
 MY_LOCALE my_locale_mn_MN
 (
   35,
-  "mn_MN",
+  "mn_MN"_Lex_ident_locale,
   "Mongolia - Mongolian",
   FALSE,
   &my_locale_typelib_month_names_mn_MN,
@@ -1311,7 +1312,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ms_MY =
 MY_LOCALE my_locale_ms_MY
 (
   36,
-  "ms_MY",
+  "ms_MY"_Lex_ident_locale,
   "Malay - Malaysia",
   TRUE,
   &my_locale_typelib_month_names_ms_MY,
@@ -1347,7 +1348,7 @@ static TYPELIB my_locale_typelib_ab_day_names_nb_NO =
 MY_LOCALE my_locale_nb_NO
 (
   37,
-  "nb_NO",
+  "nb_NO"_Lex_ident_locale,
   "Norwegian(Bokml) - Norway",
   FALSE,
   &my_locale_typelib_month_names_nb_NO,
@@ -1383,7 +1384,7 @@ static TYPELIB my_locale_typelib_ab_day_names_nl_NL =
 MY_LOCALE my_locale_nl_NL
 (
   38,
-  "nl_NL",
+  "nl_NL"_Lex_ident_locale,
   "Dutch - The Netherlands",
   TRUE,
   &my_locale_typelib_month_names_nl_NL,
@@ -1419,7 +1420,7 @@ static TYPELIB my_locale_typelib_ab_day_names_pl_PL =
 MY_LOCALE my_locale_pl_PL
 (
   39,
-  "pl_PL",
+  "pl_PL"_Lex_ident_locale,
   "Polish - Poland",
   FALSE,
   &my_locale_typelib_month_names_pl_PL,
@@ -1455,7 +1456,7 @@ static TYPELIB my_locale_typelib_ab_day_names_pt_BR =
 MY_LOCALE my_locale_pt_BR
 (
   40,
-  "pt_BR",
+  "pt_BR"_Lex_ident_locale,
   "Portuguese - Brazil",
   FALSE,
   &my_locale_typelib_month_names_pt_BR,
@@ -1491,7 +1492,7 @@ static TYPELIB my_locale_typelib_ab_day_names_pt_PT =
 MY_LOCALE my_locale_pt_PT
 (
   41,
-  "pt_PT",
+  "pt_PT"_Lex_ident_locale,
   "Portuguese - Portugal",
   FALSE,
   &my_locale_typelib_month_names_pt_PT,
@@ -1527,7 +1528,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ro_RO =
 MY_LOCALE my_locale_ro_RO
 (
   42,
-  "ro_RO",
+  "ro_RO"_Lex_ident_locale,
   "Romanian - Romania",
   FALSE,
   &my_locale_typelib_month_names_ro_RO,
@@ -1563,7 +1564,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ru_RU =
 MY_LOCALE my_locale_ru_RU
 (
   43,
-  "ru_RU",
+  "ru_RU"_Lex_ident_locale,
   "Russian - Russia",
   FALSE,
   &my_locale_typelib_month_names_ru_RU,
@@ -1599,7 +1600,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ru_UA =
 MY_LOCALE my_locale_ru_UA
 (
   44,
-  "ru_UA",
+  "ru_UA"_Lex_ident_locale,
   "Russian - Ukraine",
   FALSE,
   &my_locale_typelib_month_names_ru_UA,
@@ -1635,7 +1636,7 @@ static TYPELIB my_locale_typelib_ab_day_names_sk_SK =
 MY_LOCALE my_locale_sk_SK
 (
   45,
-  "sk_SK",
+  "sk_SK"_Lex_ident_locale,
   "Slovak - Slovakia",
   FALSE,
   &my_locale_typelib_month_names_sk_SK,
@@ -1671,7 +1672,7 @@ static TYPELIB my_locale_typelib_ab_day_names_sl_SI =
 MY_LOCALE my_locale_sl_SI
 (
   46,
-  "sl_SI",
+  "sl_SI"_Lex_ident_locale,
   "Slovenian - Slovenia",
   FALSE,
   &my_locale_typelib_month_names_sl_SI,
@@ -1707,7 +1708,7 @@ static TYPELIB my_locale_typelib_ab_day_names_sq_AL =
 MY_LOCALE my_locale_sq_AL
 (
   47,
-  "sq_AL",
+  "sq_AL"_Lex_ident_locale,
   "Albanian - Albania",
   FALSE,
   &my_locale_typelib_month_names_sq_AL,
@@ -1740,28 +1741,11 @@ static TYPELIB my_locale_typelib_day_names_sr_RS =
  { array_elements(my_locale_day_names_sr_RS)-1, "", my_locale_day_names_sr_RS, NULL };
 static TYPELIB my_locale_typelib_ab_day_names_sr_RS = 
  { array_elements(my_locale_ab_day_names_sr_RS)-1, "", my_locale_ab_day_names_sr_RS, NULL };
-MY_LOCALE my_locale_sr_YU /* Deprecated, use sr_RS instead */
-(
-  48,
-  "sr_YU",
-  "Serbian - Yugoslavia",
-  FALSE,
-  &my_locale_typelib_month_names_sr_RS,
-  &my_locale_typelib_ab_month_names_sr_RS,
-  &my_locale_typelib_day_names_sr_RS,
-  &my_locale_typelib_ab_day_names_sr_RS,
-  9,
-  10,
-  '.',        /* decimal point sr_RS */
-  '\0',       /* thousands_sep sr_RS */
-  "\x80",     /* grouping      sr_RS */
-  &global_errmsgs[sr_RS]
-);
 
 MY_LOCALE my_locale_sr_RS
 (
   48,
-  "sr_RS",
+  "sr_RS"_Lex_ident_locale,
   "Serbian - Serbia",
   FALSE,
   &my_locale_typelib_month_names_sr_RS,
@@ -1797,7 +1781,7 @@ static TYPELIB my_locale_typelib_ab_day_names_sv_SE =
 MY_LOCALE my_locale_sv_SE
 (
   3,
-  "sv_SE",
+  "sv_SE"_Lex_ident_locale,
   "Swedish - Sweden",
   FALSE,
   &my_locale_typelib_month_names_sv_SE,
@@ -1833,7 +1817,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ta_IN =
 MY_LOCALE my_locale_ta_IN
 (
   49,
-  "ta_IN",
+  "ta_IN"_Lex_ident_locale,
   "Tamil - India",
   FALSE,
   &my_locale_typelib_month_names_ta_IN,
@@ -1869,7 +1853,7 @@ static TYPELIB my_locale_typelib_ab_day_names_te_IN =
 MY_LOCALE my_locale_te_IN
 (
   50,
-  "te_IN",
+  "te_IN"_Lex_ident_locale,
   "Telugu - India",
   FALSE,
   &my_locale_typelib_month_names_te_IN,
@@ -1905,7 +1889,7 @@ static TYPELIB my_locale_typelib_ab_day_names_th_TH =
 MY_LOCALE my_locale_th_TH
 (
   51,
-  "th_TH",
+  "th_TH"_Lex_ident_locale,
   "Thai - Thailand",
   FALSE,
   &my_locale_typelib_month_names_th_TH,
@@ -1941,7 +1925,7 @@ static TYPELIB my_locale_typelib_ab_day_names_tr_TR =
 MY_LOCALE my_locale_tr_TR
 (
   52,
-  "tr_TR",
+  "tr_TR"_Lex_ident_locale,
   "Turkish - Türkiye",
   FALSE,
   &my_locale_typelib_month_names_tr_TR,
@@ -1977,7 +1961,7 @@ static TYPELIB my_locale_typelib_ab_day_names_uk_UA =
 MY_LOCALE my_locale_uk_UA
 (
   53,
-  "uk_UA",
+  "uk_UA"_Lex_ident_locale,
   "Ukrainian - Ukraine",
   FALSE,
   &my_locale_typelib_month_names_uk_UA,
@@ -2013,7 +1997,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ur_PK =
 MY_LOCALE my_locale_ur_PK
 (
   54,
-  "ur_PK",
+  "ur_PK"_Lex_ident_locale,
   "Urdu - Pakistan",
   FALSE,
   &my_locale_typelib_month_names_ur_PK,
@@ -2049,7 +2033,7 @@ static TYPELIB my_locale_typelib_ab_day_names_vi_VN =
 MY_LOCALE my_locale_vi_VN
 (
   55,
-  "vi_VN",
+  "vi_VN"_Lex_ident_locale,
   "Vietnamese - Vietnam",
   FALSE,
   &my_locale_typelib_month_names_vi_VN,
@@ -2085,7 +2069,7 @@ static TYPELIB my_locale_typelib_ab_day_names_zh_CN =
 MY_LOCALE my_locale_zh_CN
 (
   56,
-  "zh_CN",
+  "zh_CN"_Lex_ident_locale,
   "Chinese - Peoples Republic of China",
   FALSE,
   &my_locale_typelib_month_names_zh_CN,
@@ -2121,7 +2105,7 @@ static TYPELIB my_locale_typelib_ab_day_names_zh_TW =
 MY_LOCALE my_locale_zh_TW
 (
   57,
-  "zh_TW",
+  "zh_TW"_Lex_ident_locale,
   "Chinese - Taiwan",
   FALSE,
   &my_locale_typelib_month_names_zh_TW,
@@ -2141,7 +2125,7 @@ MY_LOCALE my_locale_zh_TW
 MY_LOCALE my_locale_ar_DZ
 (
   58,
-  "ar_DZ",
+  "ar_DZ"_Lex_ident_locale,
   "Arabic - Algeria",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -2161,7 +2145,7 @@ MY_LOCALE my_locale_ar_DZ
 MY_LOCALE my_locale_ar_EG
 (
   59,
-  "ar_EG",
+  "ar_EG"_Lex_ident_locale,
   "Arabic - Egypt",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -2181,7 +2165,7 @@ MY_LOCALE my_locale_ar_EG
 MY_LOCALE my_locale_ar_IN
 (
   60,
-  "ar_IN",
+  "ar_IN"_Lex_ident_locale,
   "Arabic - Iran",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -2201,7 +2185,7 @@ MY_LOCALE my_locale_ar_IN
 MY_LOCALE my_locale_ar_IQ
 (
   61,
-  "ar_IQ",
+  "ar_IQ"_Lex_ident_locale,
   "Arabic - Iraq",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -2221,7 +2205,7 @@ MY_LOCALE my_locale_ar_IQ
 MY_LOCALE my_locale_ar_KW
 (
   62,
-  "ar_KW",
+  "ar_KW"_Lex_ident_locale,
   "Arabic - Kuwait",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -2241,7 +2225,7 @@ MY_LOCALE my_locale_ar_KW
 MY_LOCALE my_locale_ar_LB
 (
   63,
-  "ar_LB",
+  "ar_LB"_Lex_ident_locale,
   "Arabic - Lebanon",
   FALSE,
   &my_locale_typelib_month_names_ar_JO,
@@ -2261,7 +2245,7 @@ MY_LOCALE my_locale_ar_LB
 MY_LOCALE my_locale_ar_LY
 (
   64,
-  "ar_LY",
+  "ar_LY"_Lex_ident_locale,
   "Arabic - Libya",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -2281,7 +2265,7 @@ MY_LOCALE my_locale_ar_LY
 MY_LOCALE my_locale_ar_MA
 (
   65,
-  "ar_MA",
+  "ar_MA"_Lex_ident_locale,
   "Arabic - Morocco",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -2301,7 +2285,7 @@ MY_LOCALE my_locale_ar_MA
 MY_LOCALE my_locale_ar_OM
 (
   66,
-  "ar_OM",
+  "ar_OM"_Lex_ident_locale,
   "Arabic - Oman",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -2321,7 +2305,7 @@ MY_LOCALE my_locale_ar_OM
 MY_LOCALE my_locale_ar_QA
 (
   67,
-  "ar_QA",
+  "ar_QA"_Lex_ident_locale,
   "Arabic - Qatar",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -2341,7 +2325,7 @@ MY_LOCALE my_locale_ar_QA
 MY_LOCALE my_locale_ar_SD
 (
   68,
-  "ar_SD",
+  "ar_SD"_Lex_ident_locale,
   "Arabic - Sudan",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -2361,7 +2345,7 @@ MY_LOCALE my_locale_ar_SD
 MY_LOCALE my_locale_ar_TN
 (
   69,
-  "ar_TN",
+  "ar_TN"_Lex_ident_locale,
   "Arabic - Tunisia",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -2381,7 +2365,7 @@ MY_LOCALE my_locale_ar_TN
 MY_LOCALE my_locale_ar_YE
 (
   70,
-  "ar_YE",
+  "ar_YE"_Lex_ident_locale,
   "Arabic - Yemen",
   FALSE,
   &my_locale_typelib_month_names_ar_BH,
@@ -2401,7 +2385,7 @@ MY_LOCALE my_locale_ar_YE
 MY_LOCALE my_locale_de_BE
 (
   71,
-  "de_BE",
+  "de_BE"_Lex_ident_locale,
   "German - Belgium",
   FALSE,
   &my_locale_typelib_month_names_de_DE,
@@ -2421,7 +2405,7 @@ MY_LOCALE my_locale_de_BE
 MY_LOCALE my_locale_de_CH
 (
   72,
-  "de_CH",
+  "de_CH"_Lex_ident_locale,
   "German - Switzerland",
   FALSE,
   &my_locale_typelib_month_names_de_DE,
@@ -2441,7 +2425,7 @@ MY_LOCALE my_locale_de_CH
 MY_LOCALE my_locale_de_LU
 (
   73,
-  "de_LU",
+  "de_LU"_Lex_ident_locale,
   "German - Luxembourg",
   FALSE,
   &my_locale_typelib_month_names_de_DE,
@@ -2461,7 +2445,7 @@ MY_LOCALE my_locale_de_LU
 MY_LOCALE my_locale_en_AU
 (
   74,
-  "en_AU",
+  "en_AU"_Lex_ident_locale,
   "English - Australia",
   TRUE,
   &my_locale_typelib_month_names_en_US,
@@ -2481,7 +2465,7 @@ MY_LOCALE my_locale_en_AU
 MY_LOCALE my_locale_en_CA
 (
   75,
-  "en_CA",
+  "en_CA"_Lex_ident_locale,
   "English - Canada",
   TRUE,
   &my_locale_typelib_month_names_en_US,
@@ -2501,7 +2485,7 @@ MY_LOCALE my_locale_en_CA
 MY_LOCALE my_locale_en_GB
 (
   1,
-  "en_GB",
+  "en_GB"_Lex_ident_locale,
   "English - United Kingdom",
   TRUE,
   &my_locale_typelib_month_names_en_US,
@@ -2521,7 +2505,7 @@ MY_LOCALE my_locale_en_GB
 MY_LOCALE my_locale_en_IN
 (
   76,
-  "en_IN",
+  "en_IN"_Lex_ident_locale,
   "English - India",
   TRUE,
   &my_locale_typelib_month_names_en_US,
@@ -2541,7 +2525,7 @@ MY_LOCALE my_locale_en_IN
 MY_LOCALE my_locale_en_NZ
 (
   77,
-  "en_NZ",
+  "en_NZ"_Lex_ident_locale,
   "English - New Zealand",
   TRUE,
   &my_locale_typelib_month_names_en_US,
@@ -2561,7 +2545,7 @@ MY_LOCALE my_locale_en_NZ
 MY_LOCALE my_locale_en_PH
 (
   78,
-  "en_PH",
+  "en_PH"_Lex_ident_locale,
   "English - Philippines",
   TRUE,
   &my_locale_typelib_month_names_en_US,
@@ -2581,7 +2565,7 @@ MY_LOCALE my_locale_en_PH
 MY_LOCALE my_locale_en_ZA
 (
   79,
-  "en_ZA",
+  "en_ZA"_Lex_ident_locale,
   "English - South Africa",
   TRUE,
   &my_locale_typelib_month_names_en_US,
@@ -2601,7 +2585,7 @@ MY_LOCALE my_locale_en_ZA
 MY_LOCALE my_locale_en_ZW
 (
   80,
-  "en_ZW",
+  "en_ZW"_Lex_ident_locale,
   "English - Zimbabwe",
   TRUE,
   &my_locale_typelib_month_names_en_US,
@@ -2621,7 +2605,7 @@ MY_LOCALE my_locale_en_ZW
 MY_LOCALE my_locale_es_AR
 (
   81,
-  "es_AR",
+  "es_AR"_Lex_ident_locale,
   "Spanish - Argentina",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2641,7 +2625,7 @@ MY_LOCALE my_locale_es_AR
 MY_LOCALE my_locale_es_BO
 (
   82,
-  "es_BO",
+  "es_BO"_Lex_ident_locale,
   "Spanish - Bolivia",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2661,7 +2645,7 @@ MY_LOCALE my_locale_es_BO
 MY_LOCALE my_locale_es_CL
 (
   83,
-  "es_CL",
+  "es_CL"_Lex_ident_locale,
   "Spanish - Chile",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2681,7 +2665,7 @@ MY_LOCALE my_locale_es_CL
 MY_LOCALE my_locale_es_CO
 (
   84,
-  "es_CO",
+  "es_CO"_Lex_ident_locale,
   "Spanish - Columbia",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2701,7 +2685,7 @@ MY_LOCALE my_locale_es_CO
 MY_LOCALE my_locale_es_CR
 (
   85,
-  "es_CR",
+  "es_CR"_Lex_ident_locale,
   "Spanish - Costa Rica",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2721,7 +2705,7 @@ MY_LOCALE my_locale_es_CR
 MY_LOCALE my_locale_es_DO
 (
   86,
-  "es_DO",
+  "es_DO"_Lex_ident_locale,
   "Spanish - Dominican Republic",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2741,7 +2725,7 @@ MY_LOCALE my_locale_es_DO
 MY_LOCALE my_locale_es_EC
 (
   87,
-  "es_EC",
+  "es_EC"_Lex_ident_locale,
   "Spanish - Ecuador",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2761,7 +2745,7 @@ MY_LOCALE my_locale_es_EC
 MY_LOCALE my_locale_es_GT
 (
   88,
-  "es_GT",
+  "es_GT"_Lex_ident_locale,
   "Spanish - Guatemala",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2781,7 +2765,7 @@ MY_LOCALE my_locale_es_GT
 MY_LOCALE my_locale_es_HN
 (
   89,
-  "es_HN",
+  "es_HN"_Lex_ident_locale,
   "Spanish - Honduras",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2801,7 +2785,7 @@ MY_LOCALE my_locale_es_HN
 MY_LOCALE my_locale_es_MX
 (
   90,
-  "es_MX",
+  "es_MX"_Lex_ident_locale,
   "Spanish - Mexico",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2821,7 +2805,7 @@ MY_LOCALE my_locale_es_MX
 MY_LOCALE my_locale_es_NI
 (
   91,
-  "es_NI",
+  "es_NI"_Lex_ident_locale,
   "Spanish - Nicaragua",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2841,7 +2825,7 @@ MY_LOCALE my_locale_es_NI
 MY_LOCALE my_locale_es_PA
 (
   92,
-  "es_PA",
+  "es_PA"_Lex_ident_locale,
   "Spanish - Panama",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2861,7 +2845,7 @@ MY_LOCALE my_locale_es_PA
 MY_LOCALE my_locale_es_PE
 (
   93,
-  "es_PE",
+  "es_PE"_Lex_ident_locale,
   "Spanish - Peru",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2881,7 +2865,7 @@ MY_LOCALE my_locale_es_PE
 MY_LOCALE my_locale_es_PR
 (
   94,
-  "es_PR",
+  "es_PR"_Lex_ident_locale,
   "Spanish - Puerto Rico",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2901,7 +2885,7 @@ MY_LOCALE my_locale_es_PR
 MY_LOCALE my_locale_es_PY
 (
   95,
-  "es_PY",
+  "es_PY"_Lex_ident_locale,
   "Spanish - Paraguay",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2921,7 +2905,7 @@ MY_LOCALE my_locale_es_PY
 MY_LOCALE my_locale_es_SV
 (
   96,
-  "es_SV",
+  "es_SV"_Lex_ident_locale,
   "Spanish - El Salvador",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2941,7 +2925,7 @@ MY_LOCALE my_locale_es_SV
 MY_LOCALE my_locale_es_US
 (
   97,
-  "es_US",
+  "es_US"_Lex_ident_locale,
   "Spanish - United States",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2961,7 +2945,7 @@ MY_LOCALE my_locale_es_US
 MY_LOCALE my_locale_es_UY
 (
   98,
-  "es_UY",
+  "es_UY"_Lex_ident_locale,
   "Spanish - Uruguay",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -2981,7 +2965,7 @@ MY_LOCALE my_locale_es_UY
 MY_LOCALE my_locale_es_VE
 (
   99,
-  "es_VE",
+  "es_VE"_Lex_ident_locale,
   "Spanish - Venezuela",
   FALSE,
   &my_locale_typelib_month_names_es_ES,
@@ -3001,7 +2985,7 @@ MY_LOCALE my_locale_es_VE
 MY_LOCALE my_locale_fr_BE
 (
   100,
-  "fr_BE",
+  "fr_BE"_Lex_ident_locale,
   "French - Belgium",
   FALSE,
   &my_locale_typelib_month_names_fr_FR,
@@ -3021,7 +3005,7 @@ MY_LOCALE my_locale_fr_BE
 MY_LOCALE my_locale_fr_CA
 (
   101,
-  "fr_CA",
+  "fr_CA"_Lex_ident_locale,
   "French - Canada",
   FALSE,
   &my_locale_typelib_month_names_fr_FR,
@@ -3041,7 +3025,7 @@ MY_LOCALE my_locale_fr_CA
 MY_LOCALE my_locale_fr_CH
 (
   102,
-  "fr_CH",
+  "fr_CH"_Lex_ident_locale,
   "French - Switzerland",
   FALSE,
   &my_locale_typelib_month_names_fr_FR,
@@ -3061,7 +3045,7 @@ MY_LOCALE my_locale_fr_CH
 MY_LOCALE my_locale_fr_LU
 (
   103,
-  "fr_LU",
+  "fr_LU"_Lex_ident_locale,
   "French - Luxembourg",
   FALSE,
   &my_locale_typelib_month_names_fr_FR,
@@ -3081,7 +3065,7 @@ MY_LOCALE my_locale_fr_LU
 MY_LOCALE my_locale_it_IT
 (
   104,
-  "it_IT",
+  "it_IT"_Lex_ident_locale,
   "Italian - Italy",
   FALSE,
   &my_locale_typelib_month_names_it_CH,
@@ -3101,7 +3085,7 @@ MY_LOCALE my_locale_it_IT
 MY_LOCALE my_locale_nl_BE
 (
   105,
-  "nl_BE",
+  "nl_BE"_Lex_ident_locale,
   "Dutch - Belgium",
   TRUE,
   &my_locale_typelib_month_names_nl_NL,
@@ -3121,7 +3105,7 @@ MY_LOCALE my_locale_nl_BE
 MY_LOCALE my_locale_no_NO
 (
   106,
-  "no_NO",
+  "no_NO"_Lex_ident_locale,
   "Norwegian - Norway",
   FALSE,
   &my_locale_typelib_month_names_nb_NO,
@@ -3141,7 +3125,7 @@ MY_LOCALE my_locale_no_NO
 MY_LOCALE my_locale_sv_FI
 (
   107,
-  "sv_FI",
+  "sv_FI"_Lex_ident_locale,
   "Swedish - Finland",
   FALSE,
   &my_locale_typelib_month_names_sv_SE,
@@ -3161,7 +3145,7 @@ MY_LOCALE my_locale_sv_FI
 MY_LOCALE my_locale_zh_HK
 (
   108,
-  "zh_HK",
+  "zh_HK"_Lex_ident_locale,
   "Chinese - Hong Kong SAR",
   FALSE,
   &my_locale_typelib_month_names_zh_CN,
@@ -3234,7 +3218,7 @@ static TYPELIB my_locale_typelib_ab_day_names_el_GR=
 MY_LOCALE my_locale_el_GR
 (
   109,
-  "el_GR",
+  "el_GR"_Lex_ident_locale,
   "Greek - Greece",
   FALSE,
   &my_locale_typelib_month_names_el_GR,
@@ -3302,7 +3286,7 @@ static TYPELIB my_locale_typelib_ab_day_names_rm_CH=
 MY_LOCALE my_locale_rm_CH
 (
   110,
-  "rm_CH",
+  "rm_CH"_Lex_ident_locale,
   "Romansh - Switzerland",
   FALSE,
   &my_locale_typelib_month_names_rm_CH,
@@ -3361,7 +3345,7 @@ static TYPELIB my_locale_typelib_ab_day_names_ka_GE =
 MY_LOCALE my_locale_ka_GE
 (
   111,
-  "ka_GE",
+  "ka_GE"_Lex_ident_locale,
   "Georgian - Georgia",
   FALSE,
   &my_locale_typelib_month_names_ka_GE,
@@ -3376,6 +3360,42 @@ MY_LOCALE my_locale_ka_GE
   &global_errmsgs[ka_GE]
 );
 /***** LOCALE END ka_GE *****/
+
+/***** LOCALE BEGIN sw_KE: Swahili - Kenya *****/
+static const char *my_locale_month_names_sw_KE[13] = 
+ {"Januari","Februari","Machi","Aprili","Mei","Juni","Julai","Agosti","Septemba","Oktoba","Novemba","Desemba", NullS };
+static const char *my_locale_ab_month_names_sw_KE[13] = 
+ {"Jan","Feb","Mac","Apr","Mei","Jun","Jul","Ago","Sep","Okt","Nov","Des", NullS };
+static const char *my_locale_day_names_sw_KE[8] = 
+ {"Jumatatu", "Jumanne", "Jumatano", "Alhamisi", "Ijumaa", "Jumamosi", "Jumapili", NullS };
+static const char *my_locale_ab_day_names_sw_KE[8] = 
+ {"Jumatatu", "Jumanne", "Jumatano", "Alhamisi", "Ijumaa", "Jumamosi", "Jumapili", NullS };
+static TYPELIB my_locale_typelib_month_names_sw_KE = 
+ { array_elements(my_locale_month_names_sw_KE)-1, "", my_locale_month_names_sw_KE, NULL };
+static TYPELIB my_locale_typelib_ab_month_names_sw_KE = 
+ { array_elements(my_locale_ab_month_names_sw_KE)-1, "", my_locale_ab_month_names_sw_KE, NULL };
+static TYPELIB my_locale_typelib_day_names_sw_KE = 
+ { array_elements(my_locale_day_names_sw_KE)-1, "", my_locale_day_names_sw_KE, NULL };
+static TYPELIB my_locale_typelib_ab_day_names_sw_KE = 
+ { array_elements(my_locale_ab_day_names_sw_KE)-1, "", my_locale_ab_day_names_sw_KE, NULL };
+MY_LOCALE my_locale_sw_KE
+(
+  112,
+  "sw_KE"_Lex_ident_locale,
+  "Swahili - Kenya",
+  TRUE,
+  &my_locale_typelib_month_names_sw_KE,
+  &my_locale_typelib_ab_month_names_sw_KE,
+  &my_locale_typelib_day_names_sw_KE,
+  &my_locale_typelib_ab_day_names_sw_KE,
+  8,
+  8,
+  '.',        /* decimal point sw_KE */
+  ',',        /* thousands_sep sw_KE */
+  "\x03\x03", /* grouping      sw_KE */
+  &global_errmsgs[sw_KE]
+);
+/***** LOCALE END sw_KE *****/
 
 
 /*
@@ -3498,15 +3518,9 @@ MY_LOCALE *my_locales[]=
     &my_locale_el_GR,
     &my_locale_rm_CH,
     &my_locale_ka_GE,
+    &my_locale_sw_KE,
     NULL 
   };
-
-
-MY_LOCALE *my_locales_deprecated[]=
-{
-  &my_locale_sr_YU,
-  NULL
-};
 
 
 MY_LOCALE *my_locale_by_number(uint number)
@@ -3522,19 +3536,19 @@ MY_LOCALE *my_locale_by_number(uint number)
 
 
 static MY_LOCALE*
-my_locale_by_name(MY_LOCALE** locales, const char *name)
+my_locale_by_name(MY_LOCALE** locales, const LEX_CSTRING &name)
 {
   MY_LOCALE **locale;
   for (locale= locales; *locale != NULL; locale++) 
   {
-    if (!my_strcasecmp(&my_charset_latin1, (*locale)->name, name))
+    if ((*locale)->name.streq(name))
       return *locale;
   }
   return NULL;
 }
 
 
-MY_LOCALE *my_locale_by_name(const char *name)
+MY_LOCALE *my_locale_by_name(const LEX_CSTRING &name)
 {
   MY_LOCALE *locale;
   
@@ -3543,30 +3557,6 @@ MY_LOCALE *my_locale_by_name(const char *name)
       // Check that locale is on its correct position in the array
       DBUG_ASSERT(locale == my_locales[locale->number]);
       return locale;
-  }
-  else if ((locale= my_locale_by_name(my_locales_deprecated, name)))
-  {
-    THD *thd= current_thd;
-    /*
-      Replace the deprecated locale to the corresponding
-      'fresh' locale with the same ID.
-    */
-    locale= my_locales[locale->number];
-    if (thd)
-    {
-      // Send a warning to the client
-      push_warning_printf(thd, Sql_condition::WARN_LEVEL_WARN,
-                          ER_WARN_DEPRECATED_SYNTAX,
-                          ER_THD(thd, ER_WARN_DEPRECATED_SYNTAX),
-                          name, locale->name);
-    }
-    else
-    {
-      // Send a warning to mysqld error log
-      sql_print_warning("The syntax '%s' is deprecated and will be removed. "
-                        "Please use %s instead.",
-                        name, locale->name);
-    }
   }
   return locale;
 }

@@ -297,24 +297,27 @@ class Type_collection_uuid: public Type_collection
 {
   const Type_handler *find_in_array(const Type_handler *what,
                                     const Type_handler *stop,
-                                    bool for_comparison) const;
+                                    int start) const;
 public:
   const Type_handler *aggregate_for_result(const Type_handler *a,
                                            const Type_handler *b)
                                            const override
-  { return find_in_array(a, b, false); }
+  { return find_in_array(a, b, 0); }
   const Type_handler *aggregate_for_min_max(const Type_handler *a,
                                             const Type_handler *b)
                                             const override
-  { return find_in_array(a, b, false); }
+  { return find_in_array(a, b, 0); }
   const Type_handler *aggregate_for_comparison(const Type_handler *a,
                                                const Type_handler *b)
                                                const override
-  { return find_in_array(a, b, true); }
+  { return find_in_array(a, b, 6); }    // skip types that cannot happen here
   const Type_handler *aggregate_for_num_op(const Type_handler *a,
                                            const Type_handler *b)
                                            const override
   { return NULL; }
+
+  const Type_handler *type_handler_for_implicit_upgrade(
+                                        const Type_handler *from) const;
 
   static Type_collection_uuid *singleton()
   {
@@ -326,5 +329,23 @@ public:
 #include "sql_type_fixedbin.h"
 typedef Type_handler_fbt<UUID<1>, Type_collection_uuid> Type_handler_uuid_old;
 typedef Type_handler_fbt<UUID<0>, Type_collection_uuid> Type_handler_uuid_new;
+
+
+class UUIDv1: public Type_handler_uuid_new::Fbt
+{
+public:
+  UUIDv1()
+  {
+    my_uuid((uchar*) m_buffer);
+  }
+  static bool construct_native(Native *to)
+  {
+    to->alloc(MY_UUID_SIZE);
+    to->length(MY_UUID_SIZE);
+    my_uuid((uchar*)to->ptr());
+    return 0;
+  }
+};
+
 
 #endif // SQL_TYPE_UUID_INCLUDED

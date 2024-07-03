@@ -44,8 +44,6 @@ rpl_slave_state *rpl_global_gtid_slave_state;
 /* Object used for MASTER_GTID_WAIT(). */
 gtid_waiting rpl_global_gtid_waiting;
 
-const char *const Relay_log_info::state_delaying_string = "Waiting until MASTER_DELAY seconds after master executed event";
-
 Relay_log_info::Relay_log_info(bool is_slave_recovery, const char* thread_name)
   :Slave_reporting_capability(thread_name),
    replicate_same_server_id(::replicate_same_server_id),
@@ -60,7 +58,8 @@ Relay_log_info::Relay_log_info(bool is_slave_recovery, const char* thread_name)
    abort_pos_wait(0), slave_run_id(0), sql_driver_thd(),
    gtid_skip_flag(GTID_SKIP_NOT), inited(0), abort_slave(0), stop_for_until(0),
    slave_running(MYSQL_SLAVE_NOT_RUN), until_condition(UNTIL_NONE),
-   until_log_pos(0), retried_trans(0), executed_entries(0),
+   until_log_pos(0), is_until_before_gtids(false),
+   retried_trans(0), executed_entries(0),
    last_trans_retry_count(0), sql_delay(0), sql_delay_end(0),
    until_relay_log_names_defer(false),
    m_flags(0)
@@ -525,13 +524,7 @@ read_relay_log_description_event(IO_CACHE *cur_log, ulonglong start_pos,
   Format_description_log_event *fdev;
   bool found= false;
 
-  /*
-    By default the relay log is in binlog format 3 (4.0).
-    Even if format is 4, this will work enough to read the first event
-    (Format_desc) (remember that format 4 is just lenghtened compared to format
-    3; format 3 is a prefix of format 4).
-  */
-  fdev= new Format_description_log_event(3);
+  fdev= new Format_description_log_event(4);
 
   while (!found)
   {
@@ -666,14 +659,7 @@ int init_relay_log_pos(Relay_log_info* rli,const char* log,
     running, say, CHANGE MASTER.
   */
   delete rli->relay_log.description_event_for_exec;
-  /*
-    By default the relay log is in binlog format 3 (4.0).
-    Even if format is 4, this will work enough to read the first event
-    (Format_desc) (remember that format 4 is just lenghtened compared to format
-    3; format 3 is a prefix of format 4).
-  */
-  rli->relay_log.description_event_for_exec= new
-    Format_description_log_event(3);
+  rli->relay_log.description_event_for_exec= new Format_description_log_event(4);
 
   mysql_mutex_lock(log_lock);
 
@@ -951,6 +937,11 @@ int Relay_log_info::wait_for_pos(THD* thd, String* log_name,
     DBUG_PRINT("info",("Got signal of master update or timed out"));
     if (error == ETIMEDOUT || error == ETIME)
     {
+      my_printf_error(ER_UNKNOWN_ERROR,
+                      "Timeout waiting for %s:%llu. Current pos is %s:%llu",
+                      MYF(ME_ERROR_LOG | ME_NOTE),
+                      log_name_tmp, (ulonglong) log_pos,
+                      group_master_log_name, (ulonglong) group_master_log_pos);
       error= -1;
       break;
     }
@@ -971,6 +962,17 @@ improper_arguments: %d  timed_out: %d",
   if (thd->killed || init_abort_pos_wait != abort_pos_wait ||
       !slave_running)
   {
+    const char *cause= 0;
+    if (init_abort_pos_wait != abort_pos_wait)
+      cause= "CHANGE MASTER detected";
+    else if (!slave_running)
+      cause="slave is not running";
+    else
+      cause="connection was killed";
+    my_printf_error(ER_UNKNOWN_ERROR,
+                    "master_pos_wait() was aborted because %s",
+                    MYF(ME_ERROR_LOG | ME_NOTE),
+                    cause);
     error= -2;
   }
   DBUG_RETURN( error ? error : event_count );
@@ -1559,7 +1561,7 @@ Relay_log_info::update_relay_log_state(rpl_gtid *gtid_list, uint32 count)
   int res= 0;
   while (count)
   {
-    if (relay_log_state.update_nolock(gtid_list, false))
+    if (relay_log_state.update_nolock(gtid_list))
       res= 1;
     ++gtid_list;
     --count;
@@ -1698,7 +1700,7 @@ scan_all_gtid_slave_pos_table(THD *thd, int (*cb)(THD *, LEX_CSTRING *, void *),
   MY_DIR *dirp;
 
   thd->reset_for_next_command();
-  if (lock_schema_name(thd, MYSQL_SCHEMA_NAME.str))
+  if (lock_schema_name(thd, Lex_ident_db_normalized(MYSQL_SCHEMA_NAME)))
     return 1;
 
   build_table_filename(path, sizeof(path) - 1, MYSQL_SCHEMA_NAME.str, "", "", 0);
@@ -1814,9 +1816,8 @@ gtid_pos_auto_create_tables(rpl_slave_state::gtid_pos_table **list_ptr)
        ++auto_engines)
   {
     void *hton= plugin_hton(*auto_engines);
-    char buf[FN_REFLEN+1];
+    CharBuffer<FN_REFLEN> buf;
     LEX_CSTRING table_name;
-    char *p;
     rpl_slave_state::gtid_pos_table *entry, **next_ptr;
 
     /* See if this engine is already in the list. */
@@ -1833,13 +1834,12 @@ gtid_pos_auto_create_tables(rpl_slave_state::gtid_pos_table **list_ptr)
       continue;
 
     /* Add an auto-create entry for this engine at end of list. */
-    p= strmake(buf, rpl_gtid_slave_state_table_name.str, FN_REFLEN);
-    p= strmake(p, "_", FN_REFLEN - (p - buf));
-    p= strmake(p, plugin_name(*auto_engines)->str, FN_REFLEN - (p - buf));
-    table_name.str= buf;
-    table_name.length= p - buf;
-    table_case_convert(const_cast<char*>(table_name.str),
-                       static_cast<uint>(table_name.length));
+    buf.append_opt_casedn(files_charset_info, rpl_gtid_slave_state_table_name,
+                          lower_case_table_names)
+       .append({STRING_WITH_LEN("_")})
+       .append_opt_casedn(files_charset_info, *plugin_name(*auto_engines),
+                          lower_case_table_names);
+    table_name= buf.to_lex_cstring();
     entry= rpl_global_gtid_slave_state->alloc_gtid_pos_table
       (&table_name, hton, rpl_slave_state::GTID_POS_AUTO_CREATE);
     if (!entry)
@@ -2262,18 +2262,19 @@ delete_or_keep_event_post_apply(rpl_group_info *rgi,
 }
 
 
-void rpl_group_info::cleanup_context(THD *thd, bool error)
+void rpl_group_info::cleanup_context(THD *thd, bool error, bool keep_domain_owner)
 {
   DBUG_ENTER("rpl_group_info::cleanup_context");
   DBUG_PRINT("enter", ("error: %d", (int) error));
   
   DBUG_ASSERT(this->thd == thd);
   /*
-    1) Instances of Table_map_log_event, if ::do_apply_event() was called on them,
-    may have opened tables, which we cannot be sure have been closed (because
-    maybe the Rows_log_event have not been found or will not be, because slave
-    SQL thread is stopping, or relay log has a missing tail etc). So we close
-    all thread's tables. And so the table mappings have to be cancelled.
+    1) Instances of Table_map_log_event, if ::do_apply_event() was
+    called on them, may have opened tables, which we cannot be sure
+    have been closed (because maybe the Rows_log_event have not been
+    found or will not be, because slave SQL thread is stopping, or
+    relay log has a missing tail etc). So we close all thread's
+    tables. And so the table mappings have to be cancelled.
     2) Rows_log_event::do_apply_event() may even have started statements or
     transactions on them, which we need to rollback in case of error.
     3) If finding a Format_description_log_event after a BEGIN, we also need
@@ -2282,6 +2283,11 @@ void rpl_group_info::cleanup_context(THD *thd, bool error)
   */
   if (unlikely(error))
   {
+    /*
+      We have to reset the error as otherwise we get an assert in
+      trans_rollback() when it checks if the rollback caused an error.
+    */
+    thd->clear_error();
     trans_rollback_stmt(thd); // if a "statement transaction"
     /* trans_rollback() also resets OPTION_GTID_BEGIN */
     trans_rollback(thd);      // if a "real transaction"
@@ -2317,7 +2323,7 @@ void rpl_group_info::cleanup_context(THD *thd, bool error)
       Ensure we always release the domain for others to process, when using
       --gtid-ignore-duplicates.
     */
-    if (gtid_ignore_duplicate_state != GTID_DUPLICATE_NULL)
+    if (gtid_ignore_duplicate_state != GTID_DUPLICATE_NULL && !keep_domain_owner)
       rpl_global_gtid_slave_state->release_domain_owner(this);
   }
 
@@ -2496,7 +2502,7 @@ rpl_group_info::mark_start_commit()
   If no GTID is available, then NULL is returned.
 */
 char *
-rpl_group_info::gtid_info()
+rpl_group_info::gtid_info() const
 {
   if (!gtid_sub_id || !current_gtid.seq_no)
     return NULL;

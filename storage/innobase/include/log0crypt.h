@@ -28,6 +28,9 @@ MDEV-11782: Rewritten for MariaDB 10.2 by Marko Mäkelä, MariaDB Corporation.
 
 #include "log0log.h"
 
+/** innodb_encrypt_log: whether to encrypt the redo log */
+extern my_bool srv_encrypt_log;
+
 /** Initialize the redo log encryption key and random parameters
 when creating a new redo log.
 The random parameters will be persisted in the log header.
@@ -84,7 +87,7 @@ void log_decrypt_buf(const byte *iv, byte *buf, const byte *const end);
 
 /** Encrypt or decrypt a temporary file block.
 @param[in]	src		block to encrypt or decrypt
-@param[in]	size		size of the block
+@param[in]	size		length of both src and dst in bytes
 @param[out]	dst		destination block
 @param[in]	offs		offset to block
 @param[in]	encrypt		true=encrypt; false=decrypt
@@ -99,7 +102,7 @@ bool log_tmp_block_encrypt(
 
 /** Decrypt a temporary file block.
 @param[in]	src		block to decrypt
-@param[in]	size		size of the block
+@param[in]	size		length of both src and dst in bytes
 @param[out]	dst		destination block
 @param[in]	offs		offset to block
 @return whether the operation succeeded */

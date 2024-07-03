@@ -1502,6 +1502,9 @@ bool Field::sp_prepare_and_store_item(THD *thd, Item **value)
   if (!(expr_item= thd->sp_fix_func_item_for_assignment(this, value)))
     goto error;
 
+  if (expr_item->check_is_evaluable_expression_or_error())
+    goto error;
+
   /* Save the value in the field. Convert the value if needed. */
 
   expr_item->save_in_field(this, 0);
@@ -2045,7 +2048,7 @@ int Field::store_text(const char *to, size_t length, CHARSET_INFO *cs,
 }
 
 
-int Field::store_timestamp_dec(const timeval &ts, uint dec)
+int Field::store_timestamp_dec(const my_timeval &ts, uint dec)
 {
   return store_time_dec(Datetime(get_thd(), ts).get_mysql_time(), dec);
 }
@@ -2202,8 +2205,8 @@ void Field::make_send_field(Send_field *field)
     field->db_name= orig_table->s->db;
     if (orig_table->pos_in_table_list &&
         orig_table->pos_in_table_list->schema_table)
-      field->org_table_name= Lex_cstring_strlen(orig_table->pos_in_table_list->
-                                                schema_table->table_name);
+      field->org_table_name= orig_table->pos_in_table_list->
+                                                schema_table->table_name;
     else
       field->org_table_name= orig_table->s->table_name;
   }
@@ -4741,30 +4744,6 @@ bool Field_longlong::is_max()
   single precision float
 ****************************************************************************/
 
-Field_float::Field_float(uchar *ptr_arg, uint32 len_arg, uchar *null_ptr_arg,
-                         uchar null_bit_arg,
-                         enum utype unireg_check_arg,
-                         const LEX_CSTRING *field_name_arg,
-                         decimal_digits_t dec_arg,
-                         bool zero_arg, bool unsigned_arg)
-  :Field_real(ptr_arg, len_arg, null_ptr_arg, null_bit_arg,
-              unireg_check_arg, field_name_arg,
-              (dec_arg >= FLOATING_POINT_DECIMALS ? NOT_FIXED_DEC : dec_arg),
-              zero_arg, unsigned_arg)
-{
-}
-
-Field_float::Field_float(uint32 len_arg, bool maybe_null_arg,
-                         const LEX_CSTRING *field_name_arg,
-                         decimal_digits_t dec_arg)
-  :Field_real((uchar*) 0, len_arg, maybe_null_arg ? (uchar*) "": 0, (uint) 0,
-              NONE, field_name_arg,
-              (dec_arg >= FLOATING_POINT_DECIMALS ? NOT_FIXED_DEC : dec_arg),
-              0, 0)
-{
-}
-
-
 int Field_float::store(const char *from,size_t len,CHARSET_INFO *cs)
 {
   int error;
@@ -4912,40 +4891,6 @@ Binlog_type_info Field_float::binlog_type_info() const
 /****************************************************************************
   double precision floating point numbers
 ****************************************************************************/
-
-Field_double::Field_double(uchar *ptr_arg, uint32 len_arg, uchar *null_ptr_arg,
-                           uchar null_bit_arg,
-                           enum utype unireg_check_arg,
-                           const LEX_CSTRING *field_name_arg,
-                           decimal_digits_t dec_arg,
-                           bool zero_arg, bool unsigned_arg)
-  :Field_real(ptr_arg, len_arg, null_ptr_arg, null_bit_arg,
-              unireg_check_arg, field_name_arg,
-              (dec_arg >= FLOATING_POINT_DECIMALS ? NOT_FIXED_DEC : dec_arg),
-              zero_arg, unsigned_arg)
-{
-}
-
-Field_double::Field_double(uint32 len_arg, bool maybe_null_arg,
-                           const LEX_CSTRING *field_name_arg,
-                           decimal_digits_t dec_arg)
-  :Field_real((uchar*) 0, len_arg, maybe_null_arg ? (uchar*) "" : 0, (uint) 0,
-              NONE, field_name_arg,
-              (dec_arg >= FLOATING_POINT_DECIMALS ? NOT_FIXED_DEC : dec_arg),
-              0, 0)
-{
-}
-
-Field_double::Field_double(uint32 len_arg, bool maybe_null_arg,
-                           const LEX_CSTRING *field_name_arg,
-                           decimal_digits_t dec_arg, bool not_fixed_arg)
-  :Field_real((uchar*) 0, len_arg, maybe_null_arg ? (uchar*) "" : 0, (uint) 0,
-              NONE, field_name_arg,
-              (dec_arg >= FLOATING_POINT_DECIMALS ? NOT_FIXED_DEC : dec_arg),
-              0, 0)
-{
-  not_fixed= not_fixed_arg;
-}
 
 int Field_double::store(const char *from,size_t len,CHARSET_INFO *cs)
 {
@@ -5335,6 +5280,8 @@ int Field_timestamp::save_in_field(Field *to)
 {
   ulong sec_part;
   my_time_t ts= get_timestamp(&sec_part);
+  if (!ts && !sec_part)
+    return to->store_time_dec(Datetime::zero().get_mysql_time(), decimals());
   return to->store_timestamp_dec(Timeval(ts, sec_part), decimals());
 }
 
@@ -5343,14 +5290,14 @@ my_time_t Field_timestamp0::get_timestamp(const uchar *pos,
 {
   DBUG_ASSERT(marked_for_read());
   *sec_part= 0;
-  return sint4korr(pos);
+  return uint4korr(pos);
 }
 
 
 bool Field_timestamp0::val_native(Native *to)
 {
   DBUG_ASSERT(marked_for_read());
-  my_time_t sec= (my_time_t) sint4korr(ptr);
+  my_time_t sec= (my_time_t) uint4korr(ptr);
   return Timestamp_or_zero_datetime(Timestamp(sec, 0), sec == 0).
            to_native(to, 0);
 }
@@ -5456,11 +5403,33 @@ int Field_timestamp::store(longlong nr, bool unsigned_val)
 }
 
 
-int Field_timestamp::store_timestamp_dec(const timeval &ts, uint dec)
+int Field_timestamp::store_timestamp_dec(const my_timeval &tv, uint dec)
 {
   int warn= 0;
   time_round_mode_t mode= Datetime::default_round_mode(get_thd());
-  store_TIMESTAMP(Timestamp(ts).round(decimals(), mode, &warn));
+  const Timestamp ts= Timestamp(tv).round(decimals(), mode, &warn);
+  store_TIMESTAMP(ts);
+  if (ts.tv_sec == 0 && ts.tv_usec == 0)
+  {
+    /*
+      The value {tv_sec==0, tv_usec==0} here means '1970-01-01 00:00:00 +00'.
+      It does not mean zero datetime! because store_timestamp_dec() knows
+      nothing about zero dates. It inserts only real timeval values.
+      Zero ts={0,0} here is possible in two scenarios:
+      - the passed tv was already {0,0} meaning '1970-01-01 00:00:00 +00'
+      - the passed tv had some microseconds but they were rounded/truncated
+        to zero: '1970-01-01 00:00:00.1 +00' -> '1970-01-01 00:00:00 +00'.
+      It does not matter whether rounding/truncation really happened.
+      In both cases the call for store_TIMESTAMP(ts) above re-interpreted
+      '1970-01-01 00:00:00 +00:00' to zero date. Return 1 no matter what
+      sql_mode is. Even if sql_mode allows zero dates, there is still a problem
+      here: '1970-01-01 00:00:00 +00' could not be stored as-is!
+    */
+    ErrConvString str(STRING_WITH_LEN("1970-01-01 00:00:00 +00:00"),
+                      system_charset_info);
+    set_datetime_warning(ER_WARN_DATA_OUT_OF_RANGE, &str, "datetime", 1);
+    return 1; // '1970-01-01 00:00:00 +00' was converted to a zero date
+  }
   if (warn)
   {
     /*
@@ -5474,9 +5443,6 @@ int Field_timestamp::store_timestamp_dec(const timeval &ts, uint dec)
     */
     set_warning(Sql_condition::WARN_LEVEL_WARN, ER_WARN_DATA_OUT_OF_RANGE, 1);
   }
-  if (ts.tv_sec == 0 && ts.tv_usec == 0 &&
-      get_thd()->variables.sql_mode & (ulonglong) TIME_NO_ZERO_DATE)
-    return zero_time_stored_return_code_with_warning();
   return 0;
 }
 
@@ -5508,7 +5474,7 @@ int Field_timestamp::store_native(const Native &value)
     Field_timestamp*::store_timestamp_dec() do not use the "dec" parameter.
     Passing TIME_SECOND_PART_DIGITS is OK.
   */
-  return store_timestamp_dec(Timestamp(value).tv(), TIME_SECOND_PART_DIGITS);
+  return store_timestamp_dec(Timestamp(value), TIME_SECOND_PART_DIGITS);
 }
 
 
@@ -5527,7 +5493,7 @@ longlong Field_timestamp::val_int(void)
 String *Field_timestamp::val_str(String *val_buffer, String *val_ptr)
 {
   MYSQL_TIME ltime;
-  uint32 temp, temp2;
+  uint32 year, temp, temp2;
   uint dec;
   char *to;
 
@@ -5542,17 +5508,14 @@ String *Field_timestamp::val_str(String *val_buffer, String *val_ptr)
   }
   val_buffer->set_charset(&my_charset_numeric);	// Safety
    
-  temp= ltime.year % 100;
-  if (temp < YY_PART_YEAR - 1)
-  {
-    *to++= '2';
-    *to++= '0';
-  }
-  else
-  {
-    *to++= '1';
-    *to++= '9';
-  }
+  temp= ltime.year;
+  DBUG_ASSERT(temp >= 1969);
+
+  year= temp/100;
+  temp-= year*100;
+  temp2= year/10; year= year-temp2*10;
+  *to++= (char) ('0'+(char) (temp2));
+  *to++= (char) ('0'+(char) (year));
   temp2=temp/10; temp=temp-temp2*10;
   *to++= (char) ('0'+(char) (temp2));
   *to++= (char) ('0'+(char) (temp));
@@ -5625,10 +5588,10 @@ bool Field_timestamp0::send(Protocol *protocol)
 
 int Field_timestamp0::cmp(const uchar *a_ptr, const uchar *b_ptr) const
 {
-  int32 a,b;
-  a=sint4korr(a_ptr);
-  b=sint4korr(b_ptr);
-  return ((uint32) a < (uint32) b) ? -1 : ((uint32) a > (uint32) b) ? 1 : 0;
+  time_t a,b;
+  a= uint4korr(a_ptr);
+  b= uint4korr(b_ptr);
+  return (a < b ) ? -1 : (a > b) ? 1 : 0;
 }
 
 
@@ -5712,7 +5675,7 @@ static longlong read_native(const uchar *from, uint bytes)
 #endif
 
 
-void Field_timestamp_hires::store_TIMEVAL(const timeval &tv)
+void Field_timestamp_hires::store_TIMEVAL(const my_timeval &tv)
 {
   mi_int4store(ptr, tv.tv_sec);
   store_bigendian(sec_part_shift(tv.tv_usec, dec), ptr+4, sec_part_bytes(dec));
@@ -5730,7 +5693,7 @@ my_time_t Field_timestamp_hires::get_timestamp(const uchar *pos,
 bool Field_timestamp_hires::val_native(Native *to)
 {
   DBUG_ASSERT(marked_for_read());
-  struct timeval tm;
+  struct my_timeval tm;
   tm.tv_sec= mi_uint4korr(ptr);
   tm.tv_usec= (ulong) sec_part_unshift(read_bigendian(ptr+4, sec_part_bytes(dec)), dec);
   return Timestamp_or_zero_datetime(Timestamp(tm), tm.tv_sec == 0).
@@ -5807,7 +5770,7 @@ void Field_timestamp_with_dec::make_send_field(Send_field *field)
 ** MySQL-5.6 compatible TIMESTAMP(N)
 **************************************************************/
 
-void Field_timestampf::store_TIMEVAL(const timeval &tm)
+void Field_timestampf::store_TIMEVAL(const my_timeval &tm)
 {
   my_timestamp_to_binary(&tm, ptr, dec);
 }
@@ -5827,28 +5790,33 @@ void Field_timestampf::set_max()
 
 bool Field_timestampf::is_max()
 {
+  longlong timestamp= mi_uint4korr(ptr);
   DBUG_ENTER("Field_timestampf::is_max");
   DBUG_ASSERT(marked_for_read());
 
-  DBUG_RETURN(mi_sint4korr(ptr) == TIMESTAMP_MAX_VALUE &&
-              mi_sint3korr(ptr + 4) == TIME_MAX_SECOND_PART);
+  /* Allow old max value and new max value */
+  DBUG_RETURN((timestamp == TIMESTAMP_MAX_VALUE ||
+               timestamp == INT_MAX32) &&
+              mi_uint3korr(ptr + 4) == TIME_MAX_SECOND_PART);
 }
 
 my_time_t Field_timestampf::get_timestamp(const uchar *pos,
                                           ulong *sec_part) const
 {
-  struct timeval tm;
+  struct my_timeval tm;
   my_timestamp_from_binary(&tm, pos, dec);
   *sec_part= tm.tv_usec;
-  return tm.tv_sec;
+  return (my_time_t) tm.tv_sec;
 }
 
 
 bool Field_timestampf::val_native(Native *to)
 {
   DBUG_ASSERT(marked_for_read());
+  char zero[8]= "\0\0\0\0\0\0\0";
+  DBUG_ASSERT(pack_length () <= sizeof(zero));
   // Check if it's '0000-00-00 00:00:00' rather than a real timestamp
-  if (ptr[0] == 0 && ptr[1] == 0 && ptr[2] == 0 && ptr[3] == 0)
+  if (!memcmp(ptr, zero, pack_length()))
   {
     to->length(0);
     return false;
@@ -7743,7 +7711,20 @@ int Field_string::cmp(const uchar *a_ptr, const uchar *b_ptr) const
                                                    a_ptr, field_length,
                                                    b_ptr, field_length,
                                                    Field_string::char_length(),
-                        MY_STRNNCOLLSP_NCHARS_EMULATE_TRIMMED_TRAILING_SPACES);
+                                                   0);
+}
+
+
+int Field_string::cmp_prefix(const uchar *a_ptr, const uchar *b_ptr,
+                             size_t prefix_char_len) const
+{
+  size_t field_len= table->field[field_index]->field_length;
+
+  return field_charset()->coll->strnncollsp_nchars(field_charset(),
+                                                   a_ptr, field_len,
+                                                   b_ptr, field_len,
+                                                   prefix_char_len,
+                                                   0);
 }
 
 
@@ -9386,7 +9367,7 @@ int Field_enum::store(const char *from,size_t length,CHARSET_INFO *cs)
 
   /* Remove end space */
   length= (uint) field_charset()->lengthsp(from, length);
-  uint tmp=find_type2(typelib, from, length, field_charset());
+  uint tmp=find_type2(m_typelib, from, length, field_charset());
   if (!tmp)
   {
     if (length < 6) // Can't be more than 99999 enums
@@ -9394,7 +9375,7 @@ int Field_enum::store(const char *from,size_t length,CHARSET_INFO *cs)
       /* This is for reading numbers with LOAD DATA INFILE */
       char *end;
       tmp=(uint) cs->strntoul(from,length,10,&end,&err);
-      if (err || end != from+length || tmp > typelib->count)
+      if (err || end != from + length || tmp > m_typelib->count)
       {
 	tmp=0;
 	set_warning(WARN_DATA_TRUNCATED, 1);
@@ -9424,7 +9405,7 @@ int Field_enum::store(longlong nr, bool unsigned_val)
 {
   DBUG_ASSERT(marked_for_write_or_computed());
   int error= 0;
-  if ((ulonglong) nr > typelib->count || nr == 0)
+  if ((ulonglong) nr > m_typelib->count || nr == 0)
   {
     set_warning(WARN_DATA_TRUNCATED, 1);
     if (nr != 0 || get_thd()->count_cuted_fields > CHECK_FIELD_EXPRESSION)
@@ -9470,7 +9451,7 @@ Binlog_type_info Field_enum::binlog_type_info() const
 {
   DBUG_ASSERT(Field_enum::type() == binlog_type());
   return Binlog_type_info(Field_enum::type(), real_type() + (pack_length() << 8),
-                          2, charset(), (TYPELIB *)get_typelib(), NULL);
+                          2, charset(), m_typelib, NULL);
 }
 
 
@@ -9478,12 +9459,12 @@ String *Field_enum::val_str(String *val_buffer __attribute__((unused)),
 			    String *val_ptr)
 {
   uint tmp=(uint) Field_enum::val_int();
-  if (!tmp || tmp > typelib->count)
+  if (!tmp || tmp > m_typelib->count)
     val_ptr->set("", 0, field_charset());
   else
-    val_ptr->set((const char*) typelib->type_names[tmp-1],
-		 typelib->type_lengths[tmp-1],
-		 field_charset());
+    val_ptr->set((const char*) m_typelib->type_names[tmp - 1],
+                 m_typelib->type_lengths[tmp - 1],
+                 field_charset());
   return val_ptr;
 }
 
@@ -9515,8 +9496,8 @@ void Field_enum::sql_type(String &res) const
   res.append(STRING_WITH_LEN("enum("));
 
   bool flag=0;
-  uint *len= typelib->type_lengths;
-  for (const char **pos= typelib->type_names; *pos; pos++, len++)
+  uint *len= m_typelib->type_lengths;
+  for (const char **pos= m_typelib->type_names; *pos; pos++, len++)
   {
     uint dummy_errors;
     if (flag)
@@ -9536,7 +9517,7 @@ Field *Field_enum::make_new_field(MEM_ROOT *root, TABLE *new_table,
   Field_enum *res= (Field_enum*) Field::make_new_field(root, new_table,
                                                        keep_type);
   if (res)
-    res->typelib= copy_typelib(root, typelib);
+    res->m_typelib= copy_typelib(root, m_typelib);
   return res;
 }
 
@@ -9569,7 +9550,7 @@ int Field_set::store(const char *from,size_t length,CHARSET_INFO *cs)
     from= tmpstr.ptr();
     length=  tmpstr.length();
   }
-  ulonglong tmp= find_set(typelib, from, length, field_charset(),
+  ulonglong tmp= find_set(m_typelib, from, length, field_charset(),
                           &not_used, &not_used2, &got_warning);
   if (!tmp && length && length < 22)
   {
@@ -9597,10 +9578,10 @@ int Field_set::store(longlong nr, bool unsigned_val)
   int error= 0;
   ulonglong max_nr;
 
-  if (sizeof(ulonglong)*8 <= typelib->count)
+  if (sizeof(ulonglong) * 8 <= m_typelib->count)
     max_nr= ULONGLONG_MAX;
   else
-    max_nr= (1ULL << typelib->count) - 1;
+    max_nr= (1ULL << m_typelib->count) - 1;
 
   if ((ulonglong) nr > max_nr)
   {
@@ -9622,13 +9603,13 @@ String *Field_set::val_str(String *val_buffer,
   val_buffer->set_charset(field_charset());
   val_buffer->length(0);
 
-  while (tmp && bitnr < (uint) typelib->count)
+  while (tmp && bitnr < (uint) m_typelib->count)
   {
     if (tmp & 1)
     {
       if (val_buffer->length())
 	val_buffer->append(&field_separator, 1, &my_charset_latin1);
-      String str(typelib->type_names[bitnr], typelib->type_lengths[bitnr],
+      String str(m_typelib->type_names[bitnr], m_typelib->type_lengths[bitnr],
 		 field_charset());
       val_buffer->append(str);
     }
@@ -9648,8 +9629,8 @@ void Field_set::sql_type(String &res) const
   res.append(STRING_WITH_LEN("set("));
 
   bool flag=0;
-  uint *len= typelib->type_lengths;
-  for (const char **pos= typelib->type_names; *pos; pos++, len++)
+  uint *len= m_typelib->type_lengths;
+  for (const char **pos= m_typelib->type_names; *pos; pos++, len++)
   {
     uint dummy_errors;
     if (flag)
@@ -9666,7 +9647,7 @@ Binlog_type_info Field_set::binlog_type_info() const
 {
   DBUG_ASSERT(Field_set::type() == binlog_type());
   return Binlog_type_info(Field_set::type(), real_type()
-           + (pack_length() << 8), 2, charset(), NULL, (TYPELIB *)get_typelib());
+           + (pack_length() << 8), 2, charset(), NULL, m_typelib);
 }
 
 /**
@@ -9713,13 +9694,13 @@ bool Field_enum::eq_def(const Field *field) const
   if (!Field::eq_def(field))
     return FALSE;
 
-  values= ((Field_enum*) field)->typelib;
+  values= ((Field_enum*) field)->m_typelib;
 
   /* Definition must be strictly equal. */
-  if (typelib->count != values->count)
+  if (m_typelib->count != values->count)
     return FALSE;
 
-  return compare_type_names(field_charset(), typelib, values);
+  return compare_type_names(field_charset(), m_typelib, values);
 }
 
 
@@ -9734,8 +9715,6 @@ bool Field_enum::eq_def(const Field *field) const
 
 bool Field_enum::is_equal(const Column_definition &new_field) const
 {
-  const TYPELIB *values= new_field.interval;
-
   /*
     The fields are compatible if they have the same flags,
     type, charset and have the same underlying length.
@@ -9750,11 +9729,11 @@ bool Field_enum::is_equal(const Column_definition &new_field) const
     enumeration or set members to the end of the list of valid member
     values only alters table metadata and not table data.
   */
-  if (typelib->count > values->count)
+  if (m_typelib->count > new_field.typelib()->count)
     return false;
 
   /* Check whether there are modification before the end. */
-  if (! compare_type_names(field_charset(), typelib, new_field.interval))
+  if (! compare_type_names(field_charset(), m_typelib, new_field.typelib()))
     return false;
 
   return true;
@@ -10450,9 +10429,10 @@ bool Column_definition::create_interval_from_interval_list(MEM_ROOT *mem_root,
                                                bool reuse_interval_list_values)
 {
   DBUG_ENTER("Column_definition::create_interval_from_interval_list");
-  DBUG_ASSERT(!interval);
+  DBUG_ASSERT(!typelib());
   TYPELIB *tmpint;
-  if (!(interval= tmpint= (TYPELIB*) alloc_root(mem_root, sizeof(TYPELIB))))
+  if (!set_typelib(tmpint= (TYPELIB*) alloc_root(mem_root, sizeof(TYPELIB))).
+         typelib())
     DBUG_RETURN(true); // EOM
 
   List_iterator<String> it(interval_list);
@@ -10521,7 +10501,8 @@ bool Column_definition::create_interval_from_interval_list(MEM_ROOT *mem_root,
   interval_list.empty();  // Don't need interval_list anymore
   DBUG_RETURN(false);
 err:
-  interval= NULL;  // Avoid having both non-empty interval_list and interval
+  // Avoid having both non-empty interval_list and the typelib attribute
+  set_typelib(NULL);
   DBUG_RETURN(true);
 }
 
@@ -10549,7 +10530,7 @@ bool Column_definition::prepare_interval_field(MEM_ROOT *mem_root,
     as the parser requires at least one element, so for a ENUM or SET field it
     should never happen that both internal_list.elements and interval are 0.
   */
-  DBUG_ASSERT((interval == NULL) == (interval_list.elements > 0));
+  DBUG_ASSERT((typelib() == NULL) == (interval_list.elements > 0));
 
   /*
     Create typelib from interval_list, and if necessary
@@ -10572,8 +10553,8 @@ bool Column_definition::prepare_interval_field(MEM_ROOT *mem_root,
       as the original field can be freed before the end of the life
       cycle of "this".
     */
-    DBUG_ASSERT(interval);
-    if (!(interval= copy_typelib(mem_root, interval)))
+    DBUG_ASSERT(typelib());
+    if (!set_typelib(copy_typelib(mem_root, typelib())).typelib())
       DBUG_RETURN(true);
   }
   prepare_interval_field_calc_length();
@@ -10630,16 +10611,15 @@ void Column_definition::create_length_to_internal_length_newdecimal()
 }
 
 
-bool check_expression(Virtual_column_info *vcol, const LEX_CSTRING *name,
+bool check_expression(Virtual_column_info *vcol, const Lex_ident_column &name,
                       enum_vcol_info_type type, Alter_info *alter_info)
-
 {
   bool ret;
   Item::vcol_func_processor_result res;
   res.alter_info= alter_info;
 
   if (!vcol->name.length)
-    vcol->name= *name;
+    vcol->name= name;
 
   /*
     Walk through the Item tree checking if all items are valid
@@ -10657,7 +10637,7 @@ bool check_expression(Virtual_column_info *vcol, const LEX_CSTRING *name,
   if (unlikely(ret || (res.errors & filter)))
   {
     my_error(ER_GENERATED_COLUMN_FUNCTION_IS_NOT_ALLOWED, MYF(0), res.name,
-             vcol_type_name(type), name->str);
+             vcol_type_name(type), name.str);
     return TRUE;
   }
   /*
@@ -10764,7 +10744,7 @@ bool Column_definition::fix_attributes_temporal_with_time(uint int_part_length)
 bool Column_definition::validate_check_constraint(THD *thd)
 {
   return check_constraint &&
-         check_expression(check_constraint, &field_name, VCOL_CHECK_FIELD);
+         check_expression(check_constraint, field_name, VCOL_CHECK_FIELD);
 }
 
 
@@ -10777,7 +10757,7 @@ bool Column_definition::check(THD *thd)
   {
     DBUG_ASSERT(vcol_info->expr);
     vcol_info->set_handler(type_handler());
-    if (check_expression(vcol_info, &field_name, vcol_info->stored_in_db
+    if (check_expression(vcol_info, field_name, vcol_info->is_stored()
                          ? VCOL_GENERATED_STORED : VCOL_GENERATED_VIRTUAL))
       DBUG_RETURN(TRUE);
   }
@@ -10788,7 +10768,7 @@ bool Column_definition::check(THD *thd)
   if (default_value)
   {
     Item *def_expr= default_value->expr;
-    if (check_expression(default_value, &field_name, VCOL_DEFAULT))
+    if (check_expression(default_value, field_name, VCOL_DEFAULT))
       DBUG_RETURN(TRUE);
 
     /* Constant's are stored in the 'empty_record', except for blobs */
@@ -10932,7 +10912,7 @@ Field *Column_definition_attributes::make_field(TABLE_SHARE *share,
 {
   DBUG_ASSERT(length <= UINT_MAX32);
   DBUG_PRINT("debug", ("field_type: %s, field_length: %u, interval: %p, pack_flag: %s%s%s%s%s",
-                       handler->name().ptr(), (uint) length, interval,
+                       handler->name().ptr(), (uint) length, typelib(),
                        FLAGSTR(pack_flag, FIELDFLAG_BINARY),
                        FLAGSTR(pack_flag, FIELDFLAG_INTERVAL),
                        FLAGSTR(pack_flag, FIELDFLAG_NUMBER),
@@ -10961,9 +10941,7 @@ bool Field_vers_trx_id::test_if_equality_guarantees_uniqueness(const Item* item)
 
 Column_definition_attributes::Column_definition_attributes(const Field *field)
  :length(field->character_octet_length() / field->charset()->mbmaxlen),
-  interval(NULL),
   charset(field->charset()), // May be NULL ptr
-  srid(0),
   pack_flag(0),
   decimals(field->decimals()),
   unireg_check(field->unireg_check)
@@ -10972,10 +10950,9 @@ Column_definition_attributes::Column_definition_attributes(const Field *field)
 
 Column_definition_attributes::
   Column_definition_attributes(const Type_all_attributes &attr)
- :length(attr.max_length),
-  interval(attr.get_typelib()),
+  :Type_extra_attributes(attr.type_extra_attributes()),
+  length(attr.max_length),
   charset(attr.collation.collation),
-  srid(0),
   pack_flag(attr.unsigned_flag ? 0 : FIELDFLAG_DECIMAL),
   decimals(attr.decimals),
   unireg_check(Field::NONE)
@@ -10988,7 +10965,6 @@ Column_definition::Column_definition(THD *thd, Field *old_field,
                                                Field *orig_field)
  :Column_definition_attributes(old_field)
 {
-  srid= 0;
   on_update=  NULL;
   field_name= old_field->field_name;
   flags=      old_field->flags;
@@ -11080,6 +11056,7 @@ Column_definition::redefine_stage1_common(const Column_definition *dup_field,
                                           const handler *file)
 {
   set_handler(dup_field->type_handler());
+  Type_extra_attributes::operator=(*dup_field);
   default_value= dup_field->default_value;
   DBUG_ASSERT(dup_field->charset); // Set by prepare_stage1()
   charset=      dup_field->charset;
@@ -11088,7 +11065,6 @@ Column_definition::redefine_stage1_common(const Column_definition *dup_field,
   decimals=     dup_field->decimals;
   unireg_check= dup_field->unireg_check;
   flags=        dup_field->flags;
-  interval=     dup_field->interval;
   vcol_info=    dup_field->vcol_info;
   invisible=    dup_field->invisible;
   check_constraint= dup_field->check_constraint;
@@ -11179,49 +11155,12 @@ bool Column_definition::set_compressed(const char *method)
 }
 
 
-bool Column_definition::set_compressed_deprecated(THD *thd, const char *method)
-{
-  push_warning_printf(thd, Sql_condition::WARN_LEVEL_WARN,
-                      ER_WARN_DEPRECATED_SYNTAX,
-                      ER_THD(thd, ER_WARN_DEPRECATED_SYNTAX),
-                      "<data type> <character set clause> ... COMPRESSED...",
-                      "'<data type> COMPRESSED... <character set clause> ...'");
-  return set_compressed(method);
-}
-
-
-bool
-Column_definition::set_compressed_deprecated_column_attribute(THD *thd,
-                                                              const char *pos,
-                                                              const char *method)
-{
-  if (compression_method_ptr)
-  {
-    /*
-      Compression method has already been set, e.g.:
-        a VARCHAR(10) COMPRESSED DEFAULT 10 COMPRESSED
-    */
-    thd->parse_error(ER_SYNTAX_ERROR, pos);
-    return true;
-  }
-  enum enum_field_types sql_type= real_field_type();
-  /* We can't use f_is_blob here as pack_flag is not yet set */
-  if (sql_type == MYSQL_TYPE_VARCHAR || sql_type == MYSQL_TYPE_TINY_BLOB ||
-      sql_type == MYSQL_TYPE_BLOB || sql_type == MYSQL_TYPE_MEDIUM_BLOB ||
-      sql_type == MYSQL_TYPE_LONG_BLOB)
-    return set_compressed_deprecated(thd, method);
-  else
-    my_error(ER_WRONG_FIELD_SPEC, MYF(0), field_name.str);
-  return true;
-}
-
-
 bool Column_definition::check_vcol_for_key(THD *thd) const
 {
   if (vcol_info && (vcol_info->flags & VCOL_NOT_STRICTLY_DETERMINISTIC))
   {
     /* use check_expression() to report an error */
-    check_expression(vcol_info, &field_name, VCOL_GENERATED_STORED);
+    check_expression(vcol_info, field_name, VCOL_GENERATED_STORED);
     DBUG_ASSERT(thd->is_error());
     return true;
   }
@@ -11396,6 +11335,7 @@ void Field::set_warning_truncated_wrong_value(const char *type_arg,
 void Field::raise_note_cannot_use_key_part(THD *thd,
                                            uint keynr, uint part,
                                            const LEX_CSTRING &op,
+                                           CHARSET_INFO *op_collation,
                                            Item *value,
                                            Data_type_compatibility reason)
                                            const
@@ -11416,7 +11356,7 @@ void Field::raise_note_cannot_use_key_part(THD *thd,
   case Data_type_compatibility::INCOMPATIBLE_COLLATION:
     {
       const LEX_CSTRING colf(charset()->coll_name);
-      const LEX_CSTRING colv(value->collation.collation->coll_name);
+      const LEX_CSTRING colv(op_collation->coll_name);
       push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE,
                           ER_UNKNOWN_ERROR,
                           "Cannot use key %`.*s part[%u] for lookup: "
@@ -11525,6 +11465,30 @@ bool Field::validate_value_in_record_with_warn(THD *thd, const uchar *record)
 }
 
 
+/**
+  Find which reaction should be for IGNORE value.
+*/
+
+ignore_value_reaction find_ignore_reaction(THD *thd)
+{
+  enum_sql_command com= thd->lex->sql_command;
+
+  // All insert-like commands
+  if (com == SQLCOM_INSERT || com == SQLCOM_REPLACE ||
+      com == SQLCOM_INSERT_SELECT || com == SQLCOM_REPLACE_SELECT ||
+      com == SQLCOM_LOAD)
+  {
+    return IGNORE_MEANS_DEFAULT;
+  }
+  // Update commands
+  if (com == SQLCOM_UPDATE || com == SQLCOM_UPDATE_MULTI)
+  {
+    return IGNORE_MEANS_FIELD_VALUE;
+  }
+  return IGNORE_MEANS_ERROR;
+}
+
+
 bool Field::save_in_field_default_value(bool view_error_processing)
 {
   THD *thd= table->in_use;
@@ -11598,6 +11562,15 @@ void Field::register_field_in_read_map()
     vcol_item->walk(&Item::register_field_in_read_map, 1, 0);
   }
   bitmap_set_bit(table->read_set, field_index);
+}
+
+
+LEX_STRING Field::val_lex_string_strmake(MEM_ROOT *mem)
+{
+  StringBuffer<MAX_FIELD_WIDTH> str;
+  val_str(&str);
+  char *to= strmake_root(mem, str.ptr(), str.length());
+  return to ? LEX_STRING{to, str.length()} : LEX_STRING{NULL, 0};
 }
 
 

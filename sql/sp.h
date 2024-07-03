@@ -35,6 +35,7 @@ class sp_head;
 class sp_package;
 class sp_pcontext;
 class sp_name;
+class sp_expr_lex;
 class Database_qualified_name;
 struct st_sp_chistics;
 class Stored_program_creation_ctx;
@@ -102,10 +103,10 @@ protected:
   int sp_cache_package_routine(THD *thd,
                                const LEX_CSTRING &pkgname_cstr,
                                const Database_qualified_name *name,
-                               bool lookup_only, sp_head **sp) const;
+                               sp_head **sp) const;
   int sp_cache_package_routine(THD *thd,
                                const Database_qualified_name *name,
-                               bool lookup_only, sp_head **sp) const;
+                               sp_head **sp) const;
   sp_head *sp_find_package_routine(THD *thd,
                                    const LEX_CSTRING pkgname_str,
                                    const Database_qualified_name *name,
@@ -133,12 +134,6 @@ public:
     return sph ? sph->sp_handler_mysql_proc() : NULL;
   }
 
-  static bool eq_routine_name(const LEX_CSTRING &name1,
-                              const LEX_CSTRING &name2)
-  {
-    return system_charset_info->strnncoll(name1.str, name1.length,
-                                          name2.str, name2.length) == 0;
-  }
   const char *type_str() const { return type_lex_cstring().str; }
   virtual const char *show_create_routine_col1_caption() const
   {
@@ -156,6 +151,8 @@ public:
   }
   virtual enum_sp_type type() const= 0;
   virtual LEX_CSTRING type_lex_cstring() const= 0;
+  virtual enum_sql_command sqlcom_create() const= 0;
+  virtual enum_sql_command sqlcom_drop() const= 0;
   virtual LEX_CSTRING empty_body_lex_cstring(sql_mode_t mode) const
   {
     static LEX_CSTRING m_empty_body= {STRING_WITH_LEN("???")};
@@ -185,7 +182,7 @@ public:
   }
   virtual bool add_instr_freturn(THD *thd, sp_head *sp,
                                  sp_pcontext *spcont,
-                                 Item *item, LEX *lex) const;
+                                 Item *item, sp_expr_lex *lex) const;
   virtual bool add_instr_preturn(THD *thd, sp_head *sp,
                                  sp_pcontext *spcont) const;
 
@@ -202,7 +199,7 @@ public:
                                    const Database_qualified_name *name,
                                    bool cache_only) const;
   virtual int sp_cache_routine(THD *thd, const Database_qualified_name *name,
-                               bool lookup_only, sp_head **sp) const;
+                               sp_head **sp) const;
 
   int sp_cache_routine_reentrant(THD *thd,
                                  const Database_qualified_name *nm,
@@ -255,6 +252,8 @@ public:
     static LEX_CSTRING m_type_str= { STRING_WITH_LEN("PROCEDURE")};
     return m_type_str;
   }
+  enum_sql_command sqlcom_create() const { return SQLCOM_CREATE_PROCEDURE; }
+  enum_sql_command sqlcom_drop() const { return SQLCOM_DROP_PROCEDURE; }
   LEX_CSTRING empty_body_lex_cstring(sql_mode_t mode) const;
   const char *show_create_routine_col1_caption() const
   {
@@ -283,9 +282,9 @@ class Sp_handler_package_procedure: public Sp_handler_procedure
 {
 public:
   int sp_cache_routine(THD *thd, const Database_qualified_name *name,
-                       bool lookup_only, sp_head **sp) const
+                       sp_head **sp) const
   {
-    return sp_cache_package_routine(thd, name, lookup_only, sp);
+    return sp_cache_package_routine(thd, name, sp);
   }
   sp_head *sp_find_routine(THD *thd,
                            const Database_qualified_name *name,
@@ -305,6 +304,8 @@ public:
     static LEX_CSTRING m_type_str= { STRING_WITH_LEN("FUNCTION")};
     return m_type_str;
   }
+  enum_sql_command sqlcom_create() const { return SQLCOM_CREATE_FUNCTION; }
+  enum_sql_command sqlcom_drop() const { return SQLCOM_DROP_FUNCTION; }
   LEX_CSTRING empty_body_lex_cstring(sql_mode_t mode) const;
   const char *show_create_routine_col1_caption() const
   {
@@ -324,7 +325,7 @@ public:
   HASH *get_priv_hash() const;
 #endif
   bool add_instr_freturn(THD *thd, sp_head *sp, sp_pcontext *spcont,
-                         Item *item, LEX *lex) const;
+                         Item *item, sp_expr_lex *lex) const;
 };
 
 
@@ -332,9 +333,9 @@ class Sp_handler_package_function: public Sp_handler_function
 {
 public:
   int sp_cache_routine(THD *thd, const Database_qualified_name *name,
-                       bool lookup_only, sp_head **sp) const
+                       sp_head **sp) const
   {
-    return sp_cache_package_routine(thd, name, lookup_only, sp);
+    return sp_cache_package_routine(thd, name, sp);
   }
   sp_head *sp_find_routine(THD *thd,
                            const Database_qualified_name *name,
@@ -374,6 +375,8 @@ public:
     static LEX_CSTRING m_type_str= {STRING_WITH_LEN("PACKAGE")};
     return m_type_str;
   }
+  enum_sql_command sqlcom_create() const { return SQLCOM_CREATE_PACKAGE; }
+  enum_sql_command sqlcom_drop() const { return SQLCOM_DROP_PACKAGE; }
   LEX_CSTRING empty_body_lex_cstring(sql_mode_t mode) const
   {
     static LEX_CSTRING m_empty_body= {STRING_WITH_LEN("BEGIN END")};
@@ -407,6 +410,8 @@ public:
     static LEX_CSTRING m_type_str= {STRING_WITH_LEN("PACKAGE BODY")};
     return m_type_str;
   }
+  enum_sql_command sqlcom_create() const { return SQLCOM_CREATE_PACKAGE_BODY; }
+  enum_sql_command sqlcom_drop() const { return SQLCOM_DROP_PACKAGE_BODY; }
   LEX_CSTRING empty_body_lex_cstring(sql_mode_t mode) const
   {
     static LEX_CSTRING m_empty_body= {STRING_WITH_LEN("BEGIN END")};
@@ -440,6 +445,8 @@ public:
     static LEX_CSTRING m_type_str= { STRING_WITH_LEN("TRIGGER")};
     return m_type_str;
   }
+  enum_sql_command sqlcom_create() const { return SQLCOM_CREATE_TRIGGER; }
+  enum_sql_command sqlcom_drop() const { return SQLCOM_DROP_TRIGGER; }
   MDL_key::enum_mdl_namespace get_mdl_type() const
   {
     DBUG_ASSERT(0);
@@ -581,7 +588,7 @@ enum
 
 /* Drop all routines in database 'db' */
 int
-sp_drop_db_routines(THD *thd, const char *db);
+sp_drop_db_routines(THD *thd, const LEX_CSTRING &db);
 
 /**
    Acquires exclusive metadata lock on all stored routines in the
@@ -593,7 +600,7 @@ sp_drop_db_routines(THD *thd, const char *db);
    @retval  false  Success
    @retval  true   Failure
  */
-bool lock_db_routines(THD *thd, const char *db);
+bool lock_db_routines(THD *thd, const Lex_ident_db_normalized &db);
 
 /**
   Structure that represents element in the set of stored routines
@@ -632,7 +639,7 @@ public:
 
   const Sp_handler *m_handler;
 
-  int sp_cache_routine(THD *thd, bool lookup_only, sp_head **sp) const;
+  int sp_cache_routine(THD *thd, sp_head **sp) const;
 };
 
 

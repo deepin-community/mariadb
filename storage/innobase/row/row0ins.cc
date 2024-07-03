@@ -31,7 +31,6 @@ Created 4/20/1996 Heikki Tuuri
 #include "btr0btr.h"
 #include "btr0cur.h"
 #include "mach0data.h"
-#include "ibuf0ibuf.h"
 #include "que0que.h"
 #include "row0upd.h"
 #include "row0sel.h"
@@ -1866,8 +1865,9 @@ bool row_ins_foreign_index_entry(dict_foreign_t *foreign,
       if (col->is_dropped())
         continue;
 
-      const char *col_name= dict_table_get_col_name(index->table, col->ind);
-      if (0 == innobase_strcasecmp(col_name, foreign->foreign_col_names[i]))
+      const Lex_ident_column col_name=
+        dict_table_get_col_name(index->table, col->ind);
+      if (col_name.streq(Lex_cstring_strlen(foreign->foreign_col_names[i])))
       {
         dfield_copy(&ref_entry->fields[i], &entry->fields[j]);
         goto got_match;
@@ -2000,7 +2000,7 @@ row_ins_dupl_error_with_rec(
 	/* In a unique secondary index we allow equal key values if they
 	contain SQL NULLs */
 
-	if (!dict_index_is_clust(index) && !index->nulls_equal) {
+	if (!dict_index_is_clust(index)) {
 
 		for (i = 0; i < n_unique; i++) {
 			if (dfield_is_null(dtuple_get_nth_field(entry, i))) {
@@ -2102,16 +2102,8 @@ row_ins_scan_sec_index_for_duplicate(
 	/* If the secondary index is unique, but one of the fields in the
 	n_unique first fields is NULL, a unique key violation cannot occur,
 	since we define NULL != NULL in this case */
-
-	if (!index->nulls_equal) {
-		for (ulint i = 0; i < n_unique; i++) {
-			if (UNIV_SQL_NULL == dfield_get_len(
-					dtuple_get_nth_field(entry, i))) {
-
-				DBUG_RETURN(DB_SUCCESS);
-			}
-		}
-	}
+	if (index->n_nullable && dtuple_contains_null(entry, n_unique))
+		DBUG_RETURN(DB_SUCCESS);
 
 	/* Store old value on n_fields_cmp */
 
@@ -2569,12 +2561,6 @@ row_ins_index_entry_big_rec(
 	return(error);
 }
 
-#ifdef HAVE_REPLICATION /* Working around MDEV-24622 */
-extern "C" int thd_is_slave(const MYSQL_THD thd);
-#else
-# define thd_is_slave(thd) 0
-#endif
-
 #if defined __aarch64__&&defined __GNUC__&&__GNUC__==4&&!defined __clang__
 /* Avoid GCC 4.8.5 internal compiler error due to srw_mutex::wr_unlock().
 We would only need this for row_ins_clust_index_entry_low(),
@@ -2638,14 +2624,17 @@ row_ins_clust_index_entry_low(
 		ut_ad(!dict_index_is_online_ddl(index));
 		ut_ad(!index->table->persistent_autoinc);
 		ut_ad(!index->is_instant());
+		ut_ad(!entry->info_bits);
 		mtr.set_log_mode(MTR_LOG_NO_REDO);
 	} else {
 		index->set_modified(mtr);
 
-		if (UNIV_UNLIKELY(entry->is_metadata())) {
+		if (UNIV_UNLIKELY(entry->info_bits != 0)) {
+			ut_ad(entry->is_metadata());
 			ut_ad(index->is_instant());
 			ut_ad(!dict_index_is_online_ddl(index));
 			ut_ad(mode == BTR_MODIFY_TREE);
+			ut_ad(flags == BTR_NO_LOCKING_FLAG);
 		} else {
 			if (mode == BTR_MODIFY_LEAF
 			    && dict_index_is_online_ddl(index)) {
@@ -2697,8 +2686,6 @@ err_exit:
 		page_set_autoinc(root, auto_inc, &mtr, false);
 	}
 
-	btr_pcur_get_btr_cur(&pcur)->thr = thr;
-
 #ifdef UNIV_DEBUG
 	{
 		page_t*	page = btr_pcur_get_page(&pcur);
@@ -2725,7 +2712,8 @@ err_exit:
 	    && !index->table->is_active_ddl()
 	    && !index->table->has_spatial_index()
 	    && !index->table->versioned()
-	    && !thd_is_slave(trx->mysql_thd) /* FIXME: MDEV-24622 */) {
+            && (!dict_table_is_partition(index->table)
+	        || thd_sql_command(trx->mysql_thd) == SQLCOM_INSERT)) {
 		DEBUG_SYNC_C("empty_root_page_insert");
 
 		trx->bulk_insert = true;
@@ -2787,11 +2775,6 @@ avoid_bulk:
 
 skip_bulk_insert:
 	if (UNIV_UNLIKELY(entry->info_bits != 0)) {
-		ut_ad(entry->is_metadata());
-		ut_ad(flags == BTR_NO_LOCKING_FLAG);
-		ut_ad(index->is_instant());
-		ut_ad(!dict_index_is_online_ddl(index));
-
 		const rec_t* rec = btr_pcur_get_rec(&pcur);
 
 		if (rec_get_info_bits(rec, page_rec_is_comp(rec))
@@ -2895,9 +2878,20 @@ do_insert:
 			}
 		}
 
+		if (err == DB_SUCCESS && entry->info_bits) {
+			if (buf_block_t* root
+			    = btr_root_block_get(index, RW_X_LATCH, &mtr,
+						 &err)) {
+				btr_set_instant(root, *index, &mtr);
+			} else {
+				ut_ad("cannot find root page" == 0);
+			}
+		}
+
 		mtr.commit();
 
 		if (big_rec) {
+			ut_ad(err == DB_SUCCESS);
 			/* Online table rebuild could read (and
 			ignore) the incomplete record at this point.
 			If online rebuild is in progress, the
@@ -2976,7 +2970,6 @@ row_ins_sec_index_entry_low(
 	ut_ad(!dict_index_is_clust(index));
 	ut_ad(mode == BTR_MODIFY_LEAF || mode == BTR_INSERT_TREE);
 
-	cursor.thr = thr;
 	cursor.rtr_info = NULL;
 	cursor.page_cur.index = index;
 	ut_ad(thr_get_trx(thr)->id != 0);
@@ -2998,9 +2991,10 @@ row_ins_sec_index_entry_low(
 
 	if (index->is_spatial()) {
 		rtr_init_rtr_info(&rtr_info, false, &cursor, index, false);
+		rtr_info.thr = thr;
 		rtr_info_update_btr(&cursor, &rtr_info);
 
-		err = rtr_insert_leaf(&cursor, entry, search_mode, &mtr);
+		err = rtr_insert_leaf(&cursor, thr, entry, search_mode, &mtr);
 
 		if (err == DB_SUCCESS && search_mode == BTR_MODIFY_LEAF
 		    && rtr_info.mbr_adj) {
@@ -3009,6 +3003,7 @@ row_ins_sec_index_entry_low(
 			rtr_clean_rtr_info(&rtr_info, true);
 			rtr_init_rtr_info(&rtr_info, false, &cursor,
 					  index, false);
+			rtr_info.thr = thr;
 			rtr_info_update_btr(&cursor, &rtr_info);
 			mtr.start();
 			if (index->table->is_temporary()) {
@@ -3016,7 +3011,7 @@ row_ins_sec_index_entry_low(
 			} else {
 				index->set_modified(mtr);
 			}
-			err = rtr_insert_leaf(&cursor, entry,
+			err = rtr_insert_leaf(&cursor, thr, entry,
 					      search_mode, &mtr);
 		}
 
@@ -3025,14 +3020,6 @@ row_ins_sec_index_entry_low(
 			goto func_exit;});
 
 	} else {
-		if (!index->table->is_temporary()) {
-			search_mode = btr_latch_mode(
-				search_mode
-				| (thr_get_trx(thr)->check_unique_secondary
-				   ? BTR_INSERT
-				   : BTR_INSERT | BTR_IGNORE_SEC_UNIQUE));
-		}
-
 		err = cursor.search_leaf(entry, PAGE_CUR_LE, search_mode,
 					 &mtr);
 	}
@@ -3041,12 +3028,6 @@ row_ins_sec_index_entry_low(
 		if (err == DB_DECRYPTION_FAILED) {
 			btr_decryption_failed(*index);
 		}
-		goto func_exit;
-	}
-
-	if (cursor.flag == BTR_CUR_INSERT_TO_IBUF) {
-		ut_ad(!dict_index_is_spatial(index));
-		/* The insert was buffered during the search: we are done */
 		goto func_exit;
 	}
 
@@ -3109,13 +3090,9 @@ row_ins_sec_index_entry_low(
 		locked with s-locks the necessary records to
 		prevent any insertion of a duplicate by another
 		transaction. Let us now reposition the cursor and
-		continue the insertion (bypassing the change buffer). */
-		err = cursor.search_leaf(
-			entry, PAGE_CUR_LE,
-			btr_latch_mode(search_mode
-				       & ~(BTR_INSERT
-					   | BTR_IGNORE_SEC_UNIQUE)),
-			&mtr);
+		continue the insertion. */
+		err = cursor.search_leaf(entry, PAGE_CUR_LE, search_mode,
+					 &mtr);
 		if (err != DB_SUCCESS) {
 			goto func_exit;
 		}
@@ -3346,11 +3323,6 @@ row_ins_sec_index_entry(
 	if (err == DB_FAIL) {
 		mem_heap_empty(heap);
 
-		if (index->table->space == fil_system.sys_space
-		    && !(index->type & (DICT_UNIQUE | DICT_SPATIAL))) {
-			ibuf_free_excess_pages();
-		}
-
 		/* Try then pessimistic descent to the B-tree */
 		log_free_check();
 
@@ -3574,19 +3546,6 @@ row_ins_index_entry_step(
 }
 
 /***********************************************************//**
-Allocates a row id for row and inits the node->index field. */
-UNIV_INLINE
-void
-row_ins_alloc_row_id_step(
-/*======================*/
-	ins_node_t*	node)	/*!< in: row insert node */
-{
-  ut_ad(node->state == INS_NODE_ALLOC_ROW_ID);
-  if (dict_table_get_first_index(node->table)->is_gen_clust())
-    dict_sys_write_row_id(node->sys_buf, dict_sys.get_new_row_id());
-}
-
-/***********************************************************//**
 Gets a row to insert from the values list. */
 UNIV_INLINE
 void
@@ -3666,12 +3625,17 @@ row_ins(
 	DBUG_PRINT("row_ins", ("table: %s", node->table->name.m_name));
 
 	if (node->state == INS_NODE_ALLOC_ROW_ID) {
-
-		row_ins_alloc_row_id_step(node);
-
 		node->index = dict_table_get_first_index(node->table);
 		ut_ad(node->entry_list.empty() == false);
 		node->entry = node->entry_list.begin();
+
+		if (node->index->is_gen_clust()) {
+			const uint64_t db_row_id{++node->table->row_id};
+			if (db_row_id >> 48) {
+				DBUG_RETURN(DB_OUT_OF_FILE_SPACE);
+			}
+			mach_write_to_6(node->sys_buf, db_row_id);
+		}
 
 		if (node->ins_type == INS_SEARCHED) {
 

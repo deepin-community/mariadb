@@ -129,7 +129,7 @@ SHOW CREATE TABLE t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
   `a` char(32) DEFAULT NULL,
-  `v` char(32) CHARACTER SET ucs2 COLLATE ucs2_general_ci GENERATED ALWAYS AS (`a`) VIRTUAL
+  `v` char(32) CHARACTER SET ucs2 COLLATE ucs2_uca1400_ai_ci GENERATED ALWAYS AS (`a`) VIRTUAL
 ) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
 DROP TABLE t1;
 CREATE TABLE t1 (a int, b int);
@@ -181,8 +181,8 @@ a	b	c
 2	3	y
 0	1	y,n
 drop table t1,t2;
-SET @old_debug= @@global.debug;
-SET @old_debug= @@global.debug;
+SET @old_debug= @@global.debug_dbug;
+SET @old_debug= @@global.debug_dbug;
 SET GLOBAL debug_dbug= "+d,write_delay_wakeup";
 CREATE TABLE t1 (a int,
 ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

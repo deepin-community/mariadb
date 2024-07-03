@@ -21,6 +21,7 @@
 #include "trnman.h"
 #include "ma_key_recover.h"
 #include "ma_blockrec.h"
+#include "mysys_err.h"
 
 	/* Functions declared in this file */
 
@@ -386,6 +387,11 @@ err:
       }
     }
   }
+  else if (my_errno == HA_ERR_LOCAL_TMP_SPACE_FULL ||
+           my_errno == HA_ERR_GLOBAL_TMP_SPACE_FULL)
+  {
+    filepos= HA_OFFSET_ERROR;         /* Avoid write_record_abort() */
+  }
   else
     fatal_error= 1;
 
@@ -428,14 +434,15 @@ err2:
 
 my_bool _ma_ck_write(MARIA_HA *info, MARIA_KEY *key)
 {
+  my_bool tmp;
   DBUG_ENTER("_ma_ck_write");
 
   if (info->bulk_insert &&
       is_tree_inited(&info->bulk_insert[key->keyinfo->key_nr]))
-  {
-    DBUG_RETURN(_ma_ck_write_tree(info, key));
-  }
-  DBUG_RETURN(_ma_ck_write_btree(info, key));
+    tmp= _ma_ck_write_tree(info, key);
+  else
+    tmp= _ma_ck_write_btree(info, key);
+  DBUG_RETURN(tmp);
 } /* _ma_ck_write */
 
 

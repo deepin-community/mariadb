@@ -20,6 +20,7 @@
 #include "sql_basic_types.h"			/* query_id_t */
 #include "sql_mode.h"                           /* Sql_mode_dependency */
 #include "sql_plugin.h"
+#include "lex_ident.h"
 #include "sql_bitmap.h"                         /* Bitmap */
 #include "my_decimal.h"                         /* my_decimal */
 #include "mysql_com.h"                     /* SERVER_VERSION_LENGTH */
@@ -79,7 +80,9 @@ void close_connection(THD *thd, uint sql_errno= 0);
 void handle_connection_in_main_thread(CONNECT *thd);
 void create_thread_to_handle_connection(CONNECT *connect);
 void unlink_thd(THD *thd);
-void refresh_status(THD *thd);
+void refresh_status_legacy(THD *thd);
+void refresh_session_status(THD *thd);
+void refresh_global_status();
 bool is_secure_file_path(char *path);
 extern void init_net_server_extension(THD *thd);
 extern void handle_accepted_socket(MYSQL_SOCKET new_sock, MYSQL_SOCKET sock);
@@ -89,6 +92,7 @@ extern void ssl_acceptor_stats_update(int sslaccept_ret);
 extern int reinit_ssl();
 
 extern "C" MYSQL_PLUGIN_IMPORT CHARSET_INFO *system_charset_info;
+extern "C" MYSQL_PLUGIN_IMPORT CHARSET_INFO *system_charset_info_for_i_s;
 extern MYSQL_PLUGIN_IMPORT CHARSET_INFO *files_charset_info ;
 extern MYSQL_PLUGIN_IMPORT CHARSET_INFO *national_charset_info;
 extern MYSQL_PLUGIN_IMPORT CHARSET_INFO *table_alias_charset;
@@ -158,6 +162,7 @@ extern bool opt_using_transactions;
 extern ulong current_pid;
 extern double expire_logs_days;
 extern ulong binlog_expire_logs_seconds;
+extern ulonglong binlog_space_limit;
 extern my_bool relay_log_recovery;
 extern uint sync_binlog_period, sync_relaylog_period, 
             sync_relayloginfo_period, sync_masterinfo_period;
@@ -173,6 +178,7 @@ extern ulong delay_key_write_options;
 extern char *opt_logname, *opt_slow_logname, *opt_bin_logname, 
             *opt_relay_logname;
 extern char *opt_binlog_index_name;
+extern my_bool opt_binlog_legacy_event_pos;
 extern char *opt_backup_history_logname, *opt_backup_progress_logname,
             *opt_backup_settings_name;
 extern const char *log_output_str;
@@ -213,15 +219,20 @@ extern char log_error_file[FN_REFLEN], *opt_tc_log_file, *opt_ddl_recovery_file;
 extern const double log_10[309];
 extern ulonglong keybuff_size;
 extern ulonglong thd_startup_options;
+extern ulonglong global_max_tmp_space_usage;
+extern Atomic_counter<ulonglong> global_tmp_space_used;
 extern my_thread_id global_thread_id;
 extern ulong binlog_cache_use, binlog_cache_disk_use;
 extern ulong binlog_stmt_cache_use, binlog_stmt_cache_disk_use;
+extern ulong binlog_gtid_index_hit, binlog_gtid_index_miss;
 extern ulong aborted_threads, aborted_connects, aborted_connects_preauth;
 extern ulong delayed_insert_timeout;
 extern ulong delayed_insert_limit, delayed_queue_size;
 extern ulong delayed_insert_threads, delayed_insert_writes;
 extern ulong delayed_rows_in_use,delayed_insert_errors;
 extern Atomic_counter<uint32_t> slave_open_temp_tables;
+extern Atomic_counter<ulonglong> sending_new_binlog_file;
+extern uint slave_connections_needed_for_purge;
 extern ulonglong query_cache_size;
 extern ulong query_cache_limit;
 extern ulong query_cache_min_res_unit;
@@ -242,12 +253,17 @@ extern uint max_prepared_stmt_count, prepared_stmt_count;
 extern MYSQL_PLUGIN_IMPORT ulong open_files_limit;
 extern ulonglong binlog_cache_size, binlog_stmt_cache_size, binlog_file_cache_size;
 extern ulonglong max_binlog_cache_size, max_binlog_stmt_cache_size;
+extern ulonglong internal_binlog_space_limit;
+extern uint internal_slave_connections_needed_for_purge;
 extern ulong max_binlog_size;
 extern ulong slave_max_allowed_packet;
 extern ulonglong slave_max_statement_time;
 extern double slave_max_statement_time_double;
 extern ulong opt_binlog_rows_event_max_size;
 extern ulong binlog_row_metadata;
+extern my_bool opt_binlog_gtid_index;
+extern uint opt_binlog_gtid_index_page_size;
+extern uint opt_binlog_gtid_index_span_min;
 extern ulong thread_cache_size;
 extern ulong stored_program_cache_size;
 extern ulong opt_slave_parallel_threads;
@@ -263,15 +279,15 @@ extern ulong executed_events;
 extern char language[FN_REFLEN];
 extern "C" MYSQL_PLUGIN_IMPORT ulong server_id;
 extern ulong concurrency;
-extern time_t server_start_time, flush_status_time;
+extern time_t server_start_time;
 extern char *opt_mysql_tmpdir, mysql_charsets_dir[];
 extern size_t mysql_unpacked_real_data_home_len;
 extern MYSQL_PLUGIN_IMPORT MY_TMPDIR mysql_tmpdir_list;
-extern const char *first_keyword, *delayed_user;
+extern const char *first_keyword, *delayed_user, *slave_user;
 extern MYSQL_PLUGIN_IMPORT const char  *my_localhost;
 extern MYSQL_PLUGIN_IMPORT const char **errmesg;			/* Error messages */
 extern const char *myisam_recover_options_str;
-extern const LEX_CSTRING in_left_expr_name, in_additional_cond, in_having_cond;
+extern const Lex_ident_column in_left_expr_name, in_additional_cond, in_having_cond;
 extern const LEX_CSTRING NULL_clex_str;
 extern const LEX_CSTRING error_clex_str;
 extern SHOW_VAR status_vars[];
@@ -316,10 +332,6 @@ extern PSI_mutex_key key_PAGE_lock, key_LOCK_sync, key_LOCK_active,
        key_LOCK_pool, key_LOCK_pending_checkpoint;
 #endif /* HAVE_MMAP */
 
-#ifdef HAVE_OPENSSL
-extern PSI_mutex_key key_LOCK_des_key_file;
-#endif
-
 extern PSI_mutex_key key_BINLOG_LOCK_index, key_BINLOG_LOCK_xid_list,
   key_BINLOG_LOCK_binlog_background_thread,
   key_LOCK_binlog_end_pos,
@@ -330,9 +342,9 @@ extern PSI_mutex_key key_BINLOG_LOCK_index, key_BINLOG_LOCK_xid_list,
   key_LOCK_logger, key_LOCK_manager,
   key_LOCK_prepared_stmt_count,
   key_LOCK_rpl_status, key_LOCK_server_started,
-  key_LOCK_status,
+  key_LOCK_status, key_LOCK_optimizer_costs,
   key_LOCK_thd_data, key_LOCK_thd_kill,
-  key_LOCK_user_conn, key_LOG_LOCK_log,
+  key_LOCK_user_conn, key_LOG_LOCK_log, key_gtid_index_lock,
   key_master_info_data_lock, key_master_info_run_lock,
   key_master_info_sleep_lock, key_master_info_start_stop_lock,
   key_master_info_start_alter_lock,
@@ -399,7 +411,7 @@ extern PSI_thread_key key_thread_delayed_insert,
 
 extern PSI_file_key key_file_binlog, key_file_binlog_cache,
        key_file_binlog_index, key_file_binlog_index_cache, key_file_casetest,
-  key_file_dbopt, key_file_des_key_file, key_file_ERRMSG, key_select_to_file,
+  key_file_dbopt, key_file_ERRMSG, key_select_to_file,
   key_file_fileparser, key_file_frm, key_file_global_ddl_log, key_file_load,
   key_file_loadfile, key_file_log_event_data, key_file_log_event_info,
   key_file_master_info, key_file_misc, key_file_partition_ddl_log,
@@ -410,7 +422,14 @@ extern PSI_file_key key_file_relaylog, key_file_relaylog_index,
                     key_file_relaylog_cache, key_file_relaylog_index_cache;
 extern PSI_socket_key key_socket_tcpip, key_socket_unix,
   key_socket_client_connection;
-extern PSI_file_key key_file_binlog_state;
+extern PSI_file_key key_file_binlog_state, key_file_gtid_index;
+
+#ifdef HAVE_des
+extern char* des_key_file;
+extern PSI_file_key key_file_des_key_file;
+extern PSI_mutex_key key_LOCK_des_key_file;
+extern mysql_mutex_t LOCK_des_key_file;
+#endif
 
 #ifdef HAVE_PSI_INTERFACE
 void init_server_psi_keys();
@@ -455,6 +474,7 @@ extern PSI_memory_key key_memory_user_var_entry_value;
 extern PSI_memory_key key_memory_Slave_job_group_group_relay_log_name;
 extern PSI_memory_key key_memory_Relay_log_info_group_relay_log_name;
 extern PSI_memory_key key_memory_binlog_cache_mngr;
+extern PSI_memory_key key_memory_binlog_gtid_index;
 extern PSI_memory_key key_memory_Row_data_memory_memory;
 extern PSI_memory_key key_memory_errmsgs;
 extern PSI_memory_key key_memory_Event_queue_element_for_exec_names;
@@ -651,6 +671,7 @@ extern PSI_stage_info stage_user_sleep;
 extern PSI_stage_info stage_verifying_table;
 extern PSI_stage_info stage_waiting_for_ddl;
 extern PSI_stage_info stage_waiting_for_delay_list;
+extern PSI_stage_info stage_waiting_for_disk_space;
 extern PSI_stage_info stage_waiting_for_flush;
 extern PSI_stage_info stage_waiting_for_gtid_to_be_written_to_binary_log;
 extern PSI_stage_info stage_waiting_for_handler_insert;
@@ -722,6 +743,7 @@ extern pthread_t signal_thread;
 
 #ifdef HAVE_OPENSSL
 extern struct st_VioSSLFd * ssl_acceptor_fd;
+extern LEX_CUSTRING ssl_acceptor_fingerprint();
 #endif /* HAVE_OPENSSL */
 
 /*
@@ -742,7 +764,6 @@ extern const char *mysql_real_data_home_ptr;
 extern ulong thread_handling;
 extern "C" MYSQL_PLUGIN_IMPORT char server_version[SERVER_VERSION_LENGTH];
 extern char *server_version_ptr;
-extern bool using_custom_server_version;
 extern MYSQL_PLUGIN_IMPORT char mysql_real_data_home[];
 extern char mysql_unpacked_real_data_home[];
 extern MYSQL_PLUGIN_IMPORT struct system_variables global_system_variables;
@@ -762,14 +783,11 @@ extern mysql_mutex_t
        LOCK_error_log, LOCK_delayed_insert, LOCK_short_uuid_generator,
        LOCK_delayed_status, LOCK_delayed_create, LOCK_crypt, LOCK_timezone,
        LOCK_active_mi, LOCK_manager, LOCK_user_conn,
-       LOCK_prepared_stmt_count, LOCK_error_messages,  LOCK_backup_log;
+       LOCK_prepared_stmt_count, LOCK_error_messages,  LOCK_backup_log,
+       LOCK_optimizer_costs;
 extern MYSQL_PLUGIN_IMPORT mysql_mutex_t LOCK_global_system_variables;
 extern mysql_rwlock_t LOCK_all_status_vars;
 extern mysql_mutex_t LOCK_start_thread;
-#ifdef HAVE_OPENSSL
-extern char* des_key_file;
-extern mysql_mutex_t LOCK_des_key_file;
-#endif
 extern MYSQL_PLUGIN_IMPORT mysql_mutex_t LOCK_server_started;
 extern MYSQL_PLUGIN_IMPORT mysql_cond_t COND_server_started;
 extern mysql_rwlock_t LOCK_grant, LOCK_sys_init_connect, LOCK_sys_init_slave;
@@ -797,6 +815,18 @@ enum options_mysqld
   OPT_BINLOG_IGNORE_DB,
   OPT_BIN_LOG,
   OPT_BOOTSTRAP,
+  OPT_COSTS_DISK_READ_COST,
+  OPT_COSTS_INDEX_BLOCK_COPY_COST,
+  OPT_COSTS_KEY_CMP_COST,
+  OPT_COSTS_KEY_COPY_COST,
+  OPT_COSTS_KEY_LOOKUP_COST,
+  OPT_COSTS_KEY_NEXT_FIND_COST,
+  OPT_COSTS_DISK_READ_RATIO,
+  OPT_COSTS_ROW_COPY_COST,
+  OPT_COSTS_ROW_LOOKUP_COST,
+  OPT_COSTS_ROW_NEXT_FIND_COST,
+  OPT_COSTS_ROWID_CMP_COST,
+  OPT_COSTS_ROWID_COPY_COST,
   OPT_EXPIRE_LOGS_DAYS,
   OPT_BINLOG_EXPIRE_LOGS_SECONDS,
   OPT_CONSOLE,
@@ -835,14 +865,9 @@ enum options_mysqld
   OPT_SSL_CRL,
   OPT_SSL_CRLPATH,
   OPT_SSL_KEY,
-  OPT_THREAD_CONCURRENCY,
   OPT_WANT_CORE,
-#ifdef WITH_WSREP
-  OPT_WSREP_CAUSAL_READS,
-  OPT_WSREP_SYNC_WAIT,
-#endif /* WITH_WSREP */
   OPT_MYSQL_COMPATIBILITY,
-  OPT_TLS_VERSION,
+  OPT_TLS_VERSION, OPT_SECURE_AUTH,
   OPT_MYSQL_TO_BE_IMPLEMENTED,
   OPT_SEQURE_FILE_PRIV,
   OPT_which_is_always_the_last
@@ -884,6 +909,11 @@ enum enum_query_type
   /// good for parsing
   QT_PARSABLE= (1 << 8),
 
+  // If an expression is constant, print the expression, not the value
+  // it evaluates to. Should be used for error messages, so that they
+  // don't reveal values.
+  QT_NO_DATA_EXPANSION= (1 << 9),
+
   /// This value means focus on readability, not on ability to parse back, etc.
   QT_EXPLAIN=           QT_TO_SYSTEM_CHARSET |
                         QT_ITEM_IDENT_SKIP_DB_NAMES |
@@ -904,12 +934,15 @@ enum enum_query_type
   QT_EXPLAIN_EXTENDED=  QT_TO_SYSTEM_CHARSET|
                         QT_SHOW_SELECT_NUMBER,
 
-  // If an expression is constant, print the expression, not the value
-  // it evaluates to. Should be used for error messages, so that they
-  // don't reveal values.
-  QT_NO_DATA_EXPANSION= (1 << 9),
   // Remove wrappers added for TVC when creating or showing view
-  QT_NO_WRAPPERS_FOR_TVC_IN_VIEW= (1 << 12)
+  QT_NO_WRAPPERS_FOR_TVC_IN_VIEW= (1 << 12),
+
+  /// Print for FRM file. Focus on parse-back.
+  /// e.g. VIEW expressions and virtual column expressions
+  QT_FOR_FRM= (1 << 13),
+
+  // Print only the SELECT part, even for INSERT...SELECT
+  QT_SELECT_ONLY = (1 << 14)
 };
 
 
@@ -939,12 +972,6 @@ extern "C" void unireg_abort(int exit_code) __attribute__((noreturn));
 extern "C" void unireg_clear(int exit_code);
 #define unireg_abort(exit_code) do { unireg_clear(exit_code); DBUG_RETURN(exit_code); } while(0)
 #endif
-
-inline void table_case_convert(char * name, uint length)
-{
-  if (lower_case_table_names)
-    files_charset_info->casedn(name, length, name, length);
-}
 
 extern void set_server_version(char *buf, size_t size);
 

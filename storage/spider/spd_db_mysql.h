@@ -158,51 +158,28 @@ public:
     spider_string *to,
     String *from
   ) override;
-  int append_table(
-    ha_spider *spider,
-    spider_fields *fields,
-    spider_string *str,
-    TABLE_LIST *table_list,
-    TABLE_LIST **used_table_list,
-    uint *current_pos,
-    TABLE_LIST **cond_table_list_ptr,
-    bool top_down,
-    bool first
-  );
-  int append_tables_top_down(
-    ha_spider *spider,
-    spider_fields *fields,
-    spider_string *str,
-    TABLE_LIST *table_list,
-    TABLE_LIST **used_table_list,
-    uint *current_pos,
-    TABLE_LIST **cond_table_list_ptr
-  );
   int append_tables_top_down_check(
     TABLE_LIST *table_list,
     TABLE_LIST **used_table_list,
     uint *current_pos
   );
-  int append_embedding_tables(
-    ha_spider *spider,
-    spider_fields *fields,
-    spider_string *str,
-    TABLE_LIST *table_list,
-    TABLE_LIST **used_table_list,
-    uint *current_pos,
-    TABLE_LIST **cond_table_list_ptr
-  );
+  int append_table_list(spider_fields *fields,
+                        spider_string *str, TABLE_LIST *table,
+                        table_map *upper_usable_tables,
+                        table_map eliminated_tables);
+  int append_table_array(spider_fields *fields,
+                         spider_string *str, TABLE_LIST **table,
+                         TABLE_LIST **end, table_map *upper_usable_tables,
+                         table_map eliminated_tables);
+  int append_join(spider_fields *fields, spider_string *str,
+                  List<TABLE_LIST> *tables, table_map *upper_usable_tables,
+                  table_map eliminated_tables);
   int append_from_and_tables(
     ha_spider *spider,
     spider_fields *fields,
     spider_string *str,
     TABLE_LIST *table_list,
     uint table_count
-  ) override;
-  int reappend_tables(
-    spider_fields *fields,
-    SPIDER_LINK_IDX_CHAIN *link_idx_chain,
-    spider_string *str
   ) override;
   int append_where(
     spider_string *str
@@ -532,6 +509,10 @@ public:
     int wait_timeout,
     int *need_mon
   );
+
+  /** Reset the global lock wait time out */
+  int reset_lock_wait_timeout();
+
   bool set_sql_mode_in_bulk_sql();
   int set_sql_mode(
     sql_mode_t sql_mode,
@@ -542,11 +523,6 @@ public:
     Time_zone *time_zone,
     int *need_mon
   );
-  bool set_loop_check_in_bulk_sql();
-  int set_loop_check(
-    int *need_mon
-  );
-  int fin_loop_check();
   int exec_simple_sql_with_result(
     SPIDER_TRX *trx,
     SPIDER_SHARE *share,
@@ -634,8 +610,11 @@ public:
   spider_string      *show_table_status;
   spider_string      *show_records;
   spider_string      *show_index;
+  /* The remote table names */
   spider_string      *table_names_str;
+  /* The remote db names */
   spider_string      *db_names_str;
+  /* fixme: this field looks useless */
   spider_string      *db_table_str;
   my_hash_value_type *db_table_str_hash_value;
   uint               table_nm_max_length;
@@ -1231,64 +1210,40 @@ public:
     ulong sql_type,
     int link_idx
   );
-  int append_flush_tables_part(
-    ulong sql_type,
-    int link_idx,
-    bool lock
-  );
+  int append_flush_tables_part(int link_idx, bool lock);
   int append_flush_tables(
     spider_string *str,
     int link_idx,
     bool lock
   );
-  int append_optimize_table_part(
-    ulong sql_type,
-    int link_idx
-  );
+  int append_optimize_table_part(int link_idx);
   int append_optimize_table(
     spider_string *str,
     int link_idx
   );
-  int append_analyze_table_part(
-    ulong sql_type,
-    int link_idx
-  );
+  int append_analyze_table_part(int link_idx);
   int append_analyze_table(
     spider_string *str,
     int link_idx
   );
-  int append_repair_table_part(
-    ulong sql_type,
-    int link_idx,
-    HA_CHECK_OPT* check_opt
-  );
+  int append_repair_table_part(int link_idx, HA_CHECK_OPT *check_opt);
   int append_repair_table(
     spider_string *str,
     int link_idx,
     HA_CHECK_OPT* check_opt
   );
-  int append_check_table_part(
-    ulong sql_type,
-    int link_idx,
-    HA_CHECK_OPT* check_opt
-  );
+  int append_check_table_part(int link_idx, HA_CHECK_OPT *check_opt);
   int append_check_table(
     spider_string *str,
     int link_idx,
     HA_CHECK_OPT* check_opt
   );
-  int append_enable_keys_part(
-    ulong sql_type,
-    int link_idx
-  );
+  int append_enable_keys_part(int link_idx);
   int append_enable_keys(
     spider_string *str,
     int link_idx
   );
-  int append_disable_keys_part(
-    ulong sql_type,
-    int link_idx
-  );
+  int append_disable_keys_part(int link_idx);
   int append_disable_keys(
     spider_string *str,
     int link_idx
@@ -1482,10 +1437,6 @@ public:
     ulong sql_type
   );
   int append_from_and_tables_part(
-    spider_fields *fields,
-    ulong sql_type
-  );
-  int reappend_tables_part(
     spider_fields *fields,
     ulong sql_type
   );

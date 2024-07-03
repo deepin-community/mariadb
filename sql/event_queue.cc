@@ -632,7 +632,7 @@ Event_queue::get_top_for_execution_if_time(THD *thd,
         Not yet time for top event, wait on condition with
         time or until signaled. Release LOCK_queue while waiting.
       */
-      struct timespec top_time= { next_activation_at, 0 };
+      struct timespec top_time= { (time_t) next_activation_at, 0 };
 
       /* Release any held audit resources before waiting */
       mysql_audit_release(thd);
@@ -656,7 +656,6 @@ Event_queue::get_top_for_execution_if_time(THD *thd,
       top->status= Event_parse_data::DISABLED;
     DBUG_PRINT("info", ("event %s status is %d", top->name.str, top->status));
 
-    top->execution_count++;
     (*event_name)->dropped= top->dropped;
     /*
       Save new values of last_executed timestamp and event status on stack

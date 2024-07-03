@@ -411,7 +411,7 @@ fts_read_stopword(
 			}
 		} else {
 			ut_ad(len == sizeof timestamp_max_bytes);
-			if (0 != memcmp(data, timestamp_max_bytes, len)) {
+			if (!IS_MAX_TIMESTAMP(data)) {
 				return true;
 			}
 		}
@@ -1955,14 +1955,16 @@ fts_create_common_tables(
 	}
 
 	if (table->versioned()) {
-		index = dict_mem_index_create(table, FTS_DOC_ID_INDEX_NAME,
+		index = dict_mem_index_create(table,
+					      FTS_DOC_ID_INDEX.str,
 					      DICT_UNIQUE, 2);
-		dict_mem_index_add_field(index, FTS_DOC_ID_COL_NAME, 0);
-		dict_mem_index_add_field(index, table->cols[table->vers_end].name(*table), 0);
+		dict_mem_index_add_field(index, FTS_DOC_ID.str, 0);
+		dict_mem_index_add_field(index, table->cols[table->vers_end].name(*table).str, 0);
 	} else {
-		index = dict_mem_index_create(table, FTS_DOC_ID_INDEX_NAME,
+		index = dict_mem_index_create(table,
+					      FTS_DOC_ID_INDEX.str,
 					      DICT_UNIQUE, 1);
-		dict_mem_index_add_field(index, FTS_DOC_ID_COL_NAME, 0);
+		dict_mem_index_add_field(index, FTS_DOC_ID.str, 0);
 	}
 
 	error =	row_create_index_for_mysql(index, trx, NULL,
@@ -2187,6 +2189,22 @@ fts_trx_row_get_new_state(
 	return(result);
 }
 
+/** Compare two doubly indirected pointers */
+static int fts_ptr2_cmp(const void *p1, const void *p2)
+{
+  const void *a= **static_cast<const void*const*const*>(p1);
+  const void *b= **static_cast<const void*const*const*>(p2);
+  return b > a ? -1 : a > b;
+}
+
+/** Compare a singly indirected pointer to a doubly indirected one */
+static int fts_ptr1_ptr2_cmp(const void *p1, const void *p2)
+{
+  const void *a= *static_cast<const void*const*>(p1);
+  const void *b= **static_cast<const void*const*const*>(p2);
+  return b > a ? -1 : a > b;
+}
+
 /******************************************************************//**
 Create a savepoint instance.
 @return savepoint instance */
@@ -2209,8 +2227,8 @@ fts_savepoint_create(
 		savepoint->name = mem_heap_strdup(heap, name);
 	}
 
-	savepoint->tables = rbt_create(
-		sizeof(fts_trx_table_t*), fts_trx_table_cmp);
+	static_assert(!offsetof(fts_trx_table_t, table), "ABI");
+	savepoint->tables = rbt_create(sizeof(fts_trx_table_t*), fts_ptr2_cmp);
 
 	return(savepoint);
 }
@@ -2258,6 +2276,19 @@ fts_trx_create(
 	return(ftt);
 }
 
+/** Compare two doc_id */
+static inline int doc_id_cmp(doc_id_t a, doc_id_t b)
+{
+  return b > a ? -1 : a > b;
+}
+
+/** Compare two DOC_ID. */
+int fts_doc_id_cmp(const void *p1, const void *p2)
+{
+  return doc_id_cmp(*static_cast<const doc_id_t*>(p1),
+                    *static_cast<const doc_id_t*>(p2));
+}
+
 /******************************************************************//**
 Create an FTS trx table.
 @return FTS trx table */
@@ -2276,7 +2307,8 @@ fts_trx_table_create(
 	ftt->table = table;
 	ftt->fts_trx = fts_trx;
 
-	ftt->rows = rbt_create(sizeof(fts_trx_row_t), fts_trx_row_doc_id_cmp);
+	static_assert(!offsetof(fts_trx_row_t, doc_id), "ABI");
+	ftt->rows = rbt_create(sizeof(fts_trx_row_t), fts_doc_id_cmp);
 
 	return(ftt);
 }
@@ -2300,7 +2332,8 @@ fts_trx_table_clone(
 	ftt->table = ftt_src->table;
 	ftt->fts_trx = ftt_src->fts_trx;
 
-	ftt->rows = rbt_create(sizeof(fts_trx_row_t), fts_trx_row_doc_id_cmp);
+	static_assert(!offsetof(fts_trx_row_t, doc_id), "ABI");
+	ftt->rows = rbt_create(sizeof(fts_trx_row_t), fts_doc_id_cmp);
 
 	/* Copy the rb tree values to the new savepoint. */
 	rbt_merge_uniq(ftt->rows, ftt_src->rows);
@@ -2325,13 +2358,9 @@ fts_trx_init(
 {
 	fts_trx_table_t*	ftt;
 	ib_rbt_bound_t		parent;
-	ib_rbt_t*		tables;
-	fts_savepoint_t*	savepoint;
-
-	savepoint = static_cast<fts_savepoint_t*>(ib_vector_last(savepoints));
-
-	tables = savepoint->tables;
-	rbt_search_cmp(tables, &parent, &table->id, fts_trx_table_id_cmp, NULL);
+	ib_rbt_t* tables = static_cast<fts_savepoint_t*>(
+		ib_vector_last(savepoints))->tables;
+	rbt_search_cmp(tables, &parent, &table, fts_ptr1_ptr2_cmp, nullptr);
 
 	if (parent.result == 0) {
 		fts_trx_table_t**	fttp;
@@ -3614,8 +3643,9 @@ fts_get_max_doc_id(
 
 	dfield = dict_index_get_nth_field(index, 0);
 
-#if 0 /* This can fail when renaming a column to FTS_DOC_ID_COL_NAME. */
-	ut_ad(innobase_strcasecmp(FTS_DOC_ID_COL_NAME, dfield->name) == 0);
+#if 0 /* This can fail when renaming a column to FTS_DOC_ID. */
+	ut_ad(Lex_ident_column(Lex_cstring_strlen(dfield->name)).
+		streq(FTS_DOC_ID));
 #endif
 
 	mtr.start();
@@ -3647,8 +3677,7 @@ fts_get_max_doc_id(
 					break;
 				}
 			} else {
-				if (0 == memcmp(data, timestamp_max_bytes,
-						sizeof timestamp_max_bytes)) {
+                                if (IS_MAX_TIMESTAMP(data)) {
 					break;
 				}
 			}
@@ -3731,7 +3760,8 @@ fts_doc_fetch_by_doc_id(
 					"  END IF;\n"
 					"END LOOP;\n"
 					"CLOSE c;",
-					select_str, FTS_DOC_ID_COL_NAME));
+					select_str,
+					FTS_DOC_ID.str));
 		} else {
 			ut_ad(option == FTS_FETCH_DOC_BY_ID_LARGE);
 
@@ -3767,8 +3797,9 @@ fts_doc_fetch_by_doc_id(
 					"  END IF;\n"
 					"END LOOP;\n"
 					"CLOSE c;",
-					FTS_DOC_ID_COL_NAME,
-					select_str, FTS_DOC_ID_COL_NAME));
+					FTS_DOC_ID.str,
+					select_str,
+					FTS_DOC_ID.str));
 		}
 		if (get_doc) {
 			get_doc->get_document_graph = graph;
@@ -3860,6 +3891,13 @@ fts_write_node(
 	return(error);
 }
 
+/** Sort an array of doc_id */
+void fts_doc_ids_sort(ib_vector_t *doc_ids)
+{
+  doc_id_t *const data= reinterpret_cast<doc_id_t*>(doc_ids->data);
+  std::sort(data, data + doc_ids->used);
+}
+
 /*********************************************************************//**
 Add rows to the DELETED_CACHE table.
 @return DB_SUCCESS if all went well else error code*/
@@ -3881,7 +3919,7 @@ fts_sync_add_deleted_cache(
 
 	ut_a(ib_vector_size(doc_ids) > 0);
 
-	ib_vector_sort(doc_ids, fts_doc_id_cmp);
+	fts_doc_ids_sort(doc_ids);
 
 	info = pars_info_create();
 
@@ -4427,7 +4465,6 @@ fts_add_token(
 		fts_string_t	t_str;
 		fts_token_t*	token;
 		ib_rbt_bound_t	parent;
-		ulint		newlen;
 
 		heap = static_cast<mem_heap_t*>(result_doc->self_heap->arg);
 
@@ -4443,24 +4480,19 @@ fts_add_token(
 		if (my_binary_compare(result_doc->charset)) {
 			memcpy(t_str.f_str, str.f_str, str.f_len);
 			t_str.f_str[str.f_len]= 0;
-			newlen= str.f_len;
+			t_str.f_len= str.f_len;
 		} else {
-			newlen = innobase_fts_casedn_str(
-				result_doc->charset, (char*) str.f_str, str.f_len,
-				(char*) t_str.f_str, t_str.f_len);
+			t_str.f_len= result_doc->charset->casedn_z(
+					(const char*) str.f_str, str.f_len,
+					(char *) t_str.f_str, t_str.f_len);
 		}
-
-		t_str.f_len = newlen;
-		t_str.f_str[newlen] = 0;
 
 		/* Add the word to the document statistics. If the word
 		hasn't been seen before we create a new entry for it. */
 		if (rbt_search(result_doc->tokens, &parent, &t_str) != 0) {
 			fts_token_t	new_token;
 
-			new_token.text.f_len = newlen;
-			new_token.text.f_str = t_str.f_str;
-			new_token.text.f_n_char = t_str.f_n_char;
+			new_token.text = t_str;
 
 			new_token.positions = ib_vector_create(
 				result_doc->self_heap, sizeof(ulint), 32);
@@ -5214,7 +5246,7 @@ fts_add_doc_id_column(
 {
 	dict_mem_table_add_col(
 		table, heap,
-		FTS_DOC_ID_COL_NAME,
+		FTS_DOC_ID.str,
 		DATA_INT,
 		dtype_form_prtype(
 			DATA_NOT_NULL | DATA_UNSIGNED
@@ -5575,8 +5607,8 @@ fts_savepoint_rollback_last_stmt(
 		l_ftt = rbt_value(fts_trx_table_t*, node);
 
 		rbt_search_cmp(
-			s_tables, &parent, &(*l_ftt)->table->id,
-			fts_trx_table_id_cmp, NULL);
+			s_tables, &parent, &(*l_ftt)->table,
+			fts_ptr1_ptr2_cmp, nullptr);
 
 		if (parent.result == 0) {
 			fts_trx_table_t**	s_ftt;
@@ -5769,7 +5801,7 @@ fts_valid_stopword_table(
 
 		return(NULL);
 	} else {
-		if (strcmp(dict_table_get_col_name(table, 0), "value")) {
+		if (strcmp(dict_table_get_col_name(table, 0).str, "value")) {
 			ib::error() << "Invalid column name for stopword"
 				" table " << stopword_table_name << ". Its"
 				" first column must be named as 'value'.";
@@ -5794,7 +5826,7 @@ fts_valid_stopword_table(
 
 	if (row_end) {
 		*row_end = table->versioned()
-			? dict_table_get_col_name(table, table->vers_end)
+			? dict_table_get_col_name(table, table->vers_end).str
 			: "value"; /* for fts_load_user_stopword() */
 	}
 
@@ -5975,7 +6007,7 @@ fts_init_get_doc_id(
 				}
 			} else {
 				ut_ad(len == sizeof timestamp_max_bytes);
-				if (0 != memcmp(data, timestamp_max_bytes, len)) {
+				if (!IS_MAX_TIMESTAMP(data)) {
 					return true;
 				}
 			}

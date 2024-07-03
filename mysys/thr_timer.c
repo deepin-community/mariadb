@@ -35,9 +35,15 @@ static mysql_cond_t  COND_timer;
 static QUEUE timer_queue;
 pthread_t timer_thread;
 
+#if SIZEOF_VOIDP == 4
+/* 32 bit system, using old timestamp */
 #define set_max_time(abs_time) \
   { (abs_time)->MY_tv_sec= INT_MAX32; (abs_time)->MY_tv_nsec= 0; }
-
+#else
+/* 64 bit system. Use 4 byte unsigned timestamp */
+#define set_max_time(abs_time) \
+  { (abs_time)->MY_tv_sec= UINT_MAX32; (abs_time)->MY_tv_nsec= 0; }
+#endif
 
 static void *timer_handler(void *arg __attribute__((unused)));
 
@@ -533,7 +539,6 @@ static void run_test()
   mysql_mutex_init(0, &LOCK_thread_count, MY_MUTEX_INIT_FAST);
   mysql_cond_init(0, &COND_thread_count, NULL);
 
-  thr_setconcurrency(3);
   pthread_attr_init(&thr_attr);
   pthread_attr_setscope(&thr_attr,PTHREAD_SCOPE_PROCESS);
   printf("Main thread: %s\n",my_thread_name());

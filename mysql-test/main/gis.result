@@ -4885,7 +4885,7 @@ UNCOMPRESSED_LENGTH(POINT(1,1))
 0
 SELECT COERCIBILITY(POINT(1,1));
 COERCIBILITY(POINT(1,1))
-4
+5
 SELECT ASCII(POINT(1,1));
 ASCII(POINT(1,1))
 0
@@ -5072,37 +5072,37 @@ ERROR 42000: Incorrect parameter count in the call to native function 'WITHIN(PO
 # MDEV-20009 Add CAST(expr AS pluggable_type)
 #
 SELECT CAST(1 AS GEOMETRY);
-ERROR HY000: Operator does not exists: 'CAST(expr AS geometry)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS geometry)'
 SELECT CAST(1 AS GEOMETRYCOLLECTION);
-ERROR HY000: Operator does not exists: 'CAST(expr AS geometrycollection)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS geometrycollection)'
 SELECT CAST(1 AS POINT);
-ERROR HY000: Operator does not exists: 'CAST(expr AS point)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS point)'
 SELECT CAST(1 AS LINESTRING);
-ERROR HY000: Operator does not exists: 'CAST(expr AS linestring)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS linestring)'
 SELECT CAST(1 AS POLYGON);
-ERROR HY000: Operator does not exists: 'CAST(expr AS polygon)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS polygon)'
 SELECT CAST(1 AS MULTIPOINT);
-ERROR HY000: Operator does not exists: 'CAST(expr AS multipoint)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS multipoint)'
 SELECT CAST(1 AS MULTILINESTRING);
-ERROR HY000: Operator does not exists: 'CAST(expr AS multilinestring)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS multilinestring)'
 SELECT CAST(1 AS MULTIPOLYGON);
-ERROR HY000: Operator does not exists: 'CAST(expr AS multipolygon)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS multipolygon)'
 SELECT CONVERT(1, GEOMETRY);
-ERROR HY000: Operator does not exists: 'CAST(expr AS geometry)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS geometry)'
 SELECT CONVERT(1, GEOMETRYCOLLECTION);
-ERROR HY000: Operator does not exists: 'CAST(expr AS geometrycollection)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS geometrycollection)'
 SELECT CONVERT(1, POINT);
-ERROR HY000: Operator does not exists: 'CAST(expr AS point)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS point)'
 SELECT CONVERT(1, LINESTRING);
-ERROR HY000: Operator does not exists: 'CAST(expr AS linestring)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS linestring)'
 SELECT CONVERT(1, POLYGON);
-ERROR HY000: Operator does not exists: 'CAST(expr AS polygon)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS polygon)'
 SELECT CONVERT(1, MULTIPOINT);
-ERROR HY000: Operator does not exists: 'CAST(expr AS multipoint)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS multipoint)'
 SELECT CONVERT(1, MULTILINESTRING);
-ERROR HY000: Operator does not exists: 'CAST(expr AS multilinestring)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS multilinestring)'
 SELECT CONVERT(1, MULTIPOLYGON);
-ERROR HY000: Operator does not exists: 'CAST(expr AS multipolygon)'
+ERROR HY000: Operator does not exist: 'CAST(expr AS multipolygon)'
 #
 # MDEV-17832 Protocol: extensions for Pluggable types and JSON, GEOMETRY
 #
@@ -5328,5 +5328,185 @@ SELECT BIT_XOR(a) FROM t1;
 ERROR HY000: Illegal parameter data type geometry for operation 'bit_xor('
 DROP TABLE t1;
 #
+# MDEV-27666 User variable not parsed as geometry variable in geometry function.
+#
+set @g= point(1, 1);
+select ST_AsWKT(GeometryCollection(Point(44, 6), @g));
+ST_AsWKT(GeometryCollection(Point(44, 6), @g))
+GEOMETRYCOLLECTION(POINT(44 6),POINT(1 1))
+set @g=  "just a string";
+select ST_AsWKT(GeometryCollection(Point(44, 6), @g));
+ERROR HY000: Illegal parameter data type longblob for operation 'geometrycollection'
+SET @g= LineString(Point(0,0), Point(0,1));
+SELECT AsText(PointN(@g, 1));
+AsText(PointN(@g, 1))
+POINT(0 0)
+SELECT AsText(PointN(@g, 2));
+AsText(PointN(@g, 2))
+POINT(0 1)
+SET @g= Point(1, 1);
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `g` point DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+SELECT AsText(g) FROM t1;
+AsText(g)
+POINT(1 1)
+DROP TABLE t1;
+SET @g= MultiPoint(Point(1, 1), Point(-1,-1));
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `g` multipoint DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+SELECT AsText(g) FROM t1;
+AsText(g)
+MULTIPOINT(1 1,-1 -1)
+DROP TABLE t1;
+SET @g= LineString(Point(1, 1), Point(2,2));
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `g` linestring DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+SELECT AsText(g) FROM t1;
+AsText(g)
+LINESTRING(1 1,2 2)
+DROP TABLE t1;
+SET @g= MultiLineString(LineString(Point(1, 1), Point(2,2)),
+LineString(Point(-1, -1), Point(-2,-2)));
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `g` multilinestring DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+SELECT AsText(g) FROM t1;
+AsText(g)
+MULTILINESTRING((1 1,2 2),(-1 -1,-2 -2))
+DROP TABLE t1;
+SET @g= Polygon(LineString(Point(0, 0), Point(30, 0), Point(30, 30), Point(0, 0)));
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `g` polygon DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+SELECT AsText(g) FROM t1;
+AsText(g)
+POLYGON((0 0,30 0,30 30,0 0))
+DROP TABLE t1;
+SET @g= MultiPolygon(Polygon(LineString(Point(0, 3), Point(3, 3),
+Point(3, 0), Point(0, 3))));
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `g` multipolygon DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+SELECT AsText(g) FROM t1;
+AsText(g)
+MULTIPOLYGON(((0 3,3 3,3 0,0 3)))
+DROP TABLE t1;
+SET @g= GeometryCollection(Point(44, 6), LineString(Point(3, 6), Point(7, 9)));
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `g` geometrycollection DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+SELECT AsText(g) FROM t1;
+AsText(g)
+GEOMETRYCOLLECTION(POINT(44 6),LINESTRING(3 6,7 9))
+DROP TABLE t1;
+SET @g= GeometryFromText('POINT(1 1)');
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `g` geometry DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+SELECT AsText(g) FROM t1;
+AsText(g)
+POINT(1 1)
+DROP TABLE t1;
+#
 # End of 10.5 tests
+#
+#
+# Start of 11.5 tests
+#
+#
+# MDEV-12668 SRID is not preserved in UNION, VIEW, MIN, MAX
+#
+CREATE TABLE t1 (a POINT REF_SYSTEM_ID=0, b POINT REF_SYSTEM_ID=102);
+SELECT a FROM t1 UNION SELECT b FROM t1;
+ERROR HY000: Illegal parameter data types `point ref_system_id=0` and `point ref_system_id=102` for operation 'UNION'
+DROP TABLE t1;
+CREATE TABLE t1 (a POINT REF_SYSTEM_ID=101, b POINT REF_SYSTEM_ID=102);
+SELECT a FROM t1 UNION SELECT b FROM t1;
+ERROR HY000: Illegal parameter data types `point ref_system_id=101` and `point ref_system_id=102` for operation 'UNION'
+DROP TABLE t1;
+CREATE TABLE t1 (a POINT REF_SYSTEM_ID=101, b POINT REF_SYSTEM_ID=101);
+CREATE TABLE t2 AS SELECT a, b FROM t1;
+CREATE VIEW  v2 AS SELECT a, b FROM t1;
+CREATE TABLE t3 AS SELECT a FROM t1 UNION SELECT b FROM t1;
+CREATE VIEW  v3 AS SELECT a FROM t1 UNION SELECT b FROM t1;
+CREATE TABLE t4 AS SELECT COALESCE(a,b) AS a FROM t1;
+CREATE VIEW  v4 AS SELECT COALESCE(a,b) AS a FROM t1;
+CREATE TABLE t5 AS SELECT LEAST(a,b) AS a FROM t1;
+CREATE VIEW  v5 AS SELECT LEAST(a,b) AS a FROM t1;
+CREATE TABLE t6 AS SELECT MIN(a) AS a FROM t1;
+CREATE VIEW  v6 AS SELECT MIN(a) AS a FROM t1;
+CREATE TABLE t7 AS SELECT MIN(a) AS a FROM t1 UNION SELECT b FROM v2;
+CREATE VIEW  v7 AS SELECT MIN(a) AS a FROM t1 UNION SELECT b FROM v2;
+CREATE TABLE t8 AS SELECT (SELECT a FROM t1) AS a;
+CREATE  VIEW v8 AS SELECT (SELECT a FROM t1) AS a;
+CREATE TABLE t9 AS VALUES ((SELECT MAX(a) FROM t1)),(((SELECT MIN(b) FROM t1)));
+CREATE VIEW  v9 AS VALUES ((SELECT MAX(a) FROM t1)),(((SELECT MIN(b) FROM t1)));
+SELECT
+G_TABLE_NAME, G_GEOMETRY_COLUMN, SRID
+FROM
+INFORMATION_SCHEMA.GEOMETRY_COLUMNS
+WHERE
+F_TABLE_SCHEMA='test'
+ORDER
+BY G_TABLE_NAME, G_GEOMETRY_COLUMN;
+G_TABLE_NAME	G_GEOMETRY_COLUMN	SRID
+t1	a	101
+t1	b	101
+t2	a	101
+t2	b	101
+t3	a	101
+t4	a	101
+t5	a	101
+t6	a	101
+t7	a	101
+t8	a	101
+t9	(SELECT MAX(a) FROM t1)	101
+v2	a	101
+v2	b	101
+v3	a	101
+v4	a	101
+v5	a	101
+v6	a	101
+v7	a	101
+v8	a	101
+v9	(select max(`test`.`t1`.`a`) from `test`.`t1`)	101
+DROP TABLE t2,t3,t4,t5,t6,t7,t8,t9;
+DROP VIEW v2,v3,v4,v5,v6,v7,v8,v9;
+DROP TABLE t1;
+#
+# MDEV-34025 Virtual columns do not check assignment cast validity
+#
+CREATE TABLE t1 (a INT, b POINT GENERATED ALWAYS AS (a));
+ERROR HY000: Cannot cast 'int' as 'point' in assignment of `test`.`t1`.`b`
+CREATE TABLE t1 (a POINT, b INT GENERATED ALWAYS AS (a));
+ERROR HY000: Cannot cast 'point' as 'int' in assignment of `test`.`t1`.`b`
+#
+# End of 11.5 tests
 #

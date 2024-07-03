@@ -1,3 +1,9 @@
+mariadb (1:11.5.) unstable; urgency=medium
+
+  * Update version to 1:11.5.
+
+ -- hudeng <hudeng@deepin.org>  Wed, 03 Jul 2024 11:48:10 +0800
+
 mariadb (1:10.11.6-1) unstable; urgency=medium
 
   [ Otto Kekäläinen ]

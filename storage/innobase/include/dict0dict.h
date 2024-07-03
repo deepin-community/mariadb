@@ -2,7 +2,7 @@
 
 Copyright (c) 1996, 2018, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2012, Facebook Inc.
-Copyright (c) 2013, 2022, MariaDB Corporation.
+Copyright (c) 2013, 2023, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -35,6 +35,7 @@ Created 1/8/1996 Heikki Tuuri
 #include <my_sys.h>
 #include <deque>
 
+class MDL_context;
 class MDL_ticket;
 
 /** the first table or index ID for other than hard-coded system tables */
@@ -138,6 +139,21 @@ dict_acquire_mdl_shared(dict_table_t *table,
                         THD *thd,
                         MDL_ticket **mdl,
                         dict_table_op_t table_op= DICT_TABLE_OP_NORMAL);
+
+/** Acquire MDL shared for the table name.
+@tparam trylock whether to use non-blocking operation
+@param[in,out]  table           table object
+@param[in,out]  mdl_context     MDL context
+@param[out]     mdl             MDL ticket
+@param[in]      table_op        operation to perform when opening
+@return table object after locking MDL shared
+@retval nullptr if the table is not readable, or if trylock && MDL blocked */
+template<bool trylock>
+__attribute__((nonnull, warn_unused_result))
+dict_table_t*
+dict_acquire_mdl_shared(dict_table_t *table,
+                        MDL_context *mdl_context, MDL_ticket **mdl,
+                        dict_table_op_t table_op);
 
 /** Look up a table by numeric identifier.
 @param[in]      table_id        table identifier
@@ -309,7 +325,7 @@ TRUE.
 ibool
 dict_col_name_is_reserved(
 /*======================*/
-	const char*	name)	/*!< in: column name */
+	const LEX_CSTRING &name)	/*!< in: column name */
 	MY_ATTRIBUTE((nonnull, warn_unused_result));
 /** Unconditionally set the AUTO_INCREMENT counter.
 @param[in,out]	table	table or partition
@@ -521,7 +537,7 @@ dict_foreign_find_index(
 @param[in]	table		table object
 @param[in]	col_nr		virtual column number(nth virtual column)
 @return column name. */
-const char*
+Lex_ident_column
 dict_table_get_v_col_name(
 	const dict_table_t*	table,
 	ulint			col_nr);
@@ -535,7 +551,7 @@ otherwise table->n_def */
 ulint
 dict_table_has_column(
 	const dict_table_t*	table,
-	const char*		col_name,
+	const LEX_CSTRING	&col_name,
 	ulint			col_nr = 0);
 
 /**********************************************************************//**
@@ -633,8 +649,6 @@ dict_table_get_next_index(
 #define dict_index_is_auto_gen_clust(index) (index)->is_gen_clust()
 #define dict_index_is_unique(index) (index)->is_unique()
 #define dict_index_is_spatial(index) (index)->is_spatial()
-#define dict_index_is_ibuf(index) (index)->is_ibuf()
-#define dict_index_is_sec_or_ibuf(index) !(index)->is_primary()
 #define dict_index_has_virtual(index) (index)->has_virtual()
 
 /** Get all the FTS indexes on a table.
@@ -649,7 +663,7 @@ dict_table_get_all_fts_indexes(
 /********************************************************************//**
 Gets the number of user-defined non-virtual columns in a table in the
 dictionary cache.
-@return number of user-defined (e.g., not ROW_ID) non-virtual
+@return number of user-defined (e.g., not DB_ROW_ID) non-virtual
 columns of a table */
 UNIV_INLINE
 unsigned
@@ -766,7 +780,7 @@ dict_table_get_sys_col(
 @param[in]	col_nr	column number in table
 @return	column name */
 inline
-const char*
+Lex_ident_column
 dict_table_get_col_name(const dict_table_t* table, ulint col_nr)
 {
 	return(dict_table_get_nth_col(table, col_nr)->name(*table));
@@ -1314,13 +1328,7 @@ class dict_sys_t
   std::atomic<ulonglong> latch_ex_wait_start;
 
   /** the rw-latch protecting the data dictionary cache */
-  alignas(CPU_LEVEL1_DCACHE_LINESIZE) srw_lock latch;
-#ifdef UNIV_DEBUG
-  /** whether latch is being held in exclusive mode (by any thread) */
-  Atomic_relaxed<pthread_t> latch_ex;
-  /** number of S-latch holders */
-  Atomic_counter<uint32_t> latch_readers;
-#endif
+  alignas(CPU_LEVEL1_DCACHE_LINESIZE) IF_DBUG(srw_lock_debug,srw_lock) latch;
 public:
   /** Indexes of SYS_TABLE[] */
   enum
@@ -1371,26 +1379,9 @@ private:
   std::atomic<table_id_t> temp_table_id{DICT_HDR_FIRST_ID};
   /** hash table of temporary table IDs */
   hash_table_t temp_id_hash;
-  /** the next value of DB_ROW_ID, backed by DICT_HDR_ROW_ID
-  (FIXME: remove this, and move to dict_table_t) */
-  Atomic_relaxed<row_id_t> row_id;
-  /** The synchronization interval of row_id */
-  static constexpr size_t ROW_ID_WRITE_MARGIN= 256;
 public:
   /** Diagnostic message for exceeding the lock_wait() timeout */
   static const char fatal_msg[];
-
-  /** @return A new value for GEN_CLUST_INDEX(DB_ROW_ID) */
-  inline row_id_t get_new_row_id();
-
-  /** Ensure that row_id is not smaller than id, on IMPORT TABLESPACE */
-  inline void update_row_id(row_id_t id);
-
-  /** Recover the global DB_ROW_ID sequence on database startup */
-  void recover_row_id(row_id_t id)
-  {
-    row_id= ut_uint64_align_up(id, ROW_ID_WRITE_MARGIN) + ROW_ID_WRITE_MARGIN;
-  }
 
   /** @return a new temporary table ID */
   table_id_t acquire_temporary_table_id()
@@ -1488,15 +1479,12 @@ public:
   }
 
 #ifdef UNIV_DEBUG
-  /** @return whether any thread (not necessarily the current thread)
-  is holding the latch; that is, this check may return false
-  positives */
-  bool frozen() const { return latch_readers || latch_ex; }
-  /** @return whether any thread (not necessarily the current thread)
-  is holding a shared latch */
-  bool frozen_not_locked() const { return latch_readers; }
+  /** @return whether the current thread is holding the latch */
+  bool frozen() const { return latch.have_any(); }
+  /** @return whether the current thread is holding a shared latch */
+  bool frozen_not_locked() const { return latch.have_rd(); }
   /** @return whether the current thread holds the exclusive latch */
-  bool locked() const { return latch_ex == pthread_self(); }
+  bool locked() const { return latch.have_wr(); }
 #endif
 private:
   /** Acquire the exclusive latch */
@@ -1511,13 +1499,7 @@ public:
   /** Exclusively lock the dictionary cache. */
   void lock(SRW_LOCK_ARGS(const char *file, unsigned line))
   {
-    if (latch.wr_lock_try())
-    {
-      ut_ad(!latch_readers);
-      ut_ad(!latch_ex);
-      ut_d(latch_ex= pthread_self());
-    }
-    else
+    if (!latch.wr_lock_try())
       lock_wait(SRW_LOCK_ARGS(file, line));
   }
 
@@ -1530,27 +1512,11 @@ public:
   ATTRIBUTE_NOINLINE void unfreeze();
 #else
   /** Unlock the data dictionary cache. */
-  void unlock()
-  {
-    ut_ad(latch_ex == pthread_self());
-    ut_ad(!latch_readers);
-    ut_d(latch_ex= 0);
-    latch.wr_unlock();
-  }
+  void unlock() { latch.wr_unlock(); }
   /** Acquire a shared lock on the dictionary cache. */
-  void freeze()
-  {
-    latch.rd_lock();
-    ut_ad(!latch_ex);
-    ut_d(latch_readers++);
-  }
+  void freeze() { latch.rd_lock(); }
   /** Release a shared lock on the dictionary cache. */
-  void unfreeze()
-  {
-    ut_ad(!latch_ex);
-    ut_ad(latch_readers--);
-    latch.rd_unlock();
-  }
+  void unfreeze() { latch.rd_unlock(); }
 #endif
 
   /** Estimate the used memory occupied by the data dictionary

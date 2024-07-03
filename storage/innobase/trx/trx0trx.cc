@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1996, 2016, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2015, 2022, MariaDB Corporation.
+Copyright (c) 2015, 2023, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -57,11 +57,17 @@ const byte trx_id_max_bytes[8] = {
 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
 };
 
-/** The bit pattern corresponding to max timestamp */
+#if SIZEOF_VOIDP == 4
+/* Max timestamp before 11.3 */
 const byte timestamp_max_bytes[7] = {
 	0x7f, 0xff, 0xff, 0xff, 0x0f, 0x42, 0x3f
 };
-
+#else
+/** The bit pattern corresponding to max timestamp */
+const byte timestamp_max_bytes[7] = {
+	0xff, 0xff, 0xff, 0xff, 0x0f, 0x42, 0x3f
+};
+#endif /* SIZEOF_VOIDP */
 
 static const ulint MAX_DETAILED_ERROR_LEN = 256;
 
@@ -412,12 +418,12 @@ void trx_t::free()
 #endif
   read_view.mem_noaccess();
   MEM_NOACCESS(&lock, sizeof lock);
-  MEM_NOACCESS(&op_info, sizeof op_info);
-  MEM_NOACCESS(&isolation_level, sizeof isolation_level);
-  MEM_NOACCESS(&check_foreigns, sizeof check_foreigns);
+  MEM_NOACCESS(&op_info, sizeof op_info +
+               sizeof(unsigned) /* isolation_level, snapshot_isolation,
+                                   check_foreigns, check_unique_secondary,
+                                   bulk_insert */);
   MEM_NOACCESS(&is_registered, sizeof is_registered);
   MEM_NOACCESS(&active_commit_ordered, sizeof active_commit_ordered);
-  MEM_NOACCESS(&check_unique_secondary, sizeof check_unique_secondary);
   MEM_NOACCESS(&flush_log_later, sizeof flush_log_later);
   MEM_NOACCESS(&duplicates, sizeof duplicates);
   MEM_NOACCESS(&dict_operation, sizeof dict_operation);
@@ -582,6 +588,7 @@ static dberr_t trx_resurrect_table_locks(trx_t *trx, const trx_undo_t &undo)
                                  undo.top_page_no), 0, RW_S_LATCH, nullptr,
                        BUF_GET, &mtr, &err))
   {
+    buf_page_make_young_if_needed(&block->page);
     buf_block_t *undo_block= block;
     const trx_undo_rec_t *undo_rec= block->page.frame + undo.top_offset;
 
@@ -980,7 +987,13 @@ void trx_t::commit_empty(mtr_t *mtr)
   trx_undo_t *&undo= rsegs.m_redo.undo;
 
   ut_ad(undo->state == TRX_UNDO_ACTIVE || undo->state == TRX_UNDO_PREPARED);
-  ut_ad(undo->size == 1);
+
+  if (UNIV_UNLIKELY(undo->size != 1))
+  {
+    sql_print_error("InnoDB: Undo log for transaction " TRX_ID_FMT
+                    " is corrupted (" UINT32PF "!=1)", id, undo->size);
+    ut_ad("corrupted undo log" == 0);
+  }
 
   if (buf_block_t *u=
       buf_page_get(page_id_t(rseg->space->id, undo->hdr_page_no), 0,
@@ -1135,15 +1148,23 @@ inline void trx_t::write_serialisation_history(mtr_t *mtr)
     }
     else if (rseg->last_page_no == FIL_NULL)
     {
-      mysql_mutex_lock(&purge_sys.pq_mutex);
+      /* trx_sys.assign_new_trx_no() and
+      purge_sys.enqueue() must be invoked in the same
+      critical section protected with purge queue mutex to avoid rseg with
+      greater last commit number to be pushed to purge queue prior to rseg with
+      lesser last commit number. In other words pushing to purge queue must be
+      serialized along with assigning trx_no. Otherwise purge coordinator
+      thread can also fetch redo log records from rseg with greater last commit
+      number before rseg with lesser one. */
+      purge_sys.queue_lock();
       trx_sys.assign_new_trx_no(this);
       const trx_id_t end{rw_trx_hash_element->no};
+      rseg->last_page_no= undo->hdr_page_no;
       /* end cannot be less than anything in rseg. User threads only
       produce events when a rollback segment is empty. */
-      purge_sys.purge_queue.push(TrxUndoRsegs{end, *rseg});
-      mysql_mutex_unlock(&purge_sys.pq_mutex);
-      rseg->last_page_no= undo->hdr_page_no;
       rseg->set_last_commit(undo->hdr_offset, end);
+      purge_sys.enqueue(end, *rseg);
+      purge_sys.queue_unlock();
     }
     else
       trx_sys.assign_new_trx_no(this);
@@ -1241,7 +1262,7 @@ static void trx_flush_log_if_needed(lsn_t lsn, trx_t *trx)
     return;
 
   const bool flush=
-    (srv_file_flush_method != SRV_NOSYNC &&
+    (!my_disable_sync &&
      (srv_flush_log_at_trx_commit & 1));
 
   completion_callback cb;
@@ -1504,6 +1525,7 @@ void trx_t::commit_cleanup()
 
   mutex.wr_lock();
   state= TRX_STATE_NOT_STARTED;
+  *detailed_error= '\0';
   mod_tables.clear();
 
   check_foreigns= true;
@@ -2003,8 +2025,7 @@ trx_prepare(
 
 		We must not be holding any mutexes or latches here. */
 		if (auto f = srv_flush_log_at_trx_commit) {
-			log_write_up_to(lsn, (f & 1) && srv_file_flush_method
-					!= SRV_NOSYNC);
+			log_write_up_to(lsn, (f & 1) && !my_disable_sync);
 		}
 
 		if (!UT_LIST_GET_LEN(trx->lock.trx_locks)

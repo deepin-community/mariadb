@@ -251,7 +251,7 @@ public:
    */
   bool sql_force_rotate_relay;
 
-  time_t last_master_timestamp;
+  my_time_t last_master_timestamp;
   /*
     The SQL driver thread sets this true while it is waiting at the end of the
     relay log for more events to arrive. SHOW SLAVE STATUS uses this to report
@@ -337,6 +337,8 @@ public:
   } until_log_names_cmp_result;
   /* Condition for UNTIL master_gtid_pos. */
   slave_connection_state until_gtid_pos;
+
+  bool is_until_before_gtids;
 
   /*
     retried_trans is a cumulative counter: how many times the slave
@@ -506,11 +508,6 @@ public:
     m_flags&= ~flag;
   }
 
-  /**
-    Text used in THD::proc_info when the slave SQL thread is delaying.
-  */
-  static const char *const state_delaying_string;
-
   bool flush();
 
   /**
@@ -533,7 +530,7 @@ public:
   {
     mysql_mutex_assert_owner(&data_lock);
     sql_delay_end= delay_end;
-    thd_proc_info(sql_driver_thd, state_delaying_string);
+    THD_STAGE_INFO(sql_driver_thd, stage_sql_thd_waiting_until_delay);
   }
 
   int32 get_sql_delay() { return sql_delay; }
@@ -564,6 +561,10 @@ private:
 
     Guarded by data_lock. Written by the sql thread.  Read by client
     threads executing SHOW SLAVE STATUS.
+
+    This is calculated as:
+    clock_time_for_event_on_master + clock_difference_between_master_and_slave +
+    SQL_DELAY.
   */
   time_t sql_delay_end;
 
@@ -623,7 +624,7 @@ struct inuse_relaylog {
   rpl_gtid *relay_log_state;
   uint32 relay_log_state_count;
   /* Number of events in this relay log queued for worker threads. */
-  int64 queued_count;
+  Atomic_counter<int64> queued_count;
   /* Number of events completed by worker threads. */
   Atomic_counter<int64> dequeued_count;
   /* Set when all events have been read from a relaylog. */
@@ -667,6 +668,22 @@ struct start_alter_info
   enum start_alter_state state;
   /* We are not using mysql_cond_t because we do not need PSI */
   mysql_cond_t start_alter_cond;
+};
+
+struct Rpl_table_data
+{
+  const table_def *tabledef;
+  TABLE *conv_table;
+  const Copy_field *copy_fields;
+  const Copy_field *copy_fields_end;
+  Rpl_table_data(const RPL_TABLE_LIST &rpl_table_list)
+  {
+    tabledef= &rpl_table_list.m_tabledef;
+    conv_table= rpl_table_list.m_conv_table;
+    copy_fields= rpl_table_list.m_online_alter_copy_fields;
+    copy_fields_end= rpl_table_list.m_online_alter_copy_fields_end;
+  }
+  bool is_online_alter() const { return copy_fields != NULL; }
 };
 
 /*
@@ -814,14 +831,14 @@ struct rpl_group_info
   longlong row_stmt_start_timestamp;
   bool long_find_row_note_printed;
   /* Needs room for "Gtid D-S-N\x00". */
-  char gtid_info_buf[5+10+1+10+1+20+1];
+  mutable char gtid_info_buf[5+10+1+10+1+20+1];
 
   /*
     The timestamp, from the master, of the commit event.
     Used to do delayed update of rli->last_master_timestamp, for getting
     reasonable values out of Seconds_Behind_Master in SHOW SLAVE STATUS.
   */
-  time_t last_master_timestamp;
+  my_time_t last_master_timestamp;
 
   /*
     Information to be able to re-try an event group in case of a deadlock or
@@ -941,29 +958,12 @@ struct rpl_group_info
     }
   }
 
-  bool get_table_data(TABLE *table_arg, table_def **tabledef_var, TABLE **conv_table_var) const
-  {
-    DBUG_ASSERT(tabledef_var && conv_table_var);
-    for (TABLE_LIST *ptr= tables_to_lock ; ptr != NULL ; ptr= ptr->next_global)
-      if (ptr->table == table_arg)
-      {
-        *tabledef_var= &static_cast<RPL_TABLE_LIST*>(ptr)->m_tabledef;
-        *conv_table_var= static_cast<RPL_TABLE_LIST*>(ptr)->m_conv_table;
-        DBUG_PRINT("debug", ("Fetching table data for table %s.%s:"
-                             " tabledef: %p, conv_table: %p",
-                             table_arg->s->db.str, table_arg->s->table_name.str,
-                             *tabledef_var, *conv_table_var));
-        return true;
-      }
-    return false;
-  }
-
   void clear_tables_to_lock();
-  void cleanup_context(THD *, bool);
+  void cleanup_context(THD *, bool, bool keep_domain_owner= false);
   void slave_close_thread_tables(THD *);
   void mark_start_commit_no_lock();
   void mark_start_commit();
-  char *gtid_info();
+  char *gtid_info() const;
   void unmark_start_commit();
 
   longlong get_row_stmt_start_timestamp()

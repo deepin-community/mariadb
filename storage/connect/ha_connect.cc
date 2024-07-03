@@ -156,10 +156,6 @@
 #include "tabpivot.h"
 #include "tabfix.h"
 
-#define my_strupr(p)    my_caseup_str(default_charset_info, (p));
-#define my_strlwr(p)    my_casedn_str(default_charset_info, (p));
-#define my_stricmp(a,b) my_strcasecmp(default_charset_info, (a), (b))
-
 
 /***********************************************************************/
 /*  Initialize the ha_connect static members.                          */
@@ -318,7 +314,7 @@ TYPELIB xtrace_typelib =
 static MYSQL_THDVAR_SET(
 	xtrace,                    // name
 	PLUGIN_VAR_RQCMDARG,       // opt
-	"Trace values.",           // comment
+	"Trace values",            // comment
 	NULL,                      // check
 	NULL,                      // update function
 	0,                         // def (NO)
@@ -356,7 +352,7 @@ TYPELIB usetemp_typelib=
 static MYSQL_THDVAR_ENUM(
   use_tempfile,                    // name
   PLUGIN_VAR_RQCMDARG,             // opt
-  "Temporary file use.",           // comment
+  "Temporary file use",            // comment
   NULL,                            // check
   NULL,                            // update function
   1,                               // def (AUTO)
@@ -366,20 +362,20 @@ static MYSQL_THDVAR_ENUM(
 // Size used for g->Sarea_Size
 static MYSQL_THDVAR_ULONGLONG(work_size,
 	PLUGIN_VAR_RQCMDARG,
-	"Size of the CONNECT work area.",
+	"Size of the CONNECT work area",
 	NULL, NULL, SZWORK, SZWMIN, ULONGLONG_MAX, 1);
 #else
 // Size used for g->Sarea_Size
 static MYSQL_THDVAR_ULONG(work_size,
   PLUGIN_VAR_RQCMDARG, 
-  "Size of the CONNECT work area.",
+  "Size of the CONNECT work area",
   NULL, NULL, SZWORK, SZWMIN, ULONG_MAX, 1);
 #endif
 
 // Size used when converting TEXT columns to VARCHAR
 static MYSQL_THDVAR_INT(conv_size,
        PLUGIN_VAR_RQCMDARG,             // opt
-       "Size used when converting TEXT columns.",
+       "Size used when converting TEXT columns",
        NULL, NULL, SZCONV, 0, 65500, 1);
 
 /**
@@ -403,7 +399,7 @@ TYPELIB xconv_typelib=
 static MYSQL_THDVAR_ENUM(
   type_conv,                       // name
   PLUGIN_VAR_RQCMDARG,             // opt
-  "Unsupported types conversion.", // comment
+  "Unsupported types conversion",  // comment
   NULL,                            // check
   NULL,                            // update function
   1,                               // def (yes)
@@ -436,7 +432,7 @@ static MYSQL_THDVAR_INT(default_prec,
 // Estimate max number of rows for JSON aggregate functions
 static MYSQL_THDVAR_UINT(json_grp_size,
        PLUGIN_VAR_RQCMDARG,      // opt
-       "max number of rows for JSON aggregate functions.",
+       "max number of rows for JSON aggregate functions",
        NULL, NULL, JSONMAX, 1, INT_MAX, 1);
 
 #if defined(JAVA_SUPPORT)
@@ -1174,7 +1170,7 @@ ulonglong ha_connect::table_flags() const
 //                   HA_FAST_KEY_READ |  causes error when sorting (???)
                      HA_NO_TRANSACTIONS | HA_DUPLICATE_KEY_NOT_IN_ORDER |
                      HA_NO_BLOBS | HA_MUST_USE_TABLE_CONDITION_PUSHDOWN |
-                     HA_REUSES_FILE_NAMES;
+                     HA_REUSES_FILE_NAMES | HA_NO_ONLINE_ALTER;
   ha_connect *hp= (ha_connect*)this;
   PTOS        pos= hp->GetTableOptionStruct();
 
@@ -6454,6 +6450,9 @@ char *ha_connect::GetDBfromName(const char *name)
   ha_create_table() in handle.cc
 */
 
+/* Stack size 25608 in clang */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
+
 int ha_connect::create(const char *name, TABLE *table_arg,
                        HA_CREATE_INFO *create_info)
 {
@@ -6998,6 +6997,7 @@ int ha_connect::create(const char *name, TABLE *table_arg,
   table= st;
   DBUG_RETURN(rc);
 } // end of create
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 /**
   Used to check whether a file based outward table can be populated by
@@ -7005,6 +7005,10 @@ int ha_connect::create(const char *name, TABLE *table_arg,
   - file does not exist or is void
   - user has file privilege
 */
+
+/* Stack size 16664 in clang */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
+
 bool ha_connect::FileExists(const char *fn, bool bf)
 {
   if (!fn || !*fn)
@@ -7055,6 +7059,7 @@ bool ha_connect::FileExists(const char *fn, bool bf)
 
   return true;
 } // end of FileExists
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 // Called by SameString and NoFieldOptionChange
 bool ha_connect::CheckString(PCSZ str1, PCSZ str2)
@@ -7397,7 +7402,8 @@ int ha_connect::multi_range_read_next(range_id_t *range_info)
 ha_rows ha_connect::multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq,
                                                void *seq_init_param,
                                                uint n_ranges, uint *bufsz,
-                                               uint *flags, Cost_estimate *cost)
+                                                uint *flags, ha_rows limit,
+                                                Cost_estimate *cost)
 {
   /*
     This call is here because there is no location where this->table would
@@ -7411,7 +7417,7 @@ ha_rows ha_connect::multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq,
     *flags|= HA_MRR_USE_DEFAULT_IMPL;
 
   ha_rows rows= ds_mrr.dsmrr_info_const(keyno, seq, seq_init_param, n_ranges,
-                                        bufsz, flags, cost);
+                                        bufsz, flags, limit, cost);
   xp->g->Mrr= !(*flags & HA_MRR_USE_DEFAULT_IMPL);
   return rows;
 } // end of multi_range_read_info_const

@@ -470,7 +470,7 @@ bool mysql_create_or_drop_trigger(THD *thd, TABLE_LIST *tables, bool create)
   /*
     We don't allow creating triggers on tables in the 'mysql' schema
   */
-  if (create && lex_string_eq(&tables->db, STRING_WITH_LEN("mysql")))
+  if (create && tables->db.streq(MYSQL_SCHEMA_NAME))
   {
     my_error(ER_NO_TRIGGERS_ON_SYSTEM_SCHEMA, MYF(0));
     DBUG_RETURN(TRUE);
@@ -867,6 +867,41 @@ static void build_trig_stmt_query(THD *thd, TABLE_LIST *tables,
 
 
 /**
+  Visit every Item_trigger_field object associated with a trigger
+  and run the code supplied in the last argument, passing
+  the Item_trigger_fgield object being visited.
+
+  @param trg_table_fields  Item_trigger_field objects owned by a trigger
+  @param fn                a function to invoke for every Item_trigger_field
+                           object
+
+  @return false on success, true on failure.
+*/
+
+template <typename FN>
+static
+bool iterate_trigger_fields_and_run_func(
+  SQL_I_List<SQL_I_List<Item_trigger_field> > &trg_table_fields,
+  FN fn
+  )
+{
+  for (SQL_I_List<Item_trigger_field>
+         *trg_fld_lst= trg_table_fields.first;
+       trg_fld_lst;
+       trg_fld_lst= trg_fld_lst->first->next_trig_field_list)
+  {
+    for (Item_trigger_field *trg_field= trg_fld_lst->first;
+         trg_field;
+         trg_field= trg_field->next_trg_field)
+    {
+      if (fn(trg_field))
+        return true;
+    }
+  }
+  return false;
+}
+
+/**
   Create trigger for table.
 
   @param thd           current thread context (including trigger definition in
@@ -902,7 +937,6 @@ bool Table_triggers_list::create_trigger(THD *thd, TABLE_LIST *tables,
   char trg_definer_holder[USER_HOST_BUFF_SIZE];
   LEX_CSTRING backup_name= { backup_file_buff, 0 };
   LEX_CSTRING file, trigname_file;
-  Item_trigger_field *trg_field;
   struct st_trigname trigname;
   String trigger_definition;
   Trigger *trigger= 0;
@@ -914,7 +948,7 @@ bool Table_triggers_list::create_trigger(THD *thd, TABLE_LIST *tables,
     DBUG_RETURN(true);
 
   /* Trigger must be in the same schema as target table. */
-  if (lex_string_cmp(table_alias_charset, &table->s->db, &lex->spname->m_db))
+  if (!table->s->db.streq(lex->spname->m_db))
   {
     my_error(ER_TRG_IN_WRONG_SCHEMA, MYF(0));
     DBUG_RETURN(true);
@@ -939,18 +973,20 @@ bool Table_triggers_list::create_trigger(THD *thd, TABLE_LIST *tables,
   */
   old_field= new_field= table->field;
 
-  for (trg_field= lex->trg_table_fields.first;
-       trg_field; trg_field= trg_field->next_trg_field)
-  {
-    /*
-      NOTE: now we do not check privileges at CREATE TRIGGER time. This will
-      be changed in the future.
-    */
-    trg_field->setup_field(thd, table, NULL);
+  if (iterate_trigger_fields_and_run_func(
+        lex->sphead->m_trg_table_fields,
+        [thd, table] (Item_trigger_field* trg_field)
+        {
+          /*
+            NOTE: now we do not check privileges at CREATE TRIGGER time.
+            This will be changed in the future.
+          */
+          trg_field->setup_field(thd, table, nullptr);
 
-    if (trg_field->fix_fields_if_needed(thd, (Item **)0))
-      DBUG_RETURN(true);
-  }
+          return trg_field->fix_fields_if_needed(thd, (Item **)0);
+        }
+     ))
+    DBUG_RETURN(true);
 
   /* Ensure anchor trigger exists */
   if (lex->trg_chistics.ordering_clause != TRG_ORDER_NONE)
@@ -1090,13 +1126,13 @@ bool Table_triggers_list::create_trigger(THD *thd, TABLE_LIST *tables,
   trigger->client_cs_name= thd->charset()->cs_name;
   trigger->connection_cl_name= thd->variables.collation_connection->coll_name;
   trigger->db_cl_name= get_default_db_collation(thd, tables->db.str)->coll_name;
-  trigger->name= lex->spname->m_name;
+  trigger->name= Lex_ident_trigger(lex->spname->m_name);
 
   /* Add trigger in it's correct place */
   add_trigger(lex->trg_chistics.event,
               lex->trg_chistics.action_time,
               lex->trg_chistics.ordering_clause,
-              &lex->trg_chistics.anchor_trigger_name,
+              Lex_ident_trigger(lex->trg_chistics.anchor_trigger_name),
               trigger);
 
   /* Create trigger definition file .TRG */
@@ -1282,8 +1318,7 @@ Trigger *Table_triggers_list::find_trigger(const LEX_CSTRING *name,
            (trigger= *parent);
            parent= &trigger->next)
       {
-        if (lex_string_cmp(table_alias_charset,
-                           &trigger->name, name) == 0)
+        if (trigger->name.streq(*name))
         {
           if (remove_from_list)
           {
@@ -1651,7 +1686,12 @@ bool Table_triggers_list::check_n_load(THD *thd, const LEX_CSTRING *db,
 
         bool parse_error= parse_sql(thd, & parser_state, creation_ctx);
         thd->pop_internal_handler();
-        DBUG_ASSERT(!parse_error || lex.sphead == 0);
+
+        if (parse_error)
+        {
+          sp_head::destroy(lex.sphead);
+          lex.sphead= nullptr;
+        }
 
         /*
           Not strictly necessary to invoke this method here, since we know
@@ -1682,7 +1722,8 @@ bool Table_triggers_list::check_n_load(THD *thd, const LEX_CSTRING *db,
         */
         if (trigger->hr_create_time.val < 429496729400ULL)
           trigger->hr_create_time.val*= 10000;
-        trigger->name= sp ? sp->m_name : empty_clex_str;
+        trigger->name= sp ? Lex_ident_trigger(sp->m_name) :
+                            Lex_ident_trigger(empty_clex_str);
         trigger->on_table_name.str= (char*) lex.raw_trg_on_table_name_begin;
         trigger->on_table_name.length= (lex.raw_trg_on_table_name_end -
                                         lex.raw_trg_on_table_name_begin);
@@ -1697,7 +1738,7 @@ bool Table_triggers_list::check_n_load(THD *thd, const LEX_CSTRING *db,
           trigger_list->add_trigger(lex.trg_chistics.event,
                                     lex.trg_chistics.action_time,
                                     TRG_ORDER_NONE,
-                                    &lex.trg_chistics.anchor_trigger_name,
+                        Lex_ident_trigger(lex.trg_chistics.anchor_trigger_name),
                                     trigger);
 
         if (unlikely(parse_error))
@@ -1716,7 +1757,8 @@ bool Table_triggers_list::check_n_load(THD *thd, const LEX_CSTRING *db,
 
           if (likely((name= error_handler.get_trigger_name())))
           {
-            trigger->name= safe_lexcstrdup_root(&table->mem_root, *name);
+            trigger->name= Lex_ident_trigger(safe_lexcstrdup_root(
+                                               &table->mem_root, *name));
             if (unlikely(!trigger->name.str))
               goto err_with_lex_cleanup;
           }
@@ -1779,12 +1821,13 @@ bool Table_triggers_list::check_n_load(THD *thd, const LEX_CSTRING *db,
         */
 
         char fname[SAFE_NAME_LEN + 1];
-        DBUG_ASSERT((!my_strcasecmp(table_alias_charset, lex.query_tables->db.str, db->str) ||
+        DBUG_ASSERT((lex.query_tables->db.streq(*db) ||
                      (check_n_cut_mysql50_prefix(db->str, fname, sizeof(fname)) &&
-                      !my_strcasecmp(table_alias_charset, lex.query_tables->db.str, fname))));
-        DBUG_ASSERT((!my_strcasecmp(table_alias_charset, lex.query_tables->table_name.str, table_name->str) ||
+                      lex.query_tables->db.streq(Lex_cstring_strlen(fname)))));
+        DBUG_ASSERT((lex.query_tables->table_name.streq(*table_name) ||
                      (check_n_cut_mysql50_prefix(table_name->str, fname, sizeof(fname)) &&
-                      !my_strcasecmp(table_alias_charset, lex.query_tables->table_name.str, fname))));
+                      lex.query_tables->table_name.
+                        streq(Lex_cstring_strlen(fname)))));
 #endif
         if (names_only)
         {
@@ -1792,12 +1835,6 @@ bool Table_triggers_list::check_n_load(THD *thd, const LEX_CSTRING *db,
           continue;
         }
 
-        /*
-          Gather all Item_trigger_field objects representing access to fields
-          in old/new versions of row in trigger into lists containing all such
-          objects for the trigger_list with same action and timing.
-        */
-        trigger->trigger_fields= lex.trg_table_fields.first;
         /*
           Also let us bind these objects to Field objects in table being
           opened.
@@ -1807,14 +1844,17 @@ bool Table_triggers_list::check_n_load(THD *thd, const LEX_CSTRING *db,
           SELECT)...
           Anyway some things can be checked only during trigger execution.
         */
-        for (Item_trigger_field *trg_field= lex.trg_table_fields.first;
-             trg_field;
-             trg_field= trg_field->next_trg_field)
-        {
-          trg_field->setup_field(thd, table,
-                                 &trigger->subject_table_grants);
-        }
 
+        (void)iterate_trigger_fields_and_run_func(
+          sp->m_trg_table_fields,
+          [thd, table, trigger] (Item_trigger_field* trg_field)
+          {
+            trg_field->setup_field(thd, table, &trigger->subject_table_grants);
+            return false;
+          }
+        );
+
+        sp->m_trg= trigger;
         lex_end(&lex);
       }
       thd->reset_db(&save_db);
@@ -1863,7 +1903,8 @@ error:
 void Table_triggers_list::add_trigger(trg_event_type event,
                                       trg_action_time_type action_time,
                                       trigger_order_type ordering_clause,
-                                      LEX_CSTRING *anchor_trigger_name,
+                                      const Lex_ident_trigger &
+                                        anchor_trigger_name,
                                       Trigger *trigger)
 {
   Trigger **parent= &triggers[event][action_time];
@@ -1872,8 +1913,7 @@ void Table_triggers_list::add_trigger(trg_event_type event,
   for ( ; *parent ; parent= &(*parent)->next, position++)
   {
     if (ordering_clause != TRG_ORDER_NONE &&
-        !lex_string_cmp(table_alias_charset, anchor_trigger_name,
-                        &(*parent)->name))
+        anchor_trigger_name.streq((*parent)->name))
     {
       if (ordering_clause == TRG_ORDER_FOLLOWS)
       {
@@ -2280,11 +2320,11 @@ bool Trigger::change_on_table_name(void* param_arg)
 bool
 Table_triggers_list::prepare_for_rename(THD *thd,
                                         TRIGGER_RENAME_PARAM *param,
-                                        const LEX_CSTRING *db,
-                                        const LEX_CSTRING *old_alias,
-                                        const LEX_CSTRING *old_table,
-                                        const LEX_CSTRING *new_db,
-                                        const LEX_CSTRING *new_table)
+                                        const Lex_ident_db &db,
+                                        const Lex_ident_table &old_alias,
+                                        const Lex_ident_table &old_table,
+                                        const Lex_ident_db &new_db,
+                                        const Lex_ident_table &new_table)
 {
   TABLE *table= &param->table;
   bool result= 0;
@@ -2293,11 +2333,10 @@ Table_triggers_list::prepare_for_rename(THD *thd,
   init_sql_alloc(key_memory_Table_trigger_dispatcher,
                  &table->mem_root, 8192, 0, MYF(0));
 
-  DBUG_ASSERT(my_strcasecmp(table_alias_charset, db->str, new_db->str) ||
-              my_strcasecmp(table_alias_charset, old_alias->str,
-                            new_table->str));
+  DBUG_ASSERT(!db.streq(new_db) ||
+              !old_alias.streq(new_table));
 
-  if (Table_triggers_list::check_n_load(thd, db, old_table, table, TRUE))
+  if (Table_triggers_list::check_n_load(thd, &db, &old_table, table, TRUE))
   {
     result= 1;
     goto end;
@@ -2319,11 +2358,11 @@ Table_triggers_list::prepare_for_rename(THD *thd,
       we will be given table name with "#mysql50#" prefix
       To remove this prefix we use check_n_cut_mysql50_prefix().
     */
-    if (my_strcasecmp(table_alias_charset, db->str, new_db->str))
+    if (!db.streq(new_db))
     {
       char dbname[SAFE_NAME_LEN + 1];
-      if (check_n_cut_mysql50_prefix(db->str, dbname, sizeof(dbname)) &&
-          !my_strcasecmp(table_alias_charset, dbname, new_db->str))
+      if (check_n_cut_mysql50_prefix(db.str, dbname, sizeof(dbname)) &&
+          new_db.streq(Lex_cstring_strlen(dbname)))
       {
         param->upgrading50to51= TRUE;
       }
@@ -2537,7 +2576,8 @@ add_tables_and_routines_for_triggers(THD *thd,
 
           MDL_key key(MDL_key::TRIGGER, trigger->m_db.str, trigger->m_name.str);
 
-          if (sp_add_used_routine(prelocking_ctx, thd->stmt_arena,
+          if (sp_add_used_routine(prelocking_ctx,
+                                  thd->active_stmt_arena_to_use(),
                                   &key, &sp_handler_trigger,
                                   table_list->belong_to_view))
           {
@@ -2573,7 +2613,6 @@ add_tables_and_routines_for_triggers(THD *thd,
 void Table_triggers_list::mark_fields_used(trg_event_type event)
 {
   int action_time;
-  Item_trigger_field *trg_field;
   DBUG_ENTER("Table_triggers_list::mark_fields_used");
 
   for (action_time= 0; action_time < (int)TRG_ACTION_MAX; action_time++)
@@ -2582,20 +2621,28 @@ void Table_triggers_list::mark_fields_used(trg_event_type event)
          trigger ;
          trigger= trigger->next)
     {
-      for (trg_field= trigger->trigger_fields;
-           trg_field;
-           trg_field= trg_field->next_trg_field)
-      {
-        /* We cannot mark fields which does not present in table. */
-        if (trg_field->field_idx != NO_CACHED_FIELD_INDEX)
+      /*
+        Skip a trigger that was parsed with an error.
+      */
+      if (trigger->body == nullptr)
+        continue;
+
+      (void)iterate_trigger_fields_and_run_func(
+        trigger->body->m_trg_table_fields,
+        [this] (Item_trigger_field* trg_field)
         {
-          DBUG_PRINT("info", ("marking field: %u", (uint) trg_field->field_idx));
-          if (trg_field->get_settable_routine_parameter())
-            bitmap_set_bit(trigger_table->write_set, trg_field->field_idx);
-          trigger_table->mark_column_with_deps(
-                                  trigger_table->field[trg_field->field_idx]);
+          /* We cannot mark fields which does not present in table. */
+          if (trg_field->field_idx != NO_CACHED_FIELD_INDEX)
+          {
+            DBUG_PRINT("info", ("marking field: %u", (uint) trg_field->field_idx));
+            if (trg_field->get_settable_routine_parameter())
+              bitmap_set_bit(trigger_table->write_set, trg_field->field_idx);
+            trigger_table->mark_column_with_deps(
+              trigger_table->field[trg_field->field_idx]);
+          }
+          return false;
         }
-      }
+      );
     }
   }
   trigger_table->file->column_bitmaps_signal();

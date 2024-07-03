@@ -63,7 +63,7 @@ f116 VARBINARY(64) null,
 f117 VARBINARY(192) null
 ) engine = myisam;
 Warnings:
-Note	1287	'YEAR(3)' is deprecated and will be removed in a future release. Please use YEAR(4) instead
+Warning	1287	'YEAR(3)' is deprecated and will be removed in a future release. Please use 'YEAR(4)' instead
 load data infile '<MYSQLTEST_VARDIR>/std_data/funcs_1/myisam_tb2.txt'
 into table tb2;
 DROP DATABASE IF EXISTS test1;
@@ -132,7 +132,7 @@ f116 VARBINARY(64) null,
 f117 VARBINARY(192) null
 ) engine = myisam;
 Warnings:
-Note	1287	'YEAR(3)' is deprecated and will be removed in a future release. Please use YEAR(4) instead
+Warning	1287	'YEAR(3)' is deprecated and will be removed in a future release. Please use 'YEAR(4)' instead
 load data infile '<MYSQLTEST_VARDIR>/std_data/funcs_1/myisam_tb2.txt'
 into table tb2;
 USE test;
@@ -23849,9 +23849,9 @@ DELETE FROM t1;
 DROP VIEW v1;
 CREATE VIEW v1 AS SELECT f1, f2, f3, 'HELLO' AS my_greeting FROM t1;
 INSERT INTO v1 SET f1 = 1;
-ERROR HY000: The target table v1 of the INSERT is not insertable-into
 SELECT * from t1;
 f1	f2	f3	f4
+1	NULL	NULL	NULL
 DELETE FROM t1;
 INSERT INTO v1 SET f1 = 1, my_greeting = 'HELLO';
 ERROR HY000: The target table v1 of the INSERT is not insertable-into

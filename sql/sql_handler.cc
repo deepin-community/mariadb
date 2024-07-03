@@ -646,9 +646,8 @@ mysql_ha_fix_cond_and_key(SQL_HANDLER *handler,
   {
     /* Check if same as last keyname. If not, do a full lookup */
     if (handler->keyno < 0 ||
-        my_strcasecmp(&my_charset_latin1,
-                      keyname,
-                      table->s->key_info[handler->keyno].name.str))
+        !Lex_ident_column(Lex_cstring_strlen(keyname)).
+          streq(table->s->key_info[handler->keyno].name))
     {
       if ((handler->keyno= find_type(keyname, &table->s->keynames,
                                      FIND_TYPE_NO_PREFIX) - 1) < 0)
@@ -674,7 +673,7 @@ mysql_ha_fix_cond_and_key(SQL_HANDLER *handler,
       if ((c_key->flags & HA_SPATIAL) ||
            c_key->algorithm == HA_KEY_ALG_FULLTEXT ||
           (ha_rkey_mode != HA_READ_KEY_EXACT &&
-           (table->file->index_flags(handler->keyno, 0, TRUE) &
+           (table->key_info[handler->keyno].index_flags &
             (HA_READ_NEXT | HA_READ_PREV | HA_READ_RANGE)) == 0))
       {
         my_error(ER_KEY_DOESNT_SUPPORT, MYF(0),
@@ -690,8 +689,7 @@ mysql_ha_fix_cond_and_key(SQL_HANDLER *handler,
       }
 
       if (key_expr->elements < keyinfo->user_defined_key_parts &&
-               (table->file->index_flags(handler->keyno, 0, TRUE) &
-                HA_ONLY_WHOLE_INDEX))
+          (table->key_info[handler->keyno].index_flags & HA_ONLY_WHOLE_INDEX))
       {
         my_error(ER_KEY_DOESNT_SUPPORT, MYF(0),
                  table->file->index_type(handler->keyno), keyinfo->name.str);
@@ -989,6 +987,7 @@ retry:
       }
       goto ok;
     }
+    thd->inc_examined_row_count();
     if (cond && !cond->val_int())
     {
       if (thd->is_error())
@@ -1003,6 +1002,7 @@ retry:
         goto err;
 
       protocol->write();
+      thd->inc_sent_row_count(1);
     }
     num_rows++;
   }
@@ -1080,10 +1080,8 @@ static SQL_HANDLER *mysql_ha_find_match(THD *thd, TABLE_LIST *tables)
       if (tables->is_anonymous_derived_table())
         continue;
       if ((! tables->db.str[0] ||
-          ! my_strcasecmp(&my_charset_latin1, hash_tables->db.str,
-                          tables->get_db_name())) &&
-          ! my_strcasecmp(&my_charset_latin1, hash_tables->table_name.str,
-                          tables->get_table_name()))
+          tables->get_db_name().streq(hash_tables->db)) &&
+          tables->get_table_name().streq(hash_tables->table_name))
       {
         /* Link into hash_tables list */
         hash_tables->next= head;

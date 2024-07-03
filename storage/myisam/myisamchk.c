@@ -15,12 +15,14 @@
 
 /* Describe, check and repair of MyISAM tables */
 
+#define VER "2.7"
 #include "fulltext.h"
 #include "my_default.h"
 #include <m_ctype.h>
 #include <stdarg.h>
 #include <my_getopt.h>
 #include <my_bit.h>
+#include <welcome_copyright_notice.h>
 
 static uint decode_bits;
 static char **default_argv;
@@ -53,7 +55,6 @@ static const char *field_pack[]=
 static const char *myisam_stats_method_str="nulls_unequal";
 
 static void get_options(int *argc,char * * *argv);
-static void print_version(void);
 static void usage(void);
 static int myisamchk(HA_CHECK *param, char *filename);
 static void descript(HA_CHECK *param, register MI_INFO *info, char * name);
@@ -273,7 +274,7 @@ static struct my_option my_long_options[] =
   { "key_buffer_size", OPT_KEY_BUFFER_SIZE, "",
     &check_param.use_buffers, &check_param.use_buffers, 0,
     GET_ULL, REQUIRED_ARG, KEY_BUFFER_INIT, MALLOC_OVERHEAD,
-    SIZE_T_MAX, MALLOC_OVERHEAD,  IO_SIZE, 0},
+    SIZE_T_MAX, 0,  IO_SIZE, 0},
   { "key_cache_block_size", OPT_KEY_CACHE_BLOCK_SIZE,  "",
     &opt_key_cache_block_size,
     &opt_key_cache_block_size, 0,
@@ -287,24 +288,24 @@ static struct my_option my_long_options[] =
     &check_param.read_buffer_length,
     &check_param.read_buffer_length, 0, GET_ULONG, REQUIRED_ARG,
     READ_BUFFER_INIT, MALLOC_OVERHEAD,
-    INT_MAX32, MALLOC_OVERHEAD, 1L, 0},
+    INT_MAX32, 0, 1L, 0},
   { "write_buffer_size", OPT_WRITE_BUFFER_SIZE, "",
     &check_param.write_buffer_length,
     &check_param.write_buffer_length, 0, GET_ULONG, REQUIRED_ARG,
     READ_BUFFER_INIT, MALLOC_OVERHEAD,
-    INT_MAX32, MALLOC_OVERHEAD, 1L, 0},
+    INT_MAX32, 0, 1L, 0},
   { "sort_buffer_size", OPT_SORT_BUFFER_SIZE,
     "Deprecated. myisam_sort_buffer_size alias is being used",
     &check_param.sort_buffer_length,
     &check_param.sort_buffer_length, 0, GET_ULL, REQUIRED_ARG,
     SORT_BUFFER_INIT, MIN_SORT_BUFFER + MALLOC_OVERHEAD,
-    SIZE_T_MAX, MALLOC_OVERHEAD, 1L, 0},
+    SIZE_T_MAX, 0, 1L, 0},
   { "myisam_sort_buffer_size", OPT_SORT_BUFFER_SIZE, 
     "Alias of sort_buffer_size parameter",
     &check_param.sort_buffer_length,
     &check_param.sort_buffer_length, 0, GET_ULL, REQUIRED_ARG,
     SORT_BUFFER_INIT, MIN_SORT_BUFFER + MALLOC_OVERHEAD,
-    SIZE_T_MAX, MALLOC_OVERHEAD, 1L, 0},
+    SIZE_T_MAX, 0, 1L, 0},
   { "sort_key_blocks", OPT_SORT_KEY_BLOCKS, "",
     &check_param.sort_key_blocks,
     &check_param.sort_key_blocks, 0, GET_ULONG, REQUIRED_ARG,
@@ -329,13 +330,6 @@ static struct my_option my_long_options[] =
     GET_STR, REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
   { 0, 0, 0, 0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0}
 };
-
-
-static void print_version(void)
-{
-  printf("%s  Ver 2.7 for %s at %s\n", my_progname, SYSTEM_TYPE,
-	 MACHINE_TYPE);
-}
 
 
 static void usage(void)

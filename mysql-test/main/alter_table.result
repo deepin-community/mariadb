@@ -268,28 +268,6 @@ ERROR 42000: Incorrect table name ''
 rename table t1 to ``;
 ERROR 42000: Incorrect table name ''
 drop table t1;
-drop table if exists t1, t2;
-Warnings:
-Note	1051	Unknown table 'test.t1,test.t2'
-create table t1 ( a varchar(10) not null primary key ) engine=myisam;
-create table t2 ( a varchar(10) not null primary key ) engine=merge union=(t1);
-flush tables;
-alter table t1 modify a varchar(10);
-show create table t2;
-Table	Create Table
-t2	CREATE TABLE `t2` (
-  `a` varchar(10) NOT NULL,
-  PRIMARY KEY (`a`)
-) ENGINE=MRG_MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci UNION=(`t1`)
-flush tables;
-alter table t1 modify a varchar(10) not null;
-show create table t2;
-Table	Create Table
-t2	CREATE TABLE `t2` (
-  `a` varchar(10) NOT NULL,
-  PRIMARY KEY (`a`)
-) ENGINE=MRG_MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci UNION=(`t1`)
-drop table if exists t1, t2;
 create table t1 (a int, b int, c int, d int, e int, f int, g int, h int,i int, primary key (a,b,c,d,e,f,g,i,h)) engine=MyISAM;
 insert ignore into t1 (a) values(1);
 Warnings:
@@ -900,7 +878,7 @@ show create table t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
   `a` text DEFAULT NULL
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_uca1400_ai_ci
 drop table t1;
 create table t1 (a mediumtext character set latin1);
 alter table t1 convert to character set utf8;
@@ -908,7 +886,7 @@ show create table t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
   `a` longtext DEFAULT NULL
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_uca1400_ai_ci
 drop table t1;
 End of 5.0 tests
 drop table if exists t1, t2, t3;
@@ -1013,10 +991,14 @@ CREATE TEMPORARY TABLE `#sql1` (c1 INT);
 CREATE TEMPORARY TABLE `@0023sql2` (c1 INT);
 SHOW TABLES;
 Tables_in_test
+@0023sql2
+#sql1
 ALTER TABLE `#sql1`      RENAME `@0023sql1`;
 ALTER TABLE `@0023sql2`  RENAME `#sql2`;
 SHOW TABLES;
 Tables_in_test
+#sql2
+@0023sql1
 INSERT INTO `#sql2`      VALUES (1);
 INSERT INTO `@0023sql1`  VALUES (2);
 SHOW CREATE TABLE `#sql2`;
@@ -1371,7 +1353,7 @@ Table	Create Table
 t1	CREATE TABLE `t1` (
   `a` int(11) DEFAULT NULL,
   `consultant_id` int(11) NOT NULL
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_uca1400_ai_ci
 DROP TABLE t1;
 CREATE TABLE t1 (
 `a` int(11) DEFAULT NULL
@@ -1383,7 +1365,7 @@ Table	Create Table
 t1	CREATE TABLE `t1` (
   `a` int(11) DEFAULT NULL,
   `consultant_id` int(11) NOT NULL DEFAULT 2
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_uca1400_ai_ci
 DROP TABLE t1;
 CREATE TABLE t1 (
 `a` int(11) DEFAULT NULL
@@ -1395,7 +1377,7 @@ Table	Create Table
 t1	CREATE TABLE `t1` (
   `a` int(11) DEFAULT NULL,
   `consultant_id` int(11) NOT NULL
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_uca1400_ai_ci
 DROP TABLE t1;
 CREATE TABLE t1 (
 `a` int(11) DEFAULT NULL
@@ -1408,7 +1390,7 @@ Table	Create Table
 t1	CREATE TABLE `t1` (
   `a` int(11) DEFAULT NULL,
   `consultant_id` bigint(20) DEFAULT NULL
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_uca1400_ai_ci
 DROP TABLE t1;
 #
 # BUG#27788685: NO WARNING WHEN TRUNCATING A STRING WITH DATA LOSS
@@ -1672,18 +1654,14 @@ ALTER TABLE m1 ENABLE KEYS, ALGORITHM= INPLACE;
 affected rows: 0
 ALTER TABLE t1 DROP INDEX i1, DROP INDEX i2, DROP INDEX i3, DROP INDEX i4;
 #
-# 2: Test ALGORITHM + old_alter_table
+# 2: Test ALGORITHM keywords
 #
-SET SESSION old_alter_table= 1;
-affected rows: 0
-Warnings:
-Warning	1287	'@@old_alter_table' is deprecated and will be removed in a future release. Please use '@@alter_algorithm' instead
 ALTER TABLE t1 ADD INDEX i1(b);
-affected rows: 2
-info: Records: 2  Duplicates: 0  Warnings: 0
+affected rows: 0
+info: Records: 0  Duplicates: 0  Warnings: 0
 ALTER TABLE t1 ADD INDEX i2(b), ALGORITHM= DEFAULT;
-affected rows: 2
-info: Records: 2  Duplicates: 0  Warnings: 1
+affected rows: 0
+info: Records: 0  Duplicates: 0  Warnings: 1
 Warnings:
 Note	1831	Duplicate index `i2`. This is deprecated and will be disallowed in a future release
 ALTER TABLE t1 ADD INDEX i3(b), ALGORITHM= COPY;
@@ -1696,10 +1674,6 @@ affected rows: 0
 info: Records: 0  Duplicates: 0  Warnings: 1
 Warnings:
 Note	1831	Duplicate index `i4`. This is deprecated and will be disallowed in a future release
-SET SESSION old_alter_table= 0;
-affected rows: 0
-Warnings:
-Warning	1287	'@@old_alter_table' is deprecated and will be removed in a future release. Please use '@@alter_algorithm' instead
 ALTER TABLE t1 DROP INDEX i1, DROP INDEX i2, DROP INDEX i3, DROP INDEX i4;
 #
 # 3: Test unsupported in-place operation
@@ -1756,7 +1730,6 @@ info: Records: 0  Duplicates: 0  Warnings: 1
 Warnings:
 Note	1831	Duplicate index `i3`. This is deprecated and will be disallowed in a future release
 ALTER TABLE t1 ADD INDEX i4(b), ALGORITHM= COPY, LOCK= NONE;
-ERROR 0A000: LOCK=NONE is not supported. Reason: COPY algorithm requires a lock. Try LOCK=SHARED
 ALTER TABLE t1 ADD INDEX i5(b), ALGORITHM= COPY, LOCK= SHARED;
 affected rows: 2
 info: Records: 2  Duplicates: 0  Warnings: 1
@@ -1774,9 +1747,6 @@ ERROR 0A000: LOCK=NONE/SHARED is not supported for this operation. Try LOCK=EXCL
 ALTER TABLE m1 ENABLE KEYS, ALGORITHM= INPLACE, LOCK= EXCLUSIVE;
 affected rows: 0
 ALTER TABLE m1 ENABLE KEYS, ALGORITHM= COPY, LOCK= NONE;
-ERROR 0A000: LOCK=NONE is not supported. Reason: COPY algorithm requires a lock. Try LOCK=SHARED
-ALTER ONLINE TABLE m1 ADD COLUMN c int;
-ERROR 0A000: LOCK=NONE is not supported for this operation. Try LOCK=SHARED
 ALTER TABLE m1 ENABLE KEYS, ALGORITHM= COPY, LOCK= SHARED;
 affected rows: 2
 info: Records: 2  Duplicates: 0  Warnings: 0
@@ -1999,8 +1969,7 @@ ALTER TABLE ti1 DROP FOREIGN KEY fi1;
 affected rows: 0
 info: Records: 0  Duplicates: 0  Warnings: 0
 ALTER TABLE tm1 DROP FOREIGN KEY fm1;
-affected rows: 2
-info: Records: 2  Duplicates: 0  Warnings: 0
+ERROR 42000: Can't DROP FOREIGN KEY `fm1`; check that it exists
 ALTER TABLE ti1 RENAME TO ti3;
 affected rows: 0
 ALTER TABLE tm1 RENAME TO tm3;
@@ -2228,7 +2197,7 @@ t1	CREATE TABLE `t1` (
   `id` int(11) NOT NULL,
   `a` int(11) NOT NULL,
   `b` int(11) DEFAULT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_uca1400_ai_ci
 DROP TABLE t1;
 #
 # MDEV-15308
@@ -3125,6 +3094,14 @@ CREATE TEMPORARY TABLE t2 LIKE t1;
 DROP TEMPORARY TABLE t2;
 DROP TABLE t1;
 #
+# MDEV-33313 Incorrect error message for "ALTER TABLE ... DROP CONSTRAINT ..., DROP col, DROP col"
+#
+create table t2(id int primary key) engine=innodb;
+create table t1(id int primary key, t2_id int, constraint t1_fk_t2_id foreign key(t2_id) references t2(id)) engine=innodb;
+alter table t1 drop constraint t1_fk_t2_id, drop t2_id, drop t2_id;
+ERROR 42000: Can't DROP COLUMN `t2_id`; check that it exists
+drop table t1, t2;
+#
 # End of 10.6 tests
 #
 #
@@ -3141,4 +3118,14 @@ ERROR HY000: Function or expression 'AUTO_INCREMENT' cannot be used in the USING
 DROP TABLE t;
 #
 # End of 10.7 tests
+#
+#
+# MDEV-33655 Remove alter_algorithm
+#
+CREATE TABLE t1 (a INT) ENGINE=MyISAM;
+CREATE TABLE t2 (a INT) ENGINE=MERGE, UNION(t1);
+ALTER TABLE t2 COMMENT 'x', LOCK=SHARED;
+DROP TABLE t2,t1;
+#
+# End of 11.5 tests
 #

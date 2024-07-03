@@ -78,6 +78,8 @@ private:
 
   /* All routines in this cache */
   HASH m_hashtable;
+public:
+  void clear();
 }; // class sp_cache
 
 #ifdef HAVE_PSI_INTERFACE
@@ -195,7 +197,8 @@ sp_head *sp_cache_lookup(sp_cache **cp, const Database_qualified_name *name)
   sp_cache *c= *cp;
   if (! c)
     return NULL;
-  return c->lookup(buf, name->make_qname(buf, sizeof(buf)));
+  return c->lookup(buf, name->to_identifier_chain2().
+                          make_qname_casedn_part1(buf, sizeof(buf)));
 }
 
 
@@ -233,6 +236,7 @@ void sp_cache_flush_obsolete(sp_cache **cp, sp_head **sp)
 {
   if ((*sp)->sp_cache_version() < Cversion && !(*sp)->is_invoked())
   {
+    DBUG_EXECUTE_IF("check_sp_cache_not_invalidated", DBUG_SUICIDE(););
     (*cp)->remove(*sp);
     *sp= NULL;
   }
@@ -302,7 +306,7 @@ sp_cache::~sp_cache()
 void
 sp_cache::init()
 {
-  my_hash_init(key_memory_sp_cache, &m_hashtable, system_charset_info, 0, 0, 0,
+  my_hash_init(key_memory_sp_cache, &m_hashtable, &my_charset_bin, 0, 0, 0,
                hash_get_key_for_sp_head, hash_free_sp_head, 0);
 }
 
@@ -313,6 +317,10 @@ sp_cache::cleanup()
   my_hash_free(&m_hashtable);
 }
 
+void sp_cache::clear()
+{
+  my_hash_reset(&m_hashtable);
+}
 
 void Sp_caches::sp_caches_clear()
 {
@@ -320,4 +328,16 @@ void Sp_caches::sp_caches_clear()
   sp_cache_clear(&sp_func_cache);
   sp_cache_clear(&sp_package_spec_cache);
   sp_cache_clear(&sp_package_body_cache);
+}
+
+void Sp_caches::sp_caches_empty()
+{
+  if (sp_proc_cache)
+    sp_proc_cache->clear();
+  if (sp_func_cache)
+    sp_func_cache->clear();
+  if (sp_package_spec_cache)
+    sp_package_spec_cache->clear();
+  if (sp_package_body_cache)
+    sp_package_body_cache->clear();
 }

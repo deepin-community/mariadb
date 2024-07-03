@@ -13,7 +13,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1335 USA
 
-INCLUDE_DIRECTORIES(${CMAKE_SOURCE_DIR}/include ${ZLIB_INCLUDE_DIR})
+INCLUDE_DIRECTORIES(${CMAKE_SOURCE_DIR}/include ${ZLIB_INCLUDE_DIRS})
 
 # Default install component for the files is Server here
 SET(MYSQL_INSTALL_COMPONENT Server)
@@ -91,7 +91,7 @@ MYSQL_ADD_EXECUTABLE(replace replace.c COMPONENT Client)
 TARGET_LINK_LIBRARIES(replace mysys)
 
 IF(UNIX)
-  MYSQL_ADD_EXECUTABLE(resolve_stack_dump resolve_stack_dump.c)
+  MYSQL_ADD_EXECUTABLE(resolve_stack_dump resolve_stack_dump.c COMPONENT Client)
   TARGET_LINK_LIBRARIES(resolve_stack_dump mysys)
 
   MYSQL_ADD_EXECUTABLE(mariadb-waitpid mysql_waitpid.c COMPONENT Client)

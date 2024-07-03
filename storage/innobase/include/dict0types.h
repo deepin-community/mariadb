@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1996, 2015, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2013, 2022, MariaDB Corporation.
+Copyright (c) 2013, 2023, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -48,10 +48,6 @@ struct dict_add_v_col_t;
 #define	DICT_HDR_SPACE		0	/* the SYSTEM tablespace */
 #define	DICT_HDR_PAGE_NO	FSP_DICT_HDR_PAGE_NO
 
-/* The ibuf table and indexes's ID are assigned as the number
-DICT_IBUF_ID_MIN plus the space id */
-#define DICT_IBUF_ID_MIN	0xFFFFFFFF00000000ULL
-
 typedef ib_id_t		table_id_t;
 typedef ib_id_t		index_id_t;
 
@@ -61,6 +57,11 @@ typedef ib_id_t		index_id_t;
 /** The bit pattern corresponding to TRX_ID_MAX */
 extern const byte trx_id_max_bytes[8];
 extern const byte timestamp_max_bytes[7];
+
+#define IS_MAX_TIMESTAMP(A)                                 \
+  (((unsigned char*) (A))[1] == 0xff &&                     \
+    memcmp((void*) (A), timestamp_max_bytes, 7) == 0)
+
 
 /** Error to ignore when we load table dictionary into memory. However,
 the table and index will be marked as "corrupted", and caller will
@@ -135,13 +136,6 @@ struct table_name_t
 	/** @return whether this is a temporary or intermediate table name */
 	inline bool is_temporary() const;
 };
-
-#if defined UNIV_DEBUG || defined UNIV_IBUF_DEBUG
-/** Dump the change buffer at startup */
-extern my_bool		ibuf_dump;
-/** Flag to control insert buffer debugging. */
-extern uint		ibuf_debug;
-#endif /* UNIV_DEBUG || UNIV_IBUF_DEBUG */
 
 /** Shift for spatial status */
 #define SPATIAL_STATUS_SHIFT	12

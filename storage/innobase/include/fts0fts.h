@@ -38,17 +38,16 @@ Created 2011/09/02 Sunny Bains
 #include "que0types.h"
 #include "ft_global.h"
 #include "mysql/plugin_ftparser.h"
+#include "lex_string.h"
 
 /** "NULL" value of a document id. */
 #define FTS_NULL_DOC_ID			0
 
 /** FTS hidden column that is used to map to and from the row */
-#define FTS_DOC_ID_COL_NAME		"FTS_DOC_ID"
+static constexpr Lex_cstring FTS_DOC_ID= "FTS_DOC_ID"_LEX_CSTRING;
 
 /** The name of the index created by FTS */
-#define FTS_DOC_ID_INDEX_NAME		"FTS_DOC_ID_INDEX"
-
-#define FTS_DOC_ID_INDEX_NAME_LEN	16
+static constexpr Lex_cstring FTS_DOC_ID_INDEX= "FTS_DOC_ID_INDEX"_LEX_CSTRING;
 
 /** Doc ID is a 8 byte value */
 #define FTS_DOC_ID_LEN			8
@@ -163,6 +162,9 @@ struct fts_token_t;
 struct fts_doc_ids_t;
 struct fts_index_cache_t;
 
+/** Compare two DOC_ID. */
+int fts_doc_id_cmp(const void *p1, const void *p2)
+  __attribute__((nonnull, warn_unused_result));
 
 /** Initialize the "fts_table" for internal query into FTS auxiliary
 tables */
@@ -411,6 +413,9 @@ inline void fts_doc_ids_free(fts_doc_ids_t* doc_ids)
 {
 	mem_heap_free(static_cast<mem_heap_t*>(doc_ids->self_heap->arg));
 }
+
+/** Sort an array of doc_id */
+void fts_doc_ids_sort(ib_vector_t *doc_ids);
 
 /******************************************************************//**
 Notify the FTS system about an operation on an FTS-indexed table. */
@@ -736,21 +741,6 @@ innobase_fts_text_cmp(
 	const void*	cs,			/*!< in: Character set */
 	const void*	p1,			/*!< in: key */
 	const void*	p2);			/*!< in: node */
-
-/******************************************************************//**
-Makes all characters in a string lower case. */
-extern
-size_t
-innobase_fts_casedn_str(
-/*====================*/
-        CHARSET_INFO*	cs,			/*!< in: Character set */
-	char*		src,			/*!< in: string to put in
-						lower case */
-	size_t		src_len,		/*!< in: input string length */
-	char*		dst,			/*!< in: buffer for result
-						string */
-	size_t		dst_len);		/*!< in: buffer size */
-
 
 /******************************************************************//**
 compare two character string according to their charset. */

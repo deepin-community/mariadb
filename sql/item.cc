@@ -27,6 +27,7 @@
 #include "sp_rcontext.h"
 #include "sp_head.h"
 #include "sql_trigger.h"
+#include "sql_parse.h"
 #include "sql_select.h"
 #include "sql_show.h"                           // append_identifier
 #include "sql_view.h"                           // VIEW_ANY_SQL
@@ -42,6 +43,7 @@
                                        // RESOLVED_AGAINST_ALIAS, ...
 #include "sql_expression_cache.h"
 #include "sql_lex.h"                   // empty_clex_str
+#include "my_json_writer.h"            // for dbug_print_opt_trace()
 
 const String my_null_string("NULL", 4, default_charset_info);
 const String my_default_string("DEFAULT", 7, default_charset_info);
@@ -411,7 +413,7 @@ int Item::save_str_value_in_field(Field *field, String *result)
 
 
 Item::Item(THD *thd):
-  name(null_clex_str), orig_name(0), is_expensive_cache(-1)
+  name(null_clex_str), orig_name(null_clex_str), is_expensive_cache(-1)
 {
   DBUG_ASSERT(thd);
   base_flags= item_base_t::FIXED;
@@ -444,7 +446,7 @@ Item::Item(THD *thd):
 */
 
 Item::Item():
-  name(null_clex_str), orig_name(0), is_expensive_cache(-1)
+  name(null_clex_str), orig_name(null_clex_str), is_expensive_cache(-1)
 {
   DBUG_ASSERT(!mysqld_server_started);          // Created early
   base_flags= item_base_t::FIXED;
@@ -494,7 +496,10 @@ void Item::print_parenthesised(String *str, enum_query_type query_type,
   bool need_parens= precedence() < parent_prec;
   if (need_parens)
     str->append('(');
-  print(str, query_type);
+  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, NULL))
+    str->append(STRING_WITH_LEN("<STACK OVERRUN>"));
+  else
+    print(str, query_type);
   if (need_parens)
     str->append(')');
 }
@@ -552,11 +557,8 @@ void Item::cleanup()
   DBUG_PRINT("enter", ("this: %p", this));
   marker= MARKER_UNUSED;
   join_tab_idx= MAX_TABLES;
-  if (orig_name)
-  {
-    name.str=    orig_name;
-    name.length= strlen(orig_name);
-  }
+  if (orig_name.str)
+    name= orig_name;
   DBUG_VOID_RETURN;
 }
 
@@ -654,7 +656,7 @@ Item_ident::Item_ident(THD *thd, Name_resolution_context *context_arg,
    cached_field_index(NO_CACHED_FIELD_INDEX),
    can_be_depended(TRUE), alias_name_used(FALSE)
 {
-  name= field_name_arg;
+  name= Lex_ident_column(field_name_arg);
 }
 
 
@@ -671,7 +673,7 @@ Item_ident::Item_ident(THD *thd, TABLE_LIST *view_arg,
    cached_field_index(NO_CACHED_FIELD_INDEX),
    can_be_depended(TRUE), alias_name_used(FALSE)
 {
-  name= field_name_arg;
+  name= Lex_ident_column(field_name_arg);
 }
 
 
@@ -825,10 +827,10 @@ bool Item_field::rename_fields_processor(void *arg)
   {
     if (def->change.str &&
         (!db_name.str || !db_name.str[0] ||
-         !my_strcasecmp(table_alias_charset, db_name.str, rename->db_name.str)) &&
+         db_name.streq(rename->db_name)) &&
         (!table_name.str || !table_name.str[0] ||
-         !my_strcasecmp(table_alias_charset, table_name.str, rename->table_name.str)) &&
-        !my_strcasecmp(system_charset_info, field_name.str, def->change.str))
+         table_name.streq(rename->table_name)) &&
+        field_name.streq(def->change))
     {
       field_name= def->field_name;
       break;
@@ -1178,7 +1180,7 @@ my_mb_wc_item_name(CHARSET_INFO *cs, my_wc_t *pwc,
 }
 
 
-static LEX_CSTRING
+static Lex_ident_column
 make_name(THD *thd,
           const char *str, size_t length, CHARSET_INFO *cs,
           size_t max_octet_length)
@@ -1188,7 +1190,7 @@ make_name(THD *thd,
   set_if_smaller(dst_nbytes, max_octet_length);
   char *dst= (char*) thd->alloc(dst_nbytes + 1);
   if (!dst)
-    return null_clex_str;
+    return Lex_ident_column();
   uint32 cnv_length= my_convert_using_func(dst, dst_nbytes, system_charset_info,
                                            my_wc_mb_item_name,
                                            str, length,
@@ -1196,7 +1198,7 @@ make_name(THD *thd,
                                              system_charset_info : cs,
                                            my_mb_wc_item_name, &errors);
   dst[cnv_length]= '\0';
-  return Lex_cstring(dst, cnv_length);
+  return Lex_ident_column(dst, cnv_length);
 }
 
 
@@ -1276,7 +1278,7 @@ bool Item::eq(const Item *item, bool binary_cmp) const
     type() can be only among basic constant types.
   */
   return type() == item->type() && name.str && item->name.str &&
-    !lex_string_cmp(system_charset_info, &name, &item->name);
+         name.streq(item->name);
 }
 
 
@@ -1368,7 +1370,7 @@ Item *Item_num::safe_charset_converter(THD *thd, CHARSET_INFO *tocs)
 */
 Item *Item::const_charset_converter(THD *thd, CHARSET_INFO *tocs,
                                     bool lossless,
-                                    const char *func_name)
+                                    const Lex_ident_routine &func_name)
 {
   DBUG_ASSERT(const_item());
   DBUG_ASSERT(fixed());
@@ -1377,7 +1379,7 @@ Item *Item::const_charset_converter(THD *thd, CHARSET_INFO *tocs,
   MEM_ROOT *mem_root= thd->mem_root;
 
   if (!s)
-    return new (mem_root) Item_null(thd, (char *) func_name, tocs);
+    return new (mem_root) Item_null(thd, (char *) func_name.str, tocs);
 
   if (!needs_charset_converter(s->length(), tocs))
   {
@@ -1388,9 +1390,9 @@ Item *Item::const_charset_converter(THD *thd, CHARSET_INFO *tocs,
   }
 
   uint conv_errors;
-  Item_string *conv= (func_name ?
+  Item_string *conv= (func_name.str ?
                       new (mem_root)
-                      Item_static_string_func(thd, Lex_cstring_strlen(func_name),
+                      Item_static_string_func(thd, func_name,
                                               s, tocs, &conv_errors,
                                               collation.derivation,
                                               collation.repertoire) :
@@ -1477,7 +1479,7 @@ const MY_LOCALE *Item::locale_from_val_str()
   String *locale_name= val_str_ascii(&tmp);
   const MY_LOCALE *lc;
   if (!locale_name ||
-      !(lc= my_locale_by_name(locale_name->c_ptr_safe())))
+      !(lc= my_locale_by_name(locale_name->to_lex_cstring())))
   {
     THD *thd= current_thd;
     push_warning_printf(thd, Sql_condition::WARN_LEVEL_WARN,
@@ -1564,7 +1566,7 @@ bool Item_field::check_vcol_func_processor(void *arg)
   uint r= VCOL_FIELD_REF;
   context= 0;
   vcol_func_processor_result *res= (vcol_func_processor_result *) arg;
-  if (res && res->alter_info)
+  if (res->alter_info)
     r|= res->alter_info->check_vcol_field(this);
   else if (field)
   {
@@ -2388,10 +2390,7 @@ left_is_superset(const DTCollation *left, const DTCollation *right)
   Aggregate two collations together taking
   into account their coercibility (aka derivation):.
 
-  0 == DERIVATION_EXPLICIT  - an explicitly written COLLATE clause @n
-  1 == DERIVATION_NONE      - a mix of two different collations @n
-  2 == DERIVATION_IMPLICIT  - a column @n
-  3 == DERIVATION_COERCIBLE - a string constant.
+  See the definition of enum Derivation for details.
 
   The most important rules are:
   -# If collations are the same:
@@ -2674,7 +2673,11 @@ bool Type_std_attributes::agg_item_set_converter(const DTCollation &coll,
     if (conv->fix_fields_if_needed(thd, arg))
       return TRUE;
 
-    if (!thd->stmt_arena->is_conventional())
+    if (!thd->stmt_arena->is_conventional() &&
+	((!thd->lex->current_select &&
+	  (thd->stmt_arena->is_stmt_prepare_or_first_sp_execute() ||
+           thd->stmt_arena->is_stmt_prepare_or_first_stmt_execute())) ||
+         thd->lex->current_select->first_cond_optimization))
     {
       Query_arena *arena, backup;
       arena= thd->activate_stmt_arena_if_needed(&backup);
@@ -2798,11 +2801,11 @@ Item_sp::func_name_cstring(THD *thd, bool is_package_function) const
       quoted `pkg` and `func` separately, so the entire result looks like:
          `db`.`pkg`.`func`
     */
-    Database_qualified_name tmp= Database_qualified_name::split(m_name->m_name);
-    DBUG_ASSERT(tmp.m_db.length);
-    append_identifier(thd, &qname, &tmp.m_db);
+    Identifier_chain2 tmp= Identifier_chain2::split(m_name->m_name);
+    DBUG_ASSERT(tmp[0].length);
+    append_identifier(thd, &qname, &tmp[0]);
     qname.append('.');
-    append_identifier(thd, &qname, &tmp.m_name);
+    append_identifier(thd, &qname, &tmp[1]);
   }
   else
     append_identifier(thd, &qname, &m_name->m_name);
@@ -2996,7 +2999,7 @@ Item_sp::init_result_field(THD *thd, uint max_length, uint maybe_null,
   dummy_table->in_use= thd;
   dummy_table->copy_blobs= TRUE;
   dummy_table->s->table_cache_key= empty_clex_str;
-  dummy_table->s->table_name= empty_clex_str;
+  dummy_table->s->table_name= Lex_ident_table(empty_clex_str);
   dummy_table->maybe_null= maybe_null;
 
   if (!(sp_result_field= m_sp->create_result_field(max_length, name,
@@ -3098,11 +3101,11 @@ Item_field::Item_field(THD *thd, Name_resolution_context *context_arg,
   */
   {
     if (db_name.str)
-      orig_db_name= thd->strmake_lex_cstring(db_name);
+      orig_db_name= thd->lex_ident_copy(db_name);
     if (table_name.str)
-      orig_table_name= thd->strmake_lex_cstring(table_name);
+      orig_table_name= thd->lex_ident_copy(table_name);
     if (field_name.str)
-      orig_field_name= thd->strmake_lex_cstring(field_name);
+      orig_field_name= thd->lex_ident_copy(field_name);
     /*
       We don't restore 'name' in cleanup because it's not changed
       during execution. Still we need it to point to persistent
@@ -3273,9 +3276,6 @@ LEX_CSTRING Item_ident::full_name_cstring() const
 void Item_ident::print(String *str, enum_query_type query_type)
 {
   THD *thd= current_thd;
-  char d_name_buff[MAX_ALIAS_NAME], t_name_buff[MAX_ALIAS_NAME];
-  LEX_CSTRING d_name= db_name;
-  LEX_CSTRING t_name= table_name;
   bool use_table_name= table_name.str && table_name.str[0];
   bool use_db_name= use_table_name && db_name.str && db_name.str[0] &&
                     !alias_name_used;
@@ -3316,32 +3316,18 @@ void Item_ident::print(String *str, enum_query_type query_type)
     return;
   }
 
-  if (lower_case_table_names== 1 ||
-      (lower_case_table_names == 2 && !alias_name_used))
-  {
-    if (use_table_name)
-    {
-      strmov(t_name_buff, table_name.str);
-      my_casedn_str(files_charset_info, t_name_buff);
-      t_name= Lex_cstring_strlen(t_name_buff);
-    }
-    if (use_db_name)
-    {
-      strmov(d_name_buff, db_name.str);
-      my_casedn_str(files_charset_info, d_name_buff);
-      d_name= Lex_cstring_strlen(d_name_buff);
-    }
-  }
+  bool casedn= lower_case_table_names== 1 ||
+               (lower_case_table_names == 2 && !alias_name_used);
 
   if (use_db_name)
   {
-    append_identifier(thd, str, d_name.str, (uint) d_name.length);
+    append_identifier_opt_casedn(thd, str, db_name, casedn);
     str->append('.');
     DBUG_ASSERT(use_table_name);
   }
   if (use_table_name)
   {
-    append_identifier(thd, str, t_name.str, (uint) t_name.length);
+    append_identifier_opt_casedn(thd, str, table_name, casedn);
     str->append('.');
   }
   append_identifier(thd, str, &field_name);
@@ -3506,14 +3492,11 @@ bool Item_field::eq(const Item *item, bool binary_cmp) const
     (In cases where we would choose wrong we would have to generate a
     ER_NON_UNIQ_ERROR).
   */
-  return (!lex_string_cmp(system_charset_info, &item_field->name,
-                          &field_name) &&
-	  (!item_field->table_name.str || !table_name.str ||
-	   (!my_strcasecmp(table_alias_charset, item_field->table_name.str,
-			   table_name.str) &&
-	    (!item_field->db_name.str || !db_name.str ||
-	     (item_field->db_name.str && !strcmp(item_field->db_name.str,
-                                                 db_name.str))))));
+  return (item_field->name.streq(field_name) &&
+          (!item_field->table_name.str || !table_name.str ||
+           (item_field->table_name.streq(table_name) &&
+            (!item_field->db_name.str || !db_name.str ||
+             item_field->db_name.streq(db_name)))));
 }
 
 
@@ -3761,7 +3744,7 @@ void Item_int::print(String *str, enum_query_type query_type)
 Item *Item_bool::neg_transformer(THD *thd)
 {
   value= !value;
-  name= null_clex_str;
+  name= Lex_ident_column();
   return this;
 }
 
@@ -4099,9 +4082,11 @@ Item_param::Item_param(THD *thd, const LEX_CSTRING *name_arg,
     as an actual parameter. See Item_param::set_from_item().
   */
   m_is_settable_routine_parameter(true),
-  m_clones(thd->mem_root)
+  m_clones(thd->mem_root),
+  m_associated_field(nullptr),
+  m_default_field(nullptr)
 {
-  name= *name_arg;
+  name= Lex_ident_column(*name_arg);
   /*
     Since we can't say whenever this item can be NULL or cannot be NULL
     before mysql_stmt_execute(), so we assuming that it can be NULL until
@@ -4506,10 +4491,29 @@ int Item_param::save_in_field(Field *field, bool no_conversions)
   case NULL_VALUE:
     return set_field_to_null_with_conversions(field, no_conversions);
   case DEFAULT_VALUE:
+    if (m_associated_field)
+      return assign_default(field);
     return field->save_in_field_default_value(field->table->pos_in_table_list->
                                               top_table() !=
                                               field->table->pos_in_table_list);
   case IGNORE_VALUE:
+    if (m_associated_field)
+    {
+      switch (find_ignore_reaction(field->table->in_use))
+      {
+        case IGNORE_MEANS_DEFAULT:
+          DBUG_ASSERT(0); // impossible now, but fully working code if needed
+          return assign_default(field);
+        case IGNORE_MEANS_FIELD_VALUE:
+          m_associated_field->save_val(field);
+          return false;
+        default:
+          ; // fall through to error
+      }
+      DBUG_ASSERT(0); //impossible
+      my_error(ER_INVALID_DEFAULT_PARAM, MYF(0));
+      return true;
+    }
     return field->save_in_field_ignore_value(field->table->pos_in_table_list->
                                              top_table() !=
                                              field->table->pos_in_table_list);
@@ -5093,6 +5097,92 @@ bool Item_param::append_for_log(THD *thd, String *str)
 }
 
 
+/**
+  Allocate a memory and create on it a copy of Field object.
+
+  @param thd        thread handler
+  @param field_arg  an instance of Field the new Field object be based on
+
+  @return a new created Field object on success, nullptr on error.
+*/
+
+static Field *make_default_field(THD *thd, Field *field_arg)
+{
+  Field *def_field;
+
+  if (!(def_field= (Field*) thd->alloc(field_arg->size_of())))
+    return nullptr;
+
+  memcpy((void *)def_field, (void *)field_arg, field_arg->size_of());
+  def_field->reset_fields();
+  // If non-constant default value expression or a blob
+  if (def_field->default_value &&
+      (def_field->default_value->flags || (def_field->flags & BLOB_FLAG)))
+  {
+    uchar *newptr= (uchar*) thd->alloc(1+def_field->pack_length());
+    if (!newptr)
+      return nullptr;
+
+    if (should_mark_column(thd->column_usage))
+      def_field->default_value->expr->update_used_tables();
+    def_field->move_field(newptr + 1, def_field->maybe_null() ? newptr : 0, 1);
+  }
+  else
+    def_field->move_field_offset((my_ptrdiff_t)
+                                 (def_field->table->s->default_values -
+                                  def_field->table->record[0]));
+  return def_field;
+}
+
+
+/**
+  Assign a default value of a table column to the positional parameter that
+  is performed on execution of a prepared statement with the clause
+  'USING DEFAULT'
+
+   @param field  a field that should be assigned an actual value of positional
+                 parameter passed via the clause 'USING DEFAULT'
+
+   @return false on success, true on failure
+*/
+
+bool Item_param::assign_default(Field *field)
+{
+  DBUG_ASSERT(m_associated_field);
+
+  if (m_associated_field->field->flags & NO_DEFAULT_VALUE_FLAG)
+  {
+    my_error(ER_NO_DEFAULT_FOR_FIELD, MYF(0),
+             m_associated_field->field->field_name.str);
+    return true;
+  }
+
+  if (!m_default_field)
+  {
+    m_default_field= make_default_field(field->table->in_use,
+                                        m_associated_field->field);
+
+    if (!m_default_field)
+      return true;
+  }
+
+  if (m_default_field->default_value)
+  {
+    return m_default_field->default_value->expr->save_in_field(field, 0);
+  }
+  else if (m_default_field->is_null())
+  {
+    field->set_null();
+    return false;
+  }
+  else
+  {
+    field->set_notnull();
+    return field_conv(field, m_default_field);
+  }
+}
+
+
 /****************************************************************************
   Item_copy_string
 ****************************************************************************/
@@ -5356,10 +5446,10 @@ static Item** find_field_in_group_list(Item *find_item, ORDER *group_list)
 {
   LEX_CSTRING db_name;
   LEX_CSTRING table_name;
-  LEX_CSTRING field_name;
+  Lex_ident_column field_name;
   ORDER      *found_group= NULL;
   int         found_match_degree= 0;
-  char        name_buff[SAFE_NAME_LEN+1];
+  IdentBuffer<SAFE_NAME_LEN> db_name_buff;
 
   if (find_item->type() == Item::FIELD_ITEM ||
       find_item->type() == Item::REF_ITEM)
@@ -5374,9 +5464,7 @@ static Item** find_field_in_group_list(Item *find_item, ORDER *group_list)
   if (db_name.str && lower_case_table_names)
   {
     /* Convert database to lower case for comparison */
-    strmake_buf(name_buff, db_name.str);
-    my_casedn_str(files_charset_info, name_buff);
-    db_name= Lex_cstring_strlen(name_buff);
+    db_name= db_name_buff.copy_casedn(db_name).to_lex_cstring();
   }
 
   DBUG_ASSERT(field_name.str != 0);
@@ -5388,8 +5476,7 @@ static Item** find_field_in_group_list(Item *find_item, ORDER *group_list)
     /* SELECT list element with explicit alias */
     if ((*(cur_group->item))->name.str && !table_name.str &&
         (*(cur_group->item))->is_explicit_name() &&
-        !lex_string_cmp(system_charset_info,
-                        &(*(cur_group->item))->name, &field_name))
+        field_name.streq((*(cur_group->item))->name))
     {
       ++cur_match_degree;
     }
@@ -5398,30 +5485,25 @@ static Item** find_field_in_group_list(Item *find_item, ORDER *group_list)
              (*(cur_group->item))->type() == Item::REF_ITEM )
     {
       Item_ident *cur_field= (Item_ident*) *cur_group->item;
-      const char *l_db_name= cur_field->db_name.str;
-      const char *l_table_name= cur_field->table_name.str;
-      LEX_CSTRING *l_field_name= &cur_field->field_name;
+      DBUG_ASSERT(cur_field->field_name.str != 0);
 
-      DBUG_ASSERT(l_field_name->str != 0);
-
-      if (!lex_string_cmp(system_charset_info,
-                          l_field_name, &field_name))
+      if (field_name.streq(cur_field->field_name))
         ++cur_match_degree;
       else
         continue;
 
-      if (l_table_name && table_name.str)
+      if (cur_field->table_name.str && table_name.str)
       {
         /* If field_name is qualified by a table name. */
-        if (my_strcasecmp(table_alias_charset, l_table_name, table_name.str))
+        if (!cur_field->table_name.streq(table_name))
           /* Same field names, different tables. */
           return NULL;
 
         ++cur_match_degree;
-        if (l_db_name && db_name.str)
+        if (cur_field->db_name.str && db_name.str)
         {
           /* If field_name is also qualified by a database name. */
-          if (strcmp(l_db_name, db_name.str))
+          if (strcmp(cur_field->db_name.str, db_name.str))
             /* Same field names, different databases. */
             return NULL;
           ++cur_match_degree;
@@ -6221,7 +6303,7 @@ bool Item_field::fix_fields(THD *thd, Item **reference)
     db=  field->table->s->db.str;
     tab= field->table->s->table_name.str;
     if (!(have_privileges= (get_column_grant(thd, &field->table->grant,
-                                             db, tab, field_name.str) &
+                                             db, tab, field_name) &
                             VIEW_ANY_ACL)))
     {
       my_error(ER_COLUMNACCESS_DENIED_ERROR, MYF(0),
@@ -6363,6 +6445,24 @@ Item_equal *Item_field::find_item_equal(COND_EQUAL *cond_equal)
   return 0;
 }
 
+
+/*
+  Check if field is is equal to current field or any of the fields in
+  item_equal
+*/
+
+bool Item_field::contains(Field *field_arg)
+{
+  if (field == field_arg)
+    return 1;
+  /*
+    Check if there is a multiple equality that allows to infer that field
+    (see also: compute_part_of_sort_key_for_equals)
+  */
+  if (item_equal && item_equal->contains(field_arg))
+    return 1;
+  return 0;
+}
 
 /**
   Set a pointer to the multiple equality the field reference belongs to
@@ -6549,7 +6649,7 @@ String *Item::check_well_formed_result(String *str, bool send_error)
     char hexbuf[7];
     uint diff= str->length() - wlen;
     set_if_smaller(diff, 3);
-    octet2hex(hexbuf, str->ptr() + wlen, diff);
+    octet2hex(hexbuf, (uchar*)str->ptr() + wlen, diff);
     if (send_error)
     {
       my_error(ER_INVALID_CHARACTER_STRING, MYF(0),
@@ -6601,7 +6701,7 @@ String_copier_for_item::copy_with_warn(CHARSET_INFO *dstcs, String *dst,
     char buf[16];
     int mblen= srccs->charlen(pos, src + src_length);
     DBUG_ASSERT(mblen > 0 && mblen * 2 + 1 <= (int) sizeof(buf));
-    octet2hex(buf, pos, mblen);
+    octet2hex(buf, (uchar*)pos, mblen);
     push_warning_printf(m_thd, Sql_condition::WARN_LEVEL_WARN,
                         ER_CANNOT_CONVERT_CHARACTER,
                         ER_THD(m_thd, ER_CANNOT_CONVERT_CHARACTER),
@@ -6900,6 +7000,7 @@ Item_basic_constant *
 Item_string::make_string_literal_concat(THD *thd, const LEX_CSTRING *str)
 {
   append(str->str, (uint32) str->length);
+  set_name(thd, &str_value);
   if (!(collation.repertoire & MY_REPERTOIRE_EXTENDED))
   {
     // If the string has been pure ASCII so far, check the new part.
@@ -6957,7 +7058,8 @@ Item *Item_int::clone_item(THD *thd)
 }
 
 
-void Item_datetime::set(longlong packed, enum_mysql_timestamp_type ts_type)
+void Item_datetime::set_from_packed(longlong packed,
+                                    enum_mysql_timestamp_type ts_type)
 {
   unpack_time(packed, &ltime, ts_type);
 }
@@ -6971,6 +7073,16 @@ int Item_datetime::save_in_field(Field *field, bool no_conversions)
 longlong Item_datetime::val_int()
 {
   return TIME_to_ulonglong(&ltime);
+}
+
+void Item_datetime::print(String *str, enum_query_type query_type)
+{
+  Datetime dt(current_thd, this);
+  String dt_str;
+  dt.to_string(&dt_str, decimals);
+  str->append('\'');
+  str->append(dt_str);
+  str->append('\'');
 }
 
 int Item_decimal::save_in_field(Field *field, bool no_conversions)
@@ -7019,7 +7131,7 @@ Item *Item_int::neg(THD *thd)
   else if (value < 0 && max_length)
     max_length--;
   value= -value;
-  name= null_clex_str;
+  name= Lex_ident_column();
   return this;
 }
 
@@ -7027,7 +7139,7 @@ Item *Item_decimal::neg(THD *thd)
 {
   my_decimal_neg(&decimal_value);
   unsigned_flag= 0;
-  name= null_clex_str;
+  name= Lex_ident_column();
   max_length= my_decimal_precision_to_length_no_truncation(
                       decimal_value.intg + decimals, decimals, unsigned_flag);
   return this;
@@ -7040,8 +7152,26 @@ Item *Item_float::neg(THD *thd)
   else if (value < 0 && max_length)
     max_length--;
   value= -value;
-  presentation= 0;
-  name= null_clex_str;
+  if (presentation)
+  {
+    if (*presentation == '-')
+    {
+      // Strip double minus: -(-1) -> '1' instead of '--1'
+      presentation++;
+    }
+    else
+    {
+      size_t presentation_length= strlen(presentation);
+      if (char *tmp= (char*) thd->alloc(presentation_length + 2))
+      {
+        tmp[0]= '-';
+        // Copy with the trailing '\0'
+        memcpy(tmp + 1, presentation, presentation_length + 1);
+        presentation= tmp;
+      }
+    }
+  }
+  name= Lex_ident_column();
   return this;
 }
 
@@ -7318,6 +7448,17 @@ void Item_datetime_literal::print(String *str, enum_query_type query_type)
   str->append(STRING_WITH_LEN("TIMESTAMP'"));
   char buf[MAX_DATE_STRING_REP_LENGTH];
   int length= my_datetime_to_str(cached_time.get_mysql_time(), buf, decimals);
+  str->append(buf, length);
+  str->append('\'');
+}
+
+
+void Item_timestamp_literal::print(String *str, enum_query_type query_type)
+{
+  str->append(STRING_WITH_LEN("TIMESTAMP/*WITH LOCAL TIME ZONE*/'"));
+  char buf[MAX_DATE_STRING_REP_LENGTH];
+  Datetime dt= m_value.to_datetime(current_thd);
+  int length= my_datetime_to_str(dt.get_mysql_time(), buf, decimals);
   str->append(buf, length);
   str->append('\'');
 }
@@ -9574,69 +9715,10 @@ bool Item_default_value::update_func_default_processor(void *)
 
 bool Item_default_value::fix_fields(THD *thd, Item **items)
 {
-  Item *real_arg;
-  Item_field *field_arg;
-  Field *def_field;
   DBUG_ASSERT(fixed() == 0);
   DBUG_ASSERT(arg);
 
-  /*
-    DEFAULT() do not need table field so should not ask handler to bring
-    field value (mark column for read)
-  */
-  enum_column_usage save_column_usage= thd->column_usage;
-  /*
-    Fields which has defult value could be read, so it is better hide system
-    invisible columns.
-  */
-  thd->column_usage= COLUMNS_WRITE;
-  if (arg->fix_fields_if_needed(thd, &arg))
-  {
-    thd->column_usage= save_column_usage;
-    goto error;
-  }
-  thd->column_usage= save_column_usage;
-
-  real_arg= arg->real_item();
-  if (real_arg->type() != FIELD_ITEM)
-  {
-    my_error(ER_NO_DEFAULT_FOR_FIELD, MYF(0), arg->name.str);
-    goto error;
-  }
-
-  field_arg= (Item_field *)real_arg;
-  if ((field_arg->field->flags & NO_DEFAULT_VALUE_FLAG))
-  {
-    my_error(ER_NO_DEFAULT_FOR_FIELD, MYF(0),
-             field_arg->field->field_name.str);
-    goto error;
-  }
-  if (!(def_field= (Field*) thd->alloc(field_arg->field->size_of())))
-    goto error;
-  memcpy((void *)def_field, (void *)field_arg->field,
-         field_arg->field->size_of());
-  def_field->reset_fields();
-  // If non-constant default value expression or a blob
-  if (def_field->default_value &&
-      (def_field->default_value->flags || (def_field->flags & BLOB_FLAG)))
-  {
-    uchar *newptr= (uchar*) thd->alloc(1+def_field->pack_length());
-    if (!newptr)
-      goto error;
-    if (should_mark_column(thd->column_usage))
-      def_field->default_value->expr->update_used_tables();
-    def_field->move_field(newptr+1, def_field->maybe_null() ? newptr : 0, 1);
-  }
-  else
-    def_field->move_field_offset((my_ptrdiff_t)
-                                 (def_field->table->s->default_values -
-                                  def_field->table->record[0]));
-  set_field(def_field);
-  return FALSE;
-
-error:
-  context->process_error(thd);
-  return TRUE;
+  return tie_field(thd);
 }
 
 void Item_default_value::cleanup()
@@ -9825,6 +9907,79 @@ Item *Item_default_value::transform(THD *thd, Item_transformer transformer,
 }
 
 
+bool Item_default_value::
+  associate_with_target_field(THD *thd,
+                              Item_field *field __attribute__((unused)))
+{
+  m_associated= true;
+  /*
+    arg set correctly in constructor (can also differ from field if
+    it is function with an argument)
+  */
+  return tie_field(thd);
+}
+
+
+/**
+  Call fix_fields for an item representing the default value, create
+  an instance of Field for representing the default value and assign it
+  to the Item_field::field.
+
+  @param thd  thread handler
+
+  @return false on success, true on error
+*/
+
+bool Item_default_value::tie_field(THD *thd)
+{
+  Item *real_arg;
+  Item_field *field_arg;
+  Field *def_field;
+
+  /*
+    DEFAULT() do not need table field so should not ask handler to bring
+    field value (mark column for read)
+  */
+  enum_column_usage save_column_usage= thd->column_usage;
+  /*
+    Fields which has defult value could be read, so it is better hide system
+    invisible columns.
+  */
+  thd->column_usage= COLUMNS_WRITE;
+  if (arg->fix_fields_if_needed(thd, &arg))
+  {
+    thd->column_usage= save_column_usage;
+    goto error;
+  }
+  thd->column_usage= save_column_usage;
+
+  real_arg= arg->real_item();
+  if (real_arg->type() != FIELD_ITEM)
+  {
+    my_error(ER_NO_DEFAULT_FOR_FIELD, MYF(0), arg->name.str);
+    goto error;
+  }
+
+  field_arg= (Item_field *)real_arg;
+  if ((field_arg->field->flags & NO_DEFAULT_VALUE_FLAG))
+  {
+    my_error(ER_NO_DEFAULT_FOR_FIELD, MYF(0),
+             field_arg->field->field_name.str);
+    goto error;
+  }
+  def_field= make_default_field(thd, field_arg->field);
+  if (!def_field)
+    goto error;
+
+  set_field(def_field);
+  return false;
+
+error:
+  context->process_error(thd);
+  return true;
+
+}
+
 bool Item_insert_value::eq(const Item *item, bool binary_cmp) const
 {
   return item->type() == INSERT_VALUE_ITEM &&
@@ -9931,8 +10086,7 @@ void Item_trigger_field::setup_field(THD *thd, TABLE *table,
     Try to find field by its name and if it will be found
     set field_idx properly.
   */
-  (void)find_field_in_table(thd, table, field_name.str, field_name.length,
-                            0, &field_idx);
+  (void)find_field_in_table(thd, table, field_name, 0, &field_idx);
   thd->column_usage= saved_column_usage;
   triggers= table->triggers;
   table_grants= table_grant_info;
@@ -9943,8 +10097,7 @@ bool Item_trigger_field::eq(const Item *item, bool binary_cmp) const
 {
   return item->type() == TRIGGER_FIELD_ITEM &&
          row_version == ((Item_trigger_field *)item)->row_version &&
-         !lex_string_cmp(system_charset_info, &field_name,
-                         &((Item_trigger_field *)item)->field_name);
+         field_name.streq(((Item_trigger_field *)item)->field_name);
 }
 
 
@@ -10011,8 +10164,7 @@ bool Item_trigger_field::fix_fields(THD *thd, Item **items)
       if (check_grant_column(thd, table_grants,
                              triggers->trigger_table->s->db.str,
                              triggers->trigger_table->s->table_name.str,
-                             field_name.str, field_name.length,
-                             thd->security_ctx))
+                             field_name, thd->security_ctx))
         return TRUE;
     }
 #endif // NO_EMBEDDED_ACCESS_CHECKS
@@ -10861,6 +11013,25 @@ table_map Item_direct_view_ref::not_null_tables() const
    return get_null_ref_table()->map;
 }
 
+void Item_direct_view_ref::print(String *str, enum_query_type query_type)
+{
+  /*
+    If the view/derived table was not merged then this field name must
+    be complemented with the view name/derived table alias.
+    For example, for "SELECT a FROM (SELECT a FROM t1) q" field `a` in the
+    select list must be printed as `q`.`a`.
+    Ancestor class Item_ident contains the correct table_name for that case.
+    But if the view was merged then the initial `q` does not make sense
+    any more so print the Item_ref contents. Field `a` will be printed
+    as `t1`.`a` then
+  */
+  if (!view->merged)
+    Item_ident::print(str, query_type);
+  else
+    Item_ref::print(str, query_type);
+
+}
+
 /*
   we add RAND_TABLE_BIT to prevent moving this item from HAVING to WHERE
 */
@@ -10898,6 +11069,29 @@ const char *dbug_print_item(Item *item)
   else
     return "Couldn't fit into buffer";
 }
+
+
+/*
+  Return the optimizer trace collected so far for the current thread.
+*/
+
+const char *dbug_print_opt_trace()
+{
+  if (current_thd)
+  {
+    if (current_thd->opt_trace.is_started())
+    {
+      String *s= const_cast<String *>(current_thd->opt_trace
+                    .get_current_json()->output.get_string());
+      return s->c_ptr();
+    }
+    else
+      return "Trace empty";
+  }
+  else
+    return "No Thread";
+}
+
 
 const char *dbug_print_select(SELECT_LEX *sl)
 {

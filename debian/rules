@@ -19,19 +19,16 @@ CFLAGS+=$(CPPFLAGS)
 CXXFLAGS+=$(CPPFLAGS)
 
 # Only do a strict symbol checking on Linux
-# https://manpages.debian.org/testing/dpkg-dev/dpkg-gensymbols.1.en.html
-# Level 4: Fails if some libraries have been introduced.
 ifneq (,$(filter linux,$(DEB_HOST_ARCH_OS)))
-    export DPKG_GENSYMBOLS_CHECK_LEVEL = 4
+    DPKG_GENSYMBOLS_CHECK_LEVEL := 4
 endif
 
 BUILDDIR := builddir
-DEB_VERSION_REVISION := $(shell echo $(DEB_VERSION) | sed -e 's/^.*-//')
+DEB_VERSION_REVISION := $(shell echo $(DEB_VERSION) | sed -e 's/.*[~-]\(.*\)/\1/')
 DEB_VERSION_VERSION := $(shell echo $(DEB_VERSION) | sed -e 's/^.*:\(.*\)\(-\|+\).*/\1/')
 DEB_VERSION_MAJOR := $(shell echo $(DEB_VERSION_VERSION) | sed -e 's/^\(.*\)\..*$$/\1/')
 RELEASE := $(shell lsb_release -r -s) # Use changelog based DEB_DISTRIBUTION instead?
-TMP := $(CURDIR)/debian/tmp
-MTR_SKIP_TEST_LIST := $(shell mktemp)
+TMP:=$(CURDIR)/debian/tmp
 
 # According to Debian Policy version 4.2.0 builds should be as verbose as
 # possible unless 'terse' is specifically passed.
@@ -54,17 +51,6 @@ ifeq (32,$(DEB_HOST_ARCH_BITS))
     CMAKEFLAGS += -DPLUGIN_ROCKSDB=NO
 endif
 
-# Only attempt to build with PMEM on archs that have package libpmem-dev available
-# See https://packages.debian.org/search?searchon=names&keywords=libpmem-dev
-ifneq (,$(filter $(DEB_HOST_ARCH),amd64 arm64 ppc64el riscv64))
-    CMAKEFLAGS += -DWITH_PMEM=ON
-endif
-
-# Fix compilation errors like "relocation truncated to fit: GPREL16 against symbol `wsrep_debug'"
-ifeq ($(DEB_HOST_ARCH),alpha)
-    export DEB_LDFLAGS_MAINT_APPEND += -Wl,--no-relax
-endif
-
 # Add support for verbose builds
 MAKEFLAGS += VERBOSE=1
 
@@ -72,16 +58,7 @@ override_dh_auto_clean:
 	@echo "RULES.$@"
 	dh_testdir
 	dh_testroot
-	# Delete obsolete/unstable components and embedded source code copies
-	# to ensure they are not used in Debian and in general to keep MariaDB binaries
-	# secure and using only system libraries that can be updated quickly and easily
-	# in case security vulnerabilities are found in any of the libraries
-	rm -rf $(BUILDDIR) builddir-native extra/readline extra/wolfssl zlib libmariadb/external/zlib
-	# Remove columnstore as the source code is dirty and software not mature enough for Debian anyway
-	rm -rf storage/columnstore
-	# Delete precompiled binaries in upstream sources to ensure they are not used in Debian
-	rm -rf storage/connect/JavaWrappers.jar	storage/columnstore/columnstore/utils/jemalloc/libjemalloc.so.2
-
+	rm -rf $(BUILDDIR) builddir-native mysql-test/unstable-tests
 	debconf-updatepo # Update po-files when clean runs before each build
 
 override_dh_auto_configure:
@@ -89,37 +66,37 @@ override_dh_auto_configure:
 	dh_testdir
 
 ifneq ($(DEB_BUILD_ARCH),$(DEB_HOST_ARCH))
-	dpkg-architecture -a$(DEB_BUILD_ARCH) -f -c dh_auto_configure --builddirectory=builddir-native --reload-all-buildenv-variables
+	dpkg-architecture -a$(DEB_BUILD_ARCH) -f -c dh_auto_configure --builddirectory=builddir-native
 	dh_auto_build --builddirectory=builddir-native -- import_executables
 endif
 
 	echo "server:Version=$(DEB_VERSION)" >> debian/substvars
 
-	# As packages does not have major version any more in package name there is no
-	# way as it not set by dpkg to use this on postinst script. Use sed to
-	# determine major version instead.
-	# @TODO: Rewrite this to use the new upstream /var/lib/mysql_upgrade_info file
-	# instead of the legacy /var/lib/debian-XX.X.flag file
+	# As packages does not have major version any more  on package name there is no way as it not set by dpkg
+	# to use this on postinst script. Use sed to determine major version
 	sed -i 's/__MARIADB_MAJOR_VER__/$(DEB_VERSION_MAJOR)/g' debian/mariadb-server.post* debian/mariadb-server.preinst
 
-	# Don't build ColumnStore, not mature enough for Debian yet.
+	# Don't build ColumnStore as part of the native build as it does not meet the
+	# quality standards in Debian. Also building it requires an extra 4 GB of disk
+	# space which makes native Debian builds fail as the total disk space needed
+	# for MariaDB becomes over 10 GB. Only build CS via autobake-deb.sh.
+	#
+	# Note: Don't use '-DWITH_URING=ON' as some Buildbot builders are missing it
+	# and would fail permanently.
 	PATH=$${MYSQL_BUILD_PATH:-"/usr/lib/ccache:/usr/local/bin:/usr/bin:/bin"} \
+	    NO_UPDATE_BUILD_VERSION=1 \
 	    dh_auto_configure --builddirectory=$(BUILDDIR) -- \
 	    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
 	    $(CMAKEFLAGS) \
 	    $(if $(filter $(DEB_BUILD_ARCH),$(DEB_HOST_ARCH)),,-DIMPORT_EXECUTABLES=$(CURDIR)/builddir-native/import_executables.cmake) \
-	    -DCOMPILATION_COMMENT="$(DEB_VENDOR) $(RELEASE)" \
+	    -DCOMPILATION_COMMENT="mariadb.org binary distribution" \
 	    -DMYSQL_SERVER_SUFFIX="-$(DEB_VERSION_REVISION)" \
 	    -DSYSTEM_TYPE="debian-$(DEB_HOST_GNU_SYSTEM)" \
-	    -DCMAKE_SYSTEM_PROCESSOR=$(DEB_HOST_ARCH) \
 	    -DBUILD_CONFIG=mysql_release \
 	    -DCONC_DEFAULT_CHARSET=utf8mb4 \
 	    -DPLUGIN_AWS_KEY_MANAGEMENT=NO \
 	    -DPLUGIN_COLUMNSTORE=NO \
-	    -DWITH_NUMA=AUTO \
 	    -DIGNORE_AIO_CHECK=ON \
-	    -DWITH_URING=ON \
-	    -DWITH_INNODB_SNAPPY=ON \
 	    -DDEB=$(DEB_VENDOR)
 
 # This is needed, otherwise 'make test' will run before binaries have been built
@@ -127,29 +104,21 @@ override_dh_auto_build:
 	@echo "RULES.$@"
 	# Print build env info to help debug builds on different platforms
 	dpkg-architecture
-	cd $(BUILDDIR) && $(MAKE)
+	cd $(BUILDDIR) && $(MAKE) --output-sync=target
 
 override_dh_auto_test:
 	@echo "RULES.$@"
 	dh_testdir
-	# Skip running test suite after build if DEB_BUILD_OPTIONS contains 'nocheck'
-	@echo "DEB_BUILD_OPTIONS: $(DEB_BUILD_OPTIONS)"
-ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	# Ensure at least an empty file exists
+	touch mysql-test/unstable-tests
 	# Skip unstable tests if such are defined for arch
-	[ ! -f debian/unstable-tests.$(DEB_HOST_ARCH) ] || cat debian/unstable-tests.$(DEB_HOST_ARCH) >> $(MTR_SKIP_TEST_LIST)
-	# Show contents of skip list on this architecture
-	@echo "On architecture $(DEB_HOST_ARCH) skip tests:"
-	cat $(MTR_SKIP_TEST_LIST)
+	[ ! -f debian/unstable-tests.$(DEB_HOST_ARCH) ] || cat debian/unstable-tests.$(DEB_HOST_ARCH) >> mysql-test/unstable-tests
 	# Run testsuite
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 	cd $(BUILDDIR)/mysql-test && \
-	export MTR_PRINT_CORE=detailed && \
-	./mtr --force --testcase-timeout=120 --suite-timeout=540 --retry=3 \
-	      --verbose-restart --max-save-core=1 --max-save-datadir=1 \
+	./mtr --force --mem \
 	      --parallel=$(NUMJOBS) --skip-rpl --suite=main \
-	      --skip-test-list=$(MTR_SKIP_TEST_LIST) \
-	      $(MTR_ARGUMENTS_APPEND)
-	# Don't use --mem here as official Debian builders and most Docker systems don't have a large mem device available and
-	# would fail with errors on lack of disk space.
+	      --skip-test-list=unstable-tests
 endif
 
 override_dh_auto_install:
@@ -157,23 +126,13 @@ override_dh_auto_install:
 	dh_testdir
 	dh_testroot
 
-ifneq (,$(filter linux,$(DEB_HOST_ARCH_OS)))
-	# Copy systemd files to a location available for dh_installinit
-	cp $(BUILDDIR)/support-files/mariadb.service debian/mariadb-server.mariadb.service
-	cp $(BUILDDIR)/support-files/mariadb.socket debian/mariadb-server.mariadb.socket
-	cp $(BUILDDIR)/support-files/mariadb-extra.socket debian/mariadb-server.mariadb-extra.socket
-	cp $(BUILDDIR)/support-files/mariadb@.service debian/mariadb-server.mariadb@.service
-	cp $(BUILDDIR)/support-files/mariadb@.socket debian/mariadb-server.mariadb@.socket
-	cp $(BUILDDIR)/support-files/mariadb-extra@.socket debian/mariadb-server.mariadb-extra@.socket
-endif
-
 	# Run 'make install' without output since it is uninteresting and
 	# silencing it helps to make overall build log shorter and more readable
 	@echo "Running $(MAKE) install DESTDIR=$(TMP) ..."
 	cd $(BUILDDIR) && $(MAKE) install DESTDIR=$(TMP) > /dev/null
 
 	# If mariadb-test package is removed, also remove most of it's files
-	grep --quiet "Package: mariadb-test" debian/control || rm -rf $(TMP)/usr/share/mysql/mysql-test
+	grep --quiet "Package: mariadb-test" debian/control || rm -rf $(TMP)/usr/share/mariadb/mariadb-test
 
 	# Delete private files from libraries so they don't get shipped in the -dev packages
 	rm -r $(TMP)/usr/include/mariadb/server/private
@@ -189,12 +148,14 @@ endif
 	# Rename and install AppArmor profile
 	install -D -m 644 debian/apparmor-profile $(TMP)/etc/apparmor.d/usr.sbin.mariadbd
 
-	# Install mariadb.pc as a symlink for the client library,
-	# use -f to override the existing server mariadb.pc file
-	ln -sf libmariadb.pc $(TMP)/usr/lib/$(DEB_HOST_MULTIARCH)/pkgconfig/mariadb.pc
-
 	# Install libmariadbclient18 compatibility links
 	ln -s libmariadb.so.3 $(TMP)/usr/lib/$(DEB_HOST_MULTIARCH)/libmariadbclient.so
+	ln -s libmariadb.so.3 $(TMP)/usr/lib/$(DEB_HOST_MULTIARCH)/libmariadbclient.so.18
+
+	# Install libmysqlclientclientXX compatibility links
+	ln -s libmariadb.so.3 $(TMP)/usr/lib/$(DEB_HOST_MULTIARCH)/libmysqlclient.so.18
+	ln -s libmariadb.so.3 $(TMP)/usr/lib/$(DEB_HOST_MULTIARCH)/libmysqlclient.so.19
+	ln -s libmariadb.so.3 $(TMP)/usr/lib/$(DEB_HOST_MULTIARCH)/libmysqlclient.so.20
 
 	# Install libmariadbclient.a compatibility link
 	ln -s libmariadb.a $(TMP)/usr/lib/$(DEB_HOST_MULTIARCH)/libmariadbclient.a
@@ -207,21 +168,18 @@ endif
 	# Move test plugins that are only needed by the client to the libmariadb path
 	mv -v $(TMP)/usr/lib/mysql/plugin/qa_auth_client.so $(TMP)/usr/lib/$(DEB_HOST_MULTIARCH)/libmariadb3/plugin/
 
-# Install mariadb.socket without enabling it, keep using mariadb.service by default
-# @TODO: Temporarily disable extra and socket systemd file installation until
-# a '--build=all' compatible mechanism is found
-override_dh_systemd_enable:
-	dh_systemd_enable --name=mariadb
-	dh_systemd_enable --no-enable --name=mariadb@ # mariadb@.service
-#	dh_systemd_enable --no-enable --name=mariadb mariadb.socket
-#	dh_systemd_enable --no-enable --name=mariadb-extra mariadb-extra.socket
-#	dh_systemd_enable --no-enable --name=mariadb@ mariadb.socket
-#	dh_systemd_enable --no-enable --name=mariadb-extra@ mariadb-extra.socket
+override_dh_installsystemd:
+	dh_systemd_enable --name=mariadb mariadb.service
+	dh_systemd_enable --no-enable --name=mariadb mariadb.socket
+	dh_systemd_enable --no-enable --name=mariadb-extra mariadb-extra.socket
+	dh_systemd_enable --no-enable --name=mariadb@ mariadb.socket
+	dh_systemd_enable --no-enable --name=mariadb-extra@ mariadb-extra.socket
+	dh_systemd_enable --no-enable --name=mariadb@ mariadb@.service
 
-# Start mariadbd at sequence number 19 before 20 where apache, proftpd etc gets
+# Start MariaDB at sequence number 19 before 20 where apache, proftpd etc gets
 # started which might depend on a running database server.
 override_dh_installinit-arch:
-	dh_installinit --name=mariadb --no-start -- defaults 19 21
+	dh_installinit --name=mariadb -- defaults 19 21
 	dh_systemd_start --restart-after-upgrade
 
 # Use custom server version string variable
@@ -233,6 +191,6 @@ override_dh_gencontrol:
 # white list file only starting from Debian Stretch and Ubuntu Xenial.
 # To find more, grep build logs for 'but is not installed to anywhere'.
 %:
-	dh $@ --fail-missing
+	dh $@ --parallel --with systemd --fail-missing
 
 # vim: ts=8

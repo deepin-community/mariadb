@@ -85,7 +85,8 @@ public:
     ALTER_TABLE_LOCK_EXCLUSIVE
   };
 
-  Lex_table_name db, table_name;
+  Lex_ident_db db;
+  Lex_ident_table table_name;
 
   // Columns and keys to be dropped.
   List<Alter_drop>              drop_list;
@@ -310,14 +311,18 @@ public:
      @retval false  Supported lock type
      @retval true   Not supported value
   */
-  bool supports_lock(THD *thd, const Alter_inplace_info *ha_alter_info);
+  bool supports_lock(THD *thd, bool, Alter_inplace_info *ha_alter_info);
 
   /**
     Return user requested algorithm. If user does not specify
     algorithm then return alter_algorithm variable value.
    */
   enum_alter_table_algorithm algorithm(const THD *thd) const;
-
+  bool algorithm_is_nocopy(const THD *thd) const;
+  bool algorithm_not_specified() const
+  {
+    return requested_algorithm == ALTER_TABLE_ALGORITHM_NONE;
+  }
   uint check_vcol_field(Item_field *f) const;
 
 private:
@@ -404,12 +409,12 @@ public:
   Create_field *implicit_default_value_error_field= nullptr;
   bool         error_if_not_empty= false;
   uint         tables_opened= 0;
-  LEX_CSTRING  db;
-  LEX_CSTRING  table_name;
+  Lex_ident_db db;
+  Lex_ident_table table_name;
   LEX_CSTRING  storage_engine_name;
   LEX_CSTRING  alias;
-  LEX_CSTRING  new_db;
-  LEX_CSTRING  new_name;
+  Lex_ident_db new_db;
+  Lex_ident_table new_name;
   LEX_CSTRING  new_alias;
   LEX_CSTRING  tmp_name;
   LEX_CSTRING  tmp_storage_engine_name;
@@ -436,7 +441,7 @@ public:
 
 private:
   char new_filename[FN_REFLEN + 1];
-  char new_alias_buff[NAME_LEN + 1];
+  CharBuffer<NAME_LEN> new_name_buff;
   char tmp_name_buff[NAME_LEN + 1];
   char path[FN_REFLEN + 1];
   char new_path[FN_REFLEN + 1];

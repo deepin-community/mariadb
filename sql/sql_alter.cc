@@ -179,16 +179,14 @@ bool Alter_info::supports_algorithm(THD *thd,
 }
 
 
-bool Alter_info::supports_lock(THD *thd,
-                               const Alter_inplace_info *ha_alter_info)
+bool Alter_info::supports_lock(THD *thd, bool online,
+                               Alter_inplace_info *ha_alter_info)
 {
   switch (ha_alter_info->inplace_supported) {
   case HA_ALTER_INPLACE_EXCLUSIVE_LOCK:
     // If SHARED lock and no particular algorithm was requested, use COPY.
     if (requested_lock == Alter_info::ALTER_TABLE_LOCK_SHARED &&
-        algorithm(thd) == Alter_info::ALTER_TABLE_ALGORITHM_DEFAULT &&
-        thd->variables.alter_algorithm ==
-                Alter_info::ALTER_TABLE_ALGORITHM_DEFAULT)
+        algorithm(thd) == Alter_info::ALTER_TABLE_ALGORITHM_DEFAULT)
          return false;
 
     if (requested_lock == Alter_info::ALTER_TABLE_LOCK_SHARED ||
@@ -209,8 +207,13 @@ bool Alter_info::supports_lock(THD *thd,
   case HA_ALTER_INPLACE_SHARED_LOCK:
     if (requested_lock == Alter_info::ALTER_TABLE_LOCK_NONE)
     {
-      ha_alter_info->report_unsupported_error("LOCK=NONE", "LOCK=SHARED");
-      return true;
+      if (online)
+        ha_alter_info->inplace_supported= HA_ALTER_INPLACE_NOT_SUPPORTED;
+      else
+      {
+        ha_alter_info->report_unsupported_error("LOCK=NONE", "LOCK=SHARED");
+        return true;
+      }
     }
     return false;
   case HA_ALTER_ERROR:
@@ -253,8 +256,16 @@ Alter_info::enum_alter_table_algorithm
 Alter_info::algorithm(const THD *thd) const
 {
   if (requested_algorithm == ALTER_TABLE_ALGORITHM_NONE)
-   return (Alter_info::enum_alter_table_algorithm) thd->variables.alter_algorithm;
+    return ALTER_TABLE_ALGORITHM_DEFAULT;
   return requested_algorithm;
+}
+
+bool Alter_info::algorithm_is_nocopy(const THD *thd) const
+{
+  auto alg= algorithm(thd);
+  return alg == ALTER_TABLE_ALGORITHM_INPLACE
+         || alg == ALTER_TABLE_ALGORITHM_INSTANT
+         || alg == ALTER_TABLE_ALGORITHM_NOCOPY;
 }
 
 
@@ -343,9 +354,7 @@ bool Alter_info::add_stat_drop_index(THD *thd, const LEX_CSTRING *key_name)
     KEY *key_info= original_table->key_info;
     for (uint i= 0; i < original_table->s->keys; i++, key_info++)
     {
-      if (key_info->name.length &&
-          !lex_string_cmp(system_charset_info, &key_info->name,
-                          key_name))
+      if (key_info->name.length && key_info->name.streq(*key_name))
         return add_stat_drop_index(key_info, false, thd->mem_root);
     }
   }
@@ -402,7 +411,7 @@ Alter_table_ctx::Alter_table_ctx(THD *thd, TABLE_LIST *table_list,
   table_name= table_list->table_name;
   alias= (lower_case_table_names == 2) ? table_list->alias : table_name;
 
-  if (!new_db.str || !my_strcasecmp(table_alias_charset, new_db.str, db.str))
+  if (!new_db.str || new_db.streq(db))
     new_db= db;
 
   if (new_name.str)
@@ -411,22 +420,23 @@ Alter_table_ctx::Alter_table_ctx(THD *thd, TABLE_LIST *table_list,
 
     if (lower_case_table_names == 1) // Convert new_name/new_alias to lower
     {
-      new_name.length= my_casedn_str(files_charset_info, (char*) new_name.str);
+      new_name= Lex_ident_table(new_name_buff.copy_casedn(files_charset_info,
+                                                          new_name).
+                                                to_lex_cstring());
       new_alias= new_name;
     }
     else if (lower_case_table_names == 2) // Convert new_name to lower case
     {
-      new_alias.str=    new_alias_buff;
-      new_alias.length= new_name.length;
-      strmov(new_alias_buff, new_name.str);
-      new_name.length= my_casedn_str(files_charset_info, (char*) new_name.str);
-
+      new_alias= new_name;
+      new_name= Lex_ident_table(new_name_buff.copy_casedn(files_charset_info,
+                                                          new_name).
+                                                to_lex_cstring());
     }
     else
       new_alias= new_name; // LCTN=0 => case sensitive + case preserving
 
     if (!is_database_changed() &&
-        !my_strcasecmp(table_alias_charset, new_name.str, table_name.str))
+        new_name.streq(table_name))
     {
       /*
         Source and destination table names are equal:
@@ -448,7 +458,10 @@ Alter_table_ctx::Alter_table_ctx(THD *thd, TABLE_LIST *table_list,
                                tmp_file_prefix, current_pid, thd->thread_id);
   /* Safety fix for InnoDB */
   if (lower_case_table_names)
-    tmp_name.length= my_casedn_str(files_charset_info, tmp_name_buff);
+  {
+    // Ok to latin1, as the file name is in the form '#sql-alter-abc-def'
+    tmp_name.length= my_casedn_str_latin1(tmp_name_buff);
+  }
 
   if (table_list->table->s->tmp_table == NO_TMP_TABLE)
   {
@@ -641,19 +654,19 @@ bool Sql_cmd_alter_table::execute(THD *thd)
     }
 
     wsrep::key_array keys;
-    wsrep_append_fk_parent_table(thd, first_table, &keys);
-
-    WSREP_TO_ISOLATION_BEGIN_ALTER(lex->name.str ? select_lex->db.str
-                                   : first_table->db.str,
-                                   lex->name.str ? lex->name.str
-                                   : first_table->table_name.str,
-                                   first_table, &alter_info, &keys,
-                                   used_engine ? &create_info : nullptr)
+    if (!wsrep_append_fk_parent_table(thd, first_table, &keys))
     {
-      WSREP_WARN("ALTER TABLE isolation failure");
-      DBUG_RETURN(TRUE);
+      WSREP_TO_ISOLATION_BEGIN_ALTER(lex->name.str ? select_lex->db.str
+                                     : first_table->db.str,
+                                     lex->name.str ? lex->name.str
+                                     : first_table->table_name.str,
+                                     first_table, &alter_info, &keys,
+                                     used_engine ? &create_info : nullptr)
+      {
+        WSREP_WARN("ALTER TABLE isolation failure");
+        DBUG_RETURN(TRUE);
+      }
     }
-
     DEBUG_SYNC(thd, "wsrep_alter_table_after_toi");
   }
 #endif

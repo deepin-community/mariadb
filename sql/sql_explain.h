@@ -215,6 +215,7 @@ public:
     message(NULL),
     having(NULL), having_value(Item::COND_UNDEF),
     using_temporary(false), using_filesort(false),
+    cost(0.0),
     time_tracker(is_analyze),
     aggr_tree(NULL)
   {}
@@ -248,9 +249,10 @@ public:
   bool using_temporary;
   bool using_filesort;
 
+  double cost;
   /* ANALYZE members */
   Time_and_counter_tracker time_tracker;
-  
+
   /* 
     Part of query plan describing sorting, temp.table usage, and duplicate 
     removal
@@ -331,6 +333,7 @@ public:
 /////////////////////////////////////////////////////////////////////////////
 
 extern const char *unit_operation_text[4];
+extern const char *pushed_unit_operation_text[4];
 extern const char *pushed_derived_text;
 extern const char *pushed_select_text;
 
@@ -345,7 +348,7 @@ class Explain_union : public Explain_node
 public:
   Explain_union(MEM_ROOT *root, bool is_analyze) : 
     Explain_node(root), union_members(PSI_INSTRUMENT_MEM),
-    is_recursive_cte(false),
+    is_recursive_cte(false), is_pushed_down_to_engine(false),
     fake_select_lex_explain(root, is_analyze)
   {}
 
@@ -376,13 +379,18 @@ public:
   }
   int print_explain(Explain_query *query, select_result_sink *output, 
                     uint8 explain_flags, bool is_analyze);
-  void print_explain_json(Explain_query *query, Json_writer *writer, 
+  void print_explain_json(Explain_query *query, Json_writer *writer,
                           bool is_analyze);
+  void print_explain_json_regular(Explain_query *query, Json_writer *writer,
+                          bool is_analyze);
+  void print_explain_json_pushed_down(Explain_query *query,
+                                      Json_writer *writer, bool is_analyze);
 
   const char *fake_select_type;
   bool using_filesort;
   bool using_tmp;
   bool is_recursive_cte;
+  bool is_pushed_down_to_engine;
   
   /*
     Explain data structure for "fake_select_lex" (i.e. for the degenerate
@@ -401,6 +409,10 @@ public:
   }
 private:
   uint make_union_table_name(char *buf);
+  int print_explain_regular(Explain_query *query, select_result_sink *output,
+                            uint8 explain_flags, bool is_analyze);
+  int print_explain_pushed_down(select_result_sink *output,
+                                uint8 explain_flags, bool is_analyze);
   
   Table_access_tracker fake_select_lex_tracker;
   /* This one is for reading after ORDER BY */
@@ -592,7 +604,7 @@ enum explain_extra_tag
 class EXPLAIN_BKA_TYPE
 {
 public:
-  EXPLAIN_BKA_TYPE() : join_alg(NULL) {}
+  EXPLAIN_BKA_TYPE() : join_alg(NULL), is_bka(false) {}
 
   size_t join_buffer_size;
 
@@ -603,6 +615,9 @@ public:
     Other values: BNL, BNLH, BKA, BKAH.
   */
   const char *join_alg;
+
+  /* true <=> BKA is used */
+  bool is_bka;
 
   /* Information about MRR usage.  */
   StringBuffer<64> mrr_type;
@@ -664,14 +679,6 @@ public:
 
   void print_explain_json(Explain_query *query, Json_writer *writer,
                           bool is_analyze);
-
-  /*
-    TODO:
-      Here should be ANALYZE members:
-      - r_rows for the quick select
-      - An object that tracked the table access time
-      - real selectivity of the filter.
-  */
 };
 
 
@@ -752,6 +759,8 @@ public:
   Explain_table_access(MEM_ROOT *root, bool timed) :
     derived_select_number(0),
     non_merged_sjm_number(0),
+    cost(0.0),
+    loops(0.0),
     extra_tags(root),
     range_checked_fer(NULL),
     full_scan_on_null_key(false),
@@ -821,6 +830,10 @@ public:
   ha_rows rows;
   double filtered;
 
+  /* Total cost incurred during one execution of this select */
+  double cost;
+
+  double loops;
   /* 
     Contents of the 'Extra' column. Some are converted into strings, some have
     parameters, values for which are stored below.
@@ -852,7 +865,7 @@ public:
   /*
     This is either pushed index condition, or BKA's index condition. 
     (the latter refers to columns of other tables and so can only be checked by
-     BKA code). Examine extra_tags to tell which one it is.
+     BKA code). Examine extra_tags (or bka_type.is_bka) to tell which one it is.
   */
   Item *pushed_index_cond;
 

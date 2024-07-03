@@ -15,6 +15,7 @@
 
 /* Describe, check and repair of MARIA tables */
 
+#define VER "1.3"
 #include "ma_fulltext.h"
 #include <myisamchk.h>
 #include <my_bit.h>
@@ -25,6 +26,7 @@
 /* Remove next line if you want aria_chk to produce a stack trace */
 #undef HAVE_BACKTRACE
 #include <my_stacktrace.h>
+#include <welcome_copyright_notice.h>
 
 static uint decode_bits;
 static char **default_argv;
@@ -79,7 +81,6 @@ static char default_open_errmsg[]=  "%d when opening Aria table '%s'";
 static char default_close_errmsg[]= "%d when closing Aria table '%s'";
 
 static void get_options(int *argc,char * * *argv);
-static void print_version(void);
 static void usage(void);
 static int maria_chk(HA_CHECK *param, char *filename);
 static void descript(HA_CHECK *param, register MARIA_HA *info, char *name);
@@ -145,7 +146,8 @@ int main(int argc, char **argv)
   {
     if ((ma_control_file_open(FALSE, opt_require_control_file ||
                               !(check_param.testflag & T_SILENT),
-                              TRUE)))
+                              TRUE,
+                              control_file_open_flags)))
     {
       if (opt_require_control_file ||
           (opt_transaction_logging && (check_param.testflag & T_REP_ANY)))
@@ -419,25 +421,24 @@ static struct my_option my_long_options[] =
     "Size of page buffer. Used by --safe-repair",
     &check_param.use_buffers, &check_param.use_buffers, 0,
     GET_ULONG, REQUIRED_ARG, PAGE_BUFFER_INIT, 1024L*1024L,
-    SIZE_T_MAX, (long) MALLOC_OVERHEAD, (long) IO_SIZE, 0},
+    SIZE_T_MAX, 0, (long) IO_SIZE, 0},
   { "read_buffer_size", OPT_READ_BUFFER_SIZE,
     "Read buffer size for sequential reads during scanning",
     &check_param.read_buffer_length,
     &check_param.read_buffer_length, 0, GET_ULONG, REQUIRED_ARG,
     (long) READ_BUFFER_INIT, (long) MALLOC_OVERHEAD,
-    ~0ULL, (long) MALLOC_OVERHEAD, (long) 1L, 0},
+    ~0ULL, 0, (long) 1L, 0},
   { "write_buffer_size", OPT_WRITE_BUFFER_SIZE,
     "Write buffer size for sequential writes during repair of fixed size or dynamic size rows",
     &check_param.write_buffer_length,
     &check_param.write_buffer_length, 0, GET_ULONG, REQUIRED_ARG,
     (long) READ_BUFFER_INIT, (long) MALLOC_OVERHEAD,
-    ~0UL, (long) MALLOC_OVERHEAD, (long) 1L, 0},
+    ~0UL, 0, (long) 1L, 0},
   { "sort_buffer_size", OPT_SORT_BUFFER_SIZE,
     "Size of sort buffer. Used by --recover",
     &check_param.orig_sort_buffer_length,
     &check_param.orig_sort_buffer_length, 0, GET_ULL, REQUIRED_ARG,
-    SORT_BUFFER_INIT, MARIA_MIN_SORT_MEMORY, SIZE_T_MAX/10, MALLOC_OVERHEAD,
-    1L, 0},
+    SORT_BUFFER_INIT, MARIA_MIN_SORT_MEMORY, SIZE_T_MAX/10, 0, 1L, 0},
   { "sort_key_blocks", OPT_SORT_KEY_BLOCKS,
     "Internal buffer for sorting keys; Don't touch :)",
     &check_param.sort_key_blocks,
@@ -470,13 +471,6 @@ static struct my_option my_long_options[] =
     0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0},
   { 0, 0, 0, 0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0}
 };
-
-
-static void print_version(void)
-{
-  printf("%s  Ver 1.3 for %s on %s\n", my_progname, SYSTEM_TYPE,
-	 MACHINE_TYPE);
-}
 
 
 static void usage(void)
@@ -1370,6 +1364,7 @@ static int maria_chk(HA_CHECK *param, char *filename)
       DBUG_PRINT("info", ("Resetting crashed state"));
       share->state.changed&= ~(STATE_CHANGED | STATE_CRASHED_FLAGS |
                                STATE_IN_REPAIR);
+      share->crash_error= 0;
     }
     else
       maria_mark_crashed(info);
@@ -1434,6 +1429,7 @@ static int maria_chk(HA_CHECK *param, char *filename)
       DBUG_PRINT("info", ("Resetting crashed state"));
       share->state.changed&= ~(STATE_CHANGED | STATE_CRASHED_FLAGS |
                                STATE_IN_REPAIR);
+      share->crash_error= 0;
     }
     else if (!maria_is_crashed(info) &&
              (param->testflag & T_UPDATE_STATE))
@@ -1625,6 +1621,8 @@ static void descript(HA_CHECK *param, register MARIA_HA *info, char *name)
 	pos=strmov(pos,"sorted index pages,");
       if (!(share->state.changed & STATE_NOT_ZEROFILLED))
 	pos=strmov(pos,"zerofilled,");
+      if (test_all_bits(share->state.changed, (STATE_NOT_ZEROFILLED | STATE_HAS_LSN)))
+        pos=strmov(pos,"has_lsn,");
       if (!(share->state.changed & STATE_NOT_MOVABLE))
 	pos=strmov(pos,"movable,");
       if (have_control_file && (share->state.changed & STATE_MOVED))
