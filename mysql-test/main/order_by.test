@@ -9,6 +9,7 @@
 --source include/no_view_protocol.inc
 
 call mtr.add_suppression("Sort aborted.*");
+--source include/have_sequence.inc
 call mtr.add_suppression("Out of sort memory; increase server sort buffer size");
 --source include/have_sequence.inc
 
@@ -798,10 +799,15 @@ INSERT INTO t2 SELECT * FROM t1 ORDER BY id;
 
 EXPLAIN SELECT id,c3 FROM t2 WHERE c2=11 ORDER BY c3 LIMIT 20;
 EXPLAIN SELECT id,c3 FROM t2 WHERE c2=11 ORDER BY c3 LIMIT 4000;
+EXPLAIN SELECT id,c3 FROM t2 WHERE c2=11 ORDER BY c3 LIMIT 6000;
 EXPLAIN SELECT id,c3 FROM t2 WHERE c2 BETWEEN 10 AND 12 ORDER BY c3 LIMIT 20;
 EXPLAIN SELECT id,c3 FROM t2 WHERE c2 BETWEEN 20 AND 30 ORDER BY c3 LIMIT 4000;
 
 SELECT id,c3 FROM t2 WHERE c2=11 ORDER BY c3 LIMIT 20;
+
+# Show that order by optimization takes into account index only scans
+ALTER TABLE t2 DROP INDEX k3, ADD INDEX k3 (c3,c2);
+EXPLAIN SELECT c3 FROM t2 WHERE c2=11 ORDER BY c3 LIMIT 4000;
 
 DROP TABLE t1,t2;
 
@@ -907,8 +913,12 @@ CREATE TABLE t1 (
 INSERT INTO t1 VALUES (1, 10), (2, NULL);
 
 --echo # Must use ref-or-null on the a_c index
+--source include/analyze-format.inc
+ANALYZE FORMAT=JSON
+SELECT 1 AS col FROM t1 WHERE a=2 AND (c=10 OR c IS NULL) ORDER BY c;
 EXPLAIN
 SELECT 1 AS col FROM t1 WHERE a=2 AND (c=10 OR c IS NULL) ORDER BY c;
+
 --echo # Must return 1 row
 SELECT 1 AS col FROM t1 WHERE a=2 AND (c=10 OR c IS NULL) ORDER BY c;
 
@@ -2394,7 +2404,7 @@ let $query= select
                    t2.key1 = t1.a and t2.key1 IS NOT NULL
                  ORDER BY
                    t2.key2 ASC
-                LIMIT 1)
+                LIMIT 1) as "con"
            from t1;
 
 --echo # here type should show ref not index
@@ -2461,6 +2471,65 @@ ANALYZE TABLE t1, t2 PERSISTENT FOR ALL;
 EXPLAIN SELECT (SELECT 1 FROM t1 WHERE t1.a=t2.b ORDER BY t1.b LIMIT 1) AS c FROM t2;
 
 DROP TABLE t1,t2;
+
+--echo #
+--echo # MDEV-29681 Server crashes when optimizing SQL with ORDER BY
+--echo #
+CREATE TABLE t1 (b INT);
+CREATE TABLE t2 (a INT, c INT);
+
+--echo # First test empty tables
+EXPLAIN EXTENDED (SELECT * FROM t1 JOIN t2 ON a=b LIMIT 3) ORDER BY a+1;
+EXPLAIN EXTENDED (SELECT * FROM t1 JOIN t2 ON a=b LIMIT 3) ORDER BY a=2;
+EXPLAIN EXTENDED (SELECT * FROM t1 JOIN t2 ON a=b LIMIT 3)
+  ORDER BY a+1, a-b DESC, c<>a;
+
+--echo # Insert some data
+INSERT INTO t1 VALUES (1),(2),(3),(4);
+INSERT INTO t2 VALUES (1,1),(2,2),(3,3),(4,4);
+
+--sorted_result
+(SELECT * FROM t1 JOIN t2 ON a=b LIMIT 3) ORDER BY a=b, a-10 DESC, b+a, c+a+a+b;
+--sorted_result
+(SELECT * FROM t1 JOIN t2 ON a=b LIMIT 3) ORDER BY a=2;
+
+EXPLAIN EXTENDED (SELECT * FROM t1 JOIN t2 ON a=b LIMIT 3)
+  ORDER BY a=b, a-10, b+a, c+a+a+b;
+
+--echo # When there is no LIMIT clause the derived table must be merged
+--sorted_result
+(SELECT * FROM t1 JOIN t2 ON a=b) ORDER BY a+16, b+a, c<>b;
+EXPLAIN EXTENDED (SELECT * FROM t1 JOIN t2 ON a=b) ORDER BY a+16 DESC, b+a, c<>b;
+
+--echo # Test UNIONs:
+--sorted_result
+(SELECT * FROM t1 JOIN t2 ON a=b UNION
+                  SELECT * FROM t1 JOIN t2 ON a!=b
+                  LIMIT 3)
+                  ORDER BY a+16, b+a, c<>b;
+EXPLAIN EXTENDED (SELECT * FROM t1 JOIN t2 ON a=b UNION
+                  SELECT * FROM t1 JOIN t2 ON a!=b
+                  LIMIT 3)
+                  ORDER BY a+16, b+a, c<>b;
+--sorted_result
+(SELECT * FROM t1 JOIN t2 ON a=b UNION
+                  SELECT NULL, NULL, NULL
+                  LIMIT 3)
+                  ORDER BY b-a-c;
+EXPLAIN EXTENDED (SELECT * FROM t1 JOIN t2 ON a=b UNION
+                  SELECT NULL, NULL, NULL
+                  LIMIT 3)
+                  ORDER BY b-a-c;
+--sorted_result
+(SELECT * FROM t1 JOIN t2 ON a=b UNION
+                  SELECT NULL, NULL, NULL
+                  ORDER BY a LIMIT 3)
+                  ORDER BY b-a-c LIMIT 1;
+EXPLAIN EXTENDED (SELECT * FROM t1 JOIN t2 ON a=b UNION
+                  SELECT NULL, NULL, NULL
+                  ORDER BY a LIMIT 3)
+                  ORDER BY b-a-c LIMIT 1;
+DROP TABLE t1, t2;
 
 --echo # End of 10.4 tests
 
@@ -2698,8 +2767,8 @@ CREATE TABLE t2 (a INT, b INT);
 
 INSERT INTO t1 (a,b) VALUES (58,1),(96,2),(273,3),(23,4),(231,5),(525,6),
                             (2354,7),(321421,3),(535,2),(4535,3);
-INSERT INTO t2 (a,b) VALUES (58,3),(96,3),(273,3);
-
+INSERT INTO t2 (a,b) VALUES (58,3),(96,3),(273,3),(1000,1000),(2000,2000),(3000,3000);
+INSERT INTO t2 select seq,seq from seq_10_to_100;
 --echo # Join order should have the SJM scan table as the first table for both
 --echo # the queries with GROUP BY and ORDER BY clause.
 
@@ -2709,6 +2778,7 @@ let $query= SELECT t1.a
             ORDER BY t1.a DESC;
 
 eval EXPLAIN $query;
+--source include/explain-no-costs.inc
 eval EXPLAIN FORMAT=JSON $query;
 eval $query;
 
@@ -2718,6 +2788,7 @@ let $query= SELECT t1.a, group_concat(t1.b)
             GROUP BY t1.a DESC;
 
 eval EXPLAIN $query;
+--source include/explain-no-costs.inc
 eval EXPLAIN FORMAT=JSON $query;
 eval $query;
 DROP TABLE t1, t2;

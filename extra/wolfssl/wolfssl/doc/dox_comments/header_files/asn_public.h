@@ -1231,7 +1231,7 @@ int wc_DerToPem(const byte* der, word32 derSz, byte* output,
 
     word32 pemSz;
     byte* cipher_info[] { Additional cipher info. }
-    pemSz = wc_DerToPemEx(der, derSz,pemFormatted,FOURK_BUF, ,CERT_TYPE);
+    pemSz = wc_DerToPemEx(der, derSz, pemFormatted, FOURK_BUF, cipher_info, CERT_TYPE);
     \endcode
 
     \sa wc_PemCertToDer
@@ -2110,7 +2110,7 @@ int wc_SetCustomExtension(Cert *cert, int critical, const char *oid,
     _Example_
     \code
     int ret = 0;
-    // Unkown extension callback prototype
+    // Unknown extension callback prototype
     int myUnknownExtCallback(const word16* oid, word32 oidSz, int crit,
                              const unsigned char* der, word32 derSz);
 

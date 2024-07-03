@@ -31,16 +31,7 @@
     #define WOLFSSL_NEED_LINUX_CURRENT
 #endif
 
-#include <wolfssl/wolfcrypt/settings.h>
-
-/* check old macros @wc_fips */
-#if defined(USE_CYASSL_MEMORY) && !defined(USE_WOLFSSL_MEMORY)
-    #define USE_WOLFSSL_MEMORY
-#endif
-#if defined(CYASSL_MALLOC_CHECK) && !defined(WOLFSSL_MALLOC_CHECK)
-    #define WOLFSSL_MALLOC_CHECK
-#endif
-
+#include <wolfssl/wolfcrypt/types.h>
 
 /*
 Possible memory options:
@@ -128,6 +119,55 @@ int wolfSSL_GetAllocators(wolfSSL_Malloc_cb*  mf,
     return 0;
 }
 
+#ifdef WOLFSSL_MEM_FAIL_COUNT
+static wolfSSL_Mutex memFailMutex WOLFSSL_MUTEX_INITIALIZER_CLAUSE(memFailMutex);
+int mem_fail_allocs = 0;
+int mem_fail_frees = 0;
+int mem_fail_cnt = 0;
+
+void wc_MemFailCount_Init()
+{
+    char* cnt;
+#ifndef WOLFSSL_MUTEX_INITIALIZER
+    wc_InitMutex(&memFailMutex);
+#endif
+    cnt = getenv("MEM_FAIL_CNT");
+    if (cnt != NULL) {
+        fprintf(stderr, "MemFailCount At: %d\n", mem_fail_cnt);
+        mem_fail_cnt = atoi(cnt);
+    }
+}
+static int wc_MemFailCount_AllocMem(void)
+{
+    int ret = 1;
+
+    wc_LockMutex(&memFailMutex);
+    if ((mem_fail_cnt > 0) && (mem_fail_cnt <= mem_fail_allocs + 1)) {
+        ret = 0;
+    }
+    else {
+        mem_fail_allocs++;
+    }
+    wc_UnLockMutex(&memFailMutex);
+
+    return ret;
+}
+static void wc_MemFailCount_FreeMem(void)
+{
+    wc_LockMutex(&memFailMutex);
+    mem_fail_frees++;
+    wc_UnLockMutex(&memFailMutex);
+}
+void wc_MemFailCount_Free()
+{
+#ifndef WOLFSSL_MUTEX_INITIALIZER
+    wc_FreeMutex(&memFailMutex);
+#endif
+    fprintf(stderr, "MemFailCount Total: %d\n", mem_fail_allocs);
+    fprintf(stderr, "MemFailCount Frees: %d\n", mem_fail_frees);
+}
+#endif
+
 #ifndef WOLFSSL_STATIC_MEMORY
 #ifdef WOLFSSL_CHECK_MEM_ZERO
 
@@ -160,7 +200,7 @@ static MemZero memZero[WOLFSSL_MEM_CHECK_ZERO_CACHE_LEN];
  */
 static int nextIdx = -1;
 /* Mutex to protect modifying list of addresses to check. */
-static wolfSSL_Mutex zeroMutex;
+static wolfSSL_Mutex zeroMutex WOLFSSL_MUTEX_INITIALIZER_CLAUSE(zeroMutex);
 
 /* Initialize the table of addresses and the mutex.
  */
@@ -169,7 +209,9 @@ void wc_MemZero_Init()
     /* Clear the table to more easily see what is valid. */
     XMEMSET(memZero, 0, sizeof(memZero));
     /* Initialize mutex. */
+#ifndef WOLFSSL_MUTEX_INITIALIZER
     wc_InitMutex(&zeroMutex);
+#endif
     /* Next index is first entry. */
     nextIdx = 0;
 }
@@ -179,7 +221,9 @@ void wc_MemZero_Init()
 void wc_MemZero_Free()
 {
     /* Free mutex. */
+#ifndef WOLFSSL_MUTEX_INITIALIZER
     wc_FreeMutex(&zeroMutex);
+#endif
     /* Make sure we checked all addresses. */
     if (nextIdx > 0) {
         int i;
@@ -268,50 +312,6 @@ void wc_MemZero_Check(void* addr, size_t len)
     wc_UnLockMutex(&zeroMutex);
 }
 #endif /* WOLFSSL_CHECK_MEM_ZERO */
-
-#ifdef WOLFSSL_MEM_FAIL_COUNT
-static wolfSSL_Mutex memFailMutex;
-int mem_fail_allocs = 0;
-int mem_fail_frees = 0;
-int mem_fail_cnt = 0;
-
-void wc_MemFailCount_Init()
-{
-    wc_InitMutex(&memFailMutex);
-    char* cnt = getenv("MEM_FAIL_CNT");
-    if (cnt != NULL) {
-        fprintf(stderr, "MemFailCount At: %d\n", mem_fail_cnt);
-        mem_fail_cnt = atoi(cnt);
-    }
-}
-static int wc_MemFailCount_AllocMem(void)
-{
-    int ret = 1;
-
-    wc_LockMutex(&memFailMutex);
-    if ((mem_fail_cnt > 0) && (mem_fail_cnt <= mem_fail_allocs + 1)) {
-        ret = 0;
-    }
-    else {
-        mem_fail_allocs++;
-    }
-    wc_UnLockMutex(&memFailMutex);
-
-    return ret;
-}
-static void wc_MemFailCount_FreeMem(void)
-{
-    wc_LockMutex(&memFailMutex);
-    mem_fail_frees++;
-    wc_UnLockMutex(&memFailMutex);
-}
-void wc_MemFailCount_Free()
-{
-    wc_FreeMutex(&memFailMutex);
-    fprintf(stderr, "MemFailCount Total: %d\n", mem_fail_allocs);
-    fprintf(stderr, "MemFailCount Frees: %d\n", mem_fail_frees);
-}
-#endif
 
 #ifdef WOLFSSL_DEBUG_MEMORY
 void* wolfSSL_Malloc(size_t size, const char* func, unsigned int line)
@@ -1239,7 +1239,6 @@ void* wolfSSL_Realloc(void *ptr, size_t size, void* heap, int type)
 
 /* Example for user io pool, shared build may need definitions in lib proper */
 
-#include <wolfssl/wolfcrypt/types.h>
 #include <stdlib.h>
 
 #ifndef HAVE_THREAD_LS
@@ -1324,8 +1323,13 @@ void *xmalloc(size_t n, void* heap, int type, const char* func,
     }
 #endif
 
-    if (malloc_function)
+    if (malloc_function) {
+#ifndef WOLFSSL_STATIC_MEMORY
         p32 = malloc_function(n + sizeof(word32) * 4);
+#else
+        p32 = malloc_function(n + sizeof(word32) * 4, heap, type);
+#endif
+    }
     else
         p32 = malloc(n + sizeof(word32) * 4);
 
@@ -1362,8 +1366,13 @@ void *xrealloc(void *p, size_t n, void* heap, int type, const char* func,
         oldLen = oldp32[0];
     }
 
-    if (realloc_function)
+    if (realloc_function) {
+#ifndef WOLFSSL_STATIC_MEMORY
         p32 = realloc_function(oldp32, n + sizeof(word32) * 4);
+#else
+        p32 = realloc_function(oldp32, n + sizeof(word32) * 4, heap, type);
+#endif
+    }
     else
         p32 = realloc(oldp32, n + sizeof(word32) * 4);
 
@@ -1403,8 +1412,13 @@ void xfree(void *p, void* heap, int type, const char* func, const char* file,
         fprintf(stderr, "Free: %p -> %u (%d) at %s:%s:%u\n", p, p32[0], type,
                                                               func, file, line);
 
-        if (free_function)
+        if (free_function) {
+#ifndef WOLFSSL_STATIC_MEMORY
             free_function(p32);
+#else
+            free_function(p32, heap, type);
+#endif
+        }
         else
             free(p32);
     }
@@ -1431,6 +1445,149 @@ void __attribute__((no_instrument_function))
     (void)caller;
 }
 #endif
+
+#ifdef WC_DEBUG_CIPHER_LIFECYCLE
+static const byte wc_debug_cipher_lifecycle_tag_value[] =
+    { 'W', 'o', 'l', 'f' };
+
+WOLFSSL_LOCAL int wc_debug_CipherLifecycleInit(
+    void **CipherLifecycleTag,
+    void *heap)
+{
+    if (CipherLifecycleTag == NULL)
+        return BAD_FUNC_ARG;
+    *CipherLifecycleTag = (void *)XMALLOC(
+        sizeof(wc_debug_cipher_lifecycle_tag_value),
+        heap,
+        DYNAMIC_TYPE_DEBUG_TAG);
+    if (*CipherLifecycleTag == NULL)
+        return MEMORY_E;
+    XMEMCPY(*CipherLifecycleTag,
+            wc_debug_cipher_lifecycle_tag_value,
+            sizeof(wc_debug_cipher_lifecycle_tag_value));
+    return 0;
+}
+
+WOLFSSL_LOCAL int wc_debug_CipherLifecycleCheck(
+    void *CipherLifecycleTag,
+    int abort_p)
+{
+    int ret;
+    if (CipherLifecycleTag == NULL) {
+        ret = BAD_STATE_E;
+        goto out;
+    }
+    if (XMEMCMP(CipherLifecycleTag,
+                wc_debug_cipher_lifecycle_tag_value,
+                sizeof(wc_debug_cipher_lifecycle_tag_value)) != 0)
+    {
+        ret = BAD_STATE_E;
+        goto out;
+    }
+    ret = 0;
+
+out:
+    if ((ret < 0) && abort_p)
+        abort();
+
+    return ret;
+}
+
+WOLFSSL_LOCAL int wc_debug_CipherLifecycleFree(
+    void **CipherLifecycleTag,
+    void *heap,
+    int abort_p)
+{
+    int ret;
+    if (CipherLifecycleTag == NULL)
+        return BAD_FUNC_ARG;
+    ret = wc_debug_CipherLifecycleCheck(*CipherLifecycleTag, abort_p);
+    if (ret != 0)
+        return ret;
+    XFREE(*CipherLifecycleTag, heap, DYNAMIC_TYPE_DEBUG_TAG);
+    *CipherLifecycleTag = NULL;
+    return 0;
+}
+#endif /* WC_DEBUG_CIPHER_LIFECYCLE */
+
+#ifdef DEBUG_VECTOR_REGISTER_ACCESS
+THREAD_LS_T int wc_svr_count = 0;
+THREAD_LS_T const char *wc_svr_last_file = NULL;
+THREAD_LS_T int wc_svr_last_line = -1;
+THREAD_LS_T int wc_debug_vector_registers_retval =
+    WC_DEBUG_VECTOR_REGISTERS_RETVAL_INITVAL;
+#endif
+
+#ifdef DEBUG_VECTOR_REGISTER_ACCESS_FUZZING
+
+#ifdef HAVE_THREAD_LS
+
+WOLFSSL_LOCAL int SAVE_VECTOR_REGISTERS2_fuzzer(void) {
+    static THREAD_LS_T struct drand48_data wc_svr_fuzzing_state;
+    static THREAD_LS_T int wc_svr_fuzzing_seeded = 0;
+    long result;
+
+#ifdef DEBUG_VECTOR_REGISTER_ACCESS
+    if (wc_debug_vector_registers_retval)
+        return wc_debug_vector_registers_retval;
+#endif
+
+    if (wc_svr_fuzzing_seeded == 0) {
+        long seed = WC_DEBUG_VECTOR_REGISTERS_FUZZING_SEED;
+        char *seed_envstr = getenv("WC_DEBUG_VECTOR_REGISTERS_FUZZING_SEED");
+        if (seed_envstr)
+            seed = strtol(seed_envstr, NULL, 0);
+        (void)srand48_r(seed, &wc_svr_fuzzing_state);
+        wc_svr_fuzzing_seeded = 1;
+    }
+    (void)lrand48_r(&wc_svr_fuzzing_state, &result);
+    if (result & 1)
+        return IO_FAILED_E;
+    else
+        return 0;
+}
+
+#else /* !HAVE_THREAD_LS */
+
+/* alternate implementation useful for testing in the kernel module build, where
+ * glibc and thread-local storage are unavailable.
+ *
+ * note this is not a well-behaved PRNG, but is adequate for fuzzing purposes.
+ * the prn sequence is incompressible according to ent and xz, and does not
+ * cycle within 10M iterations with various seeds including zero, but the Chi
+ * square distribution is poor, and the unconditioned lsb bit balance is ~54%
+ * regardless of seed.
+ *
+ * deterministic only if access is single-threaded, but never degenerate.
+ */
+
+WOLFSSL_LOCAL int SAVE_VECTOR_REGISTERS2_fuzzer(void) {
+    static unsigned long prn = WC_DEBUG_VECTOR_REGISTERS_FUZZING_SEED;
+    static int balance_bit = 0;
+    unsigned long new_prn = prn ^ 0xba86943da66ee701ul; /* note this magic
+                                                         * random number is
+                                                         * bit-balanced.
+                                                         */
+
+#ifdef DEBUG_VECTOR_REGISTER_ACCESS
+    if (wc_debug_vector_registers_retval)
+        return wc_debug_vector_registers_retval;
+#endif
+
+    /* barrel-roll using the bottom 6 bits. */
+    if (new_prn & 0x3f)
+        new_prn = (new_prn << (new_prn & 0x3f)) |
+            (new_prn >> (0x40 - (new_prn & 0x3f)));
+    prn = new_prn;
+
+    balance_bit = !balance_bit;
+
+    return ((prn & 1) ^ balance_bit) ? IO_FAILED_E : 0;
+}
+
+#endif /* !HAVE_THREAD_LS */
+
+#endif /* DEBUG_VECTOR_REGISTER_ACCESS_FUZZING */
 
 #ifdef WOLFSSL_LINUXKM
     #include "../../linuxkm/linuxkm_memory.c"

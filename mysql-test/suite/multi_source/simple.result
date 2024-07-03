@@ -2,8 +2,8 @@ connect  slave,127.0.0.1,root,,,$SERVER_MYPORT_3;
 connect  master1,127.0.0.1,root,,,$SERVER_MYPORT_1;
 connect  master2,127.0.0.1,root,,,$SERVER_MYPORT_2;
 connection slave;
-change master 'slave1' to master_port=MYPORT_1, master_host='127.0.0.1', master_user='root';
-change master 'slave2' to master_port=MYPORT_2, master_host='127.0.0.1', master_user='root';
+change master 'slave1' to master_port=MYPORT_1, master_host='127.0.0.1', master_user='root', master_ssl_verify_server_cert=0;
+change master 'slave2' to master_port=MYPORT_2, master_host='127.0.0.1', master_user='root', master_ssl_verify_server_cert=0;
 start slave 'slave1';
 set default_master_connection = 'slave1';
 include/wait_for_slave_to_start.inc
@@ -32,7 +32,6 @@ Relay_Log_Pos	<relay_log_pos>
 Relay_Master_Log_File	master-bin.000001
 Slave_IO_Running	Yes
 Slave_SQL_Running	Yes
-Replicate_Rewrite_DB	
 Replicate_Do_DB	
 Replicate_Ignore_DB	
 Replicate_Do_Table	
@@ -47,7 +46,7 @@ Relay_Log_Space	<relay_log_space1>
 Until_Condition	None
 Until_Log_File	
 Until_Log_Pos	0
-Master_SSL_Allowed	No
+Master_SSL_Allowed	Yes
 Master_SSL_CA_File	
 Master_SSL_CA_Path	
 Master_SSL_Cert	
@@ -74,6 +73,7 @@ Slave_SQL_Running_State	Slave has read all relay log; waiting for more updates
 Slave_DDL_Groups	0
 Slave_Non_Transactional_Groups	0
 Slave_Transactional_Groups	0
+Replicate_Rewrite_DB	
 Retried_transactions	0
 Max_relay_log_size	1073741824
 Executed_log_entries	7
@@ -94,7 +94,6 @@ Relay_Log_Pos	<relay_log_pos>
 Relay_Master_Log_File	master-bin.000001
 Slave_IO_Running	Yes
 Slave_SQL_Running	Yes
-Replicate_Rewrite_DB	
 Replicate_Do_DB	
 Replicate_Ignore_DB	
 Replicate_Do_Table	
@@ -109,7 +108,7 @@ Relay_Log_Space	<relay_log_space1>
 Until_Condition	None
 Until_Log_File	
 Until_Log_Pos	0
-Master_SSL_Allowed	No
+Master_SSL_Allowed	Yes
 Master_SSL_CA_File	
 Master_SSL_CA_Path	
 Master_SSL_Cert	
@@ -136,6 +135,7 @@ Slave_SQL_Running_State	Slave has read all relay log; waiting for more updates
 Slave_DDL_Groups	0
 Slave_Non_Transactional_Groups	0
 Slave_Transactional_Groups	0
+Replicate_Rewrite_DB	
 Retried_transactions	0
 Max_relay_log_size	1073741824
 Executed_log_entries	7
@@ -151,7 +151,7 @@ HOST	127.0.0.1
 PORT	#
 USER	root
 USING_GTID	SLAVE_POS
-SSL_ALLOWED	NO
+SSL_ALLOWED	YES
 SSL_CA_FILE	
 SSL_CA_PATH	
 SSL_CERTIFICATE	
@@ -171,7 +171,7 @@ HOST	127.0.0.1
 PORT	#
 USER	root
 USING_GTID	SLAVE_POS
-SSL_ALLOWED	NO
+SSL_ALLOWED	YES
 SSL_CA_FILE	
 SSL_CA_PATH	
 SSL_CERTIFICATE	
@@ -221,7 +221,6 @@ Relay_Log_Pos	<relay_log_pos>
 Relay_Master_Log_File	master-bin.000001
 Slave_IO_Running	No
 Slave_SQL_Running	No
-Replicate_Rewrite_DB	
 Replicate_Do_DB	
 Replicate_Ignore_DB	
 Replicate_Do_Table	
@@ -236,7 +235,7 @@ Relay_Log_Space	<relay_log_space1>
 Until_Condition	None
 Until_Log_File	
 Until_Log_Pos	0
-Master_SSL_Allowed	No
+Master_SSL_Allowed	Yes
 Master_SSL_CA_File	
 Master_SSL_CA_Path	
 Master_SSL_Cert	
@@ -263,6 +262,7 @@ Slave_SQL_Running_State
 Slave_DDL_Groups	0
 Slave_Non_Transactional_Groups	0
 Slave_Transactional_Groups	0
+Replicate_Rewrite_DB	
 reset slave 'slave1';
 show all slaves status;
 Connection_name	slave1
@@ -279,7 +279,6 @@ Relay_Log_Pos	<relay_log_pos>
 Relay_Master_Log_File	
 Slave_IO_Running	No
 Slave_SQL_Running	No
-Replicate_Rewrite_DB	
 Replicate_Do_DB	
 Replicate_Ignore_DB	
 Replicate_Do_Table	
@@ -294,7 +293,7 @@ Relay_Log_Space	<relay_log_space1>
 Until_Condition	None
 Until_Log_File	
 Until_Log_Pos	0
-Master_SSL_Allowed	No
+Master_SSL_Allowed	Yes
 Master_SSL_CA_File	
 Master_SSL_CA_Path	
 Master_SSL_Cert	
@@ -321,6 +320,7 @@ Slave_SQL_Running_State
 Slave_DDL_Groups	0
 Slave_Non_Transactional_Groups	0
 Slave_Transactional_Groups	0
+Replicate_Rewrite_DB	
 Retried_transactions	0
 Max_relay_log_size	1073741824
 Executed_log_entries	7
@@ -341,7 +341,6 @@ Relay_Log_Pos	<relay_log_pos>
 Relay_Master_Log_File	master-bin.000001
 Slave_IO_Running	Yes
 Slave_SQL_Running	Yes
-Replicate_Rewrite_DB	
 Replicate_Do_DB	
 Replicate_Ignore_DB	
 Replicate_Do_Table	
@@ -356,7 +355,7 @@ Relay_Log_Space	<relay_log_space1>
 Until_Condition	None
 Until_Log_File	
 Until_Log_Pos	0
-Master_SSL_Allowed	No
+Master_SSL_Allowed	Yes
 Master_SSL_CA_File	
 Master_SSL_CA_Path	
 Master_SSL_Cert	
@@ -383,6 +382,7 @@ Slave_SQL_Running_State	Slave has read all relay log; waiting for more updates
 Slave_DDL_Groups	0
 Slave_Non_Transactional_Groups	0
 Slave_Transactional_Groups	0
+Replicate_Rewrite_DB	
 Retried_transactions	0
 Max_relay_log_size	1073741824
 Executed_log_entries	7
@@ -405,7 +405,6 @@ Relay_Log_Pos	<relay_log_pos>
 Relay_Master_Log_File	master-bin.000001
 Slave_IO_Running	Yes
 Slave_SQL_Running	Yes
-Replicate_Rewrite_DB	
 Replicate_Do_DB	
 Replicate_Ignore_DB	
 Replicate_Do_Table	
@@ -420,7 +419,7 @@ Relay_Log_Space	<relay_log_space1>
 Until_Condition	None
 Until_Log_File	
 Until_Log_Pos	0
-Master_SSL_Allowed	No
+Master_SSL_Allowed	Yes
 Master_SSL_CA_File	
 Master_SSL_CA_Path	
 Master_SSL_Cert	
@@ -447,6 +446,7 @@ Slave_SQL_Running_State	Slave has read all relay log; waiting for more updates
 Slave_DDL_Groups	0
 Slave_Non_Transactional_Groups	0
 Slave_Transactional_Groups	0
+Replicate_Rewrite_DB	
 Retried_transactions	0
 Max_relay_log_size	1073741824
 Executed_log_entries	7
@@ -471,7 +471,6 @@ Relay_Log_Pos	<relay_log_pos>
 Relay_Master_Log_File	master-bin.000001
 Slave_IO_Running	No
 Slave_SQL_Running	No
-Replicate_Rewrite_DB	
 Replicate_Do_DB	
 Replicate_Ignore_DB	
 Replicate_Do_Table	
@@ -486,7 +485,7 @@ Relay_Log_Space	<relay_log_space1>
 Until_Condition	None
 Until_Log_File	
 Until_Log_Pos	0
-Master_SSL_Allowed	No
+Master_SSL_Allowed	Yes
 Master_SSL_CA_File	
 Master_SSL_CA_Path	
 Master_SSL_Cert	
@@ -513,6 +512,7 @@ Slave_SQL_Running_State
 Slave_DDL_Groups	0
 Slave_Non_Transactional_Groups	0
 Slave_Transactional_Groups	0
+Replicate_Rewrite_DB	
 Retried_transactions	0
 Max_relay_log_size	1073741824
 Executed_log_entries	7

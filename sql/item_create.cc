@@ -127,10 +127,24 @@ protected:
 };
 
 
-class Create_func_aes_encrypt : public Create_func_arg2
+class Create_func_addmonths : public Create_func_arg2
 {
 public:
   virtual Item *create_2_arg(THD *thd, Item *arg1, Item *arg2);
+
+  static Create_func_addmonths s_singleton;
+
+protected:
+  Create_func_addmonths() = default;
+  virtual ~Create_func_addmonths() = default;
+};
+
+
+class Create_func_aes_encrypt : public Create_native_func
+{
+public:
+  virtual Item *create_native(THD *thd, const LEX_CSTRING *name,
+                              List<Item> *item_list);
 
   static Create_func_aes_encrypt s_singleton;
 
@@ -140,16 +154,31 @@ protected:
 };
 
 
-class Create_func_aes_decrypt : public Create_func_arg2
+class Create_func_aes_decrypt : public Create_native_func
 {
 public:
-  virtual Item *create_2_arg(THD *thd, Item *arg1, Item *arg2);
+  virtual Item *create_native(THD *thd, const LEX_CSTRING *name,
+                              List<Item> *item_list);
 
   static Create_func_aes_decrypt s_singleton;
 
 protected:
   Create_func_aes_decrypt() = default;
   virtual ~Create_func_aes_decrypt() = default;
+};
+
+
+class Create_func_kdf : public Create_native_func
+{
+public:
+  virtual Item *create_native(THD *thd, const LEX_CSTRING *name,
+                              List<Item> *item_list);
+
+  static Create_func_kdf s_singleton;
+
+protected:
+  Create_func_kdf() = default;
+  virtual ~Create_func_kdf() = default;
 };
 
 
@@ -258,6 +287,19 @@ protected:
 };
 
 
+class Create_func_collation : public Create_func_arg1
+{
+public:
+  virtual Item *create_1_arg(THD *thd, Item *arg1);
+
+  static Create_func_collation s_singleton;
+
+protected:
+  Create_func_collation() = default;
+  virtual ~Create_func_collation() = default;
+};
+
+
 class Create_func_chr : public Create_func_arg1
 {
 public:
@@ -345,6 +387,20 @@ protected:
 };
 
 
+class Create_func_coalesce : public Create_native_func
+{
+public:
+  virtual Item *create_native(THD *thd, const LEX_CSTRING *name,
+                              List<Item> *item_list);
+
+  static Create_func_coalesce s_singleton;
+
+protected:
+  Create_func_coalesce() = default;
+  virtual ~Create_func_coalesce() = default;
+};
+
+
 class Create_func_compress : public Create_func_arg1
 {
 public:
@@ -427,9 +483,6 @@ public:
   virtual Item *create_native(THD *thd, const LEX_CSTRING *name,
                               List<Item> *item_list)
   {
-    if (thd->variables.sql_mode & MODE_ORACLE)
-      return Create_func_decode_oracle::s_singleton.create_native(thd, name,
-                                                                  item_list);
     if (unlikely(!item_list || item_list->elements != 2))
     {
       my_error(ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, MYF(0), name->str);
@@ -472,6 +525,19 @@ public:
 protected:
   Create_func_connection_id() = default;
   virtual ~Create_func_connection_id() = default;
+};
+
+
+class Create_func_database : public Create_func_arg0
+{
+public:
+  virtual Item *create_builder(THD *thd);
+
+  static Create_func_database s_singleton;
+
+protected:
+  Create_func_database() = default;
+  virtual ~Create_func_database() = default;
 };
 
 
@@ -579,6 +645,22 @@ protected:
   Create_func_datediff() = default;
   virtual ~Create_func_datediff() = default;
 };
+
+
+class Create_func_date_format : public Create_native_func
+{
+public:
+  virtual Item *create_native(THD *thd, const LEX_CSTRING *name,
+                              List<Item> *item_list);
+
+  static Create_func_date_format s_singleton;
+
+protected:
+  Create_func_date_format() = default;
+  virtual ~Create_func_date_format() = default;
+};
+
+
 
 
 class Create_func_dayname : public Create_func_arg1
@@ -782,6 +864,19 @@ protected:
 };
 
 
+class Create_func_format_pico_time : public Create_func_arg1
+{
+public:
+    virtual Item *create_1_arg(THD *thd, Item *arg1);
+
+    static Create_func_format_pico_time s_singleton;
+
+protected:
+    Create_func_format_pico_time() = default;
+    virtual ~Create_func_format_pico_time() = default;
+};
+
+
 class Create_func_format : public Create_native_func
 {
 public:
@@ -966,6 +1061,17 @@ protected:
   virtual ~Create_func_json_normalize() = default;
 };
 
+class Create_func_json_object_to_array : public Create_func_arg1
+{
+public:
+  virtual Item *create_1_arg(THD *thd, Item *arg1);
+
+  static Create_func_json_object_to_array s_singleton;
+
+protected:
+  Create_func_json_object_to_array() {}
+  virtual ~Create_func_json_object_to_array() {}
+};
 
 class Create_func_json_equals : public Create_func_arg2
 {
@@ -1360,6 +1466,56 @@ protected:
   virtual ~Create_func_json_overlaps() {}
 };
 
+class Create_func_json_schema_valid: public Create_func_arg2
+{
+public:
+  virtual Item *create_2_arg(THD *thd, Item *arg1, Item *arg2);
+
+  static Create_func_json_schema_valid s_singleton;
+
+protected:
+  Create_func_json_schema_valid() {}
+  virtual ~Create_func_json_schema_valid() {}
+};
+
+class Create_func_json_key_value : public Create_func_arg2
+{
+public:
+  virtual Item *create_2_arg(THD *thd, Item *arg1, Item *arg2);
+
+  static Create_func_json_key_value s_singleton;
+
+protected:
+  Create_func_json_key_value() = default;
+  virtual ~Create_func_json_key_value() = default;
+};
+
+
+class Create_func_json_array_intersect : public Create_func_arg2
+{
+public:
+  virtual Item *create_2_arg(THD *thd, Item *arg1, Item *arg2);
+
+  static Create_func_json_array_intersect s_singleton;
+
+protected:
+  Create_func_json_array_intersect() {}
+  virtual ~Create_func_json_array_intersect() {}
+};
+
+
+class Create_func_json_object_filter_keys : public Create_func_arg2
+{
+public:
+  virtual Item *create_2_arg(THD *thd, Item *arg1, Item *arg2);
+
+  static Create_func_json_object_filter_keys s_singleton;
+
+protected:
+  Create_func_json_object_filter_keys() {}
+  virtual ~Create_func_json_object_filter_keys() {}
+};
+
 
 class Create_func_last_day : public Create_func_arg1
 {
@@ -1437,6 +1593,31 @@ public:
 protected:
   Create_func_octet_length() = default;
   virtual ~Create_func_octet_length() = default;
+};
+
+class Create_func_old_password : public Create_func_arg1
+{
+public:
+  virtual Item *create_1_arg(THD *thd, Item *arg1);
+
+  static Create_func_old_password s_singleton;
+
+protected:
+  Create_func_old_password() = default;
+  virtual ~Create_func_old_password() = default;
+};
+
+
+class Create_func_password : public Create_func_arg1
+{
+public:
+  virtual Item *create_1_arg(THD *thd, Item *arg1);
+
+  static Create_func_password s_singleton;
+
+protected:
+  Create_func_password() = default;
+  virtual ~Create_func_password() = default;
 };
 
 
@@ -1554,9 +1735,7 @@ public:
   virtual Item *create_native(THD *thd, const LEX_CSTRING *name,
                               List<Item> *item_list)
   {
-    return thd->variables.sql_mode & MODE_ORACLE ?
-           create_native_oracle(thd, name, item_list) :
-           create_native_std(thd, name, item_list);
+    return create_native_std(thd, name, item_list);
   }
   static Create_func_lpad s_singleton;
 
@@ -1689,6 +1868,32 @@ protected:
 };
 
 
+class Create_func_microsecond : public Create_func_arg1
+{
+public:
+  virtual Item *create_1_arg(THD *thd, Item *arg1);
+
+  static Create_func_microsecond s_singleton;
+
+protected:
+  Create_func_microsecond() = default;
+  virtual ~Create_func_microsecond() = default;
+};
+
+
+class Create_func_mod : public Create_func_arg2
+{
+public:
+  virtual Item *create_2_arg(THD *thd, Item *arg1, Item *arg2);
+
+  static Create_func_mod s_singleton;
+
+protected:
+  Create_func_mod() = default;
+  virtual ~Create_func_mod() = default;
+};
+
+
 class Create_func_monthname : public Create_func_arg1
 {
 public:
@@ -1815,6 +2020,19 @@ protected:
 };
 
 
+class Create_func_quarter : public Create_func_arg1
+{
+public:
+  virtual Item *create_1_arg(THD *thd, Item *arg1);
+
+  static Create_func_quarter s_singleton;
+
+protected:
+  Create_func_quarter() = default;
+  virtual ~Create_func_quarter() = default;
+};
+
+
 class Create_func_quote : public Create_func_arg1
 {
 public:
@@ -1844,7 +2062,10 @@ protected:
 class Create_func_regexp_replace : public Create_func_arg3
 {
 public:
-  virtual Item *create_3_arg(THD *thd, Item *arg1, Item *arg2, Item *arg3);
+  Item *create_3_arg(THD *thd, Item *arg1, Item *arg2, Item *arg3) override
+  {
+    return new (thd->mem_root) Item_func_regexp_replace(thd, arg1, arg2, arg3);
+  }
 
   static Create_func_regexp_replace s_singleton;
 
@@ -1852,6 +2073,28 @@ protected:
   Create_func_regexp_replace() = default;
   virtual ~Create_func_regexp_replace() = default;
 };
+
+Create_func_regexp_replace Create_func_regexp_replace::s_singleton;
+
+
+class Create_func_regexp_replace_oracle : public Create_func_arg3
+{
+public:
+  Item *create_3_arg(THD *thd, Item *arg1, Item *arg2, Item *arg3) override
+  {
+    return new (thd->mem_root) Item_func_regexp_replace_oracle(thd, arg1,
+                                                               arg2, arg3);
+  }
+
+  static Create_func_regexp_replace_oracle s_singleton;
+
+protected:
+  Create_func_regexp_replace_oracle() = default;
+  virtual ~Create_func_regexp_replace_oracle() = default;
+};
+
+Create_func_regexp_replace_oracle
+  Create_func_regexp_replace_oracle::s_singleton;
 
 
 class Create_func_regexp_substr : public Create_func_arg2
@@ -1969,15 +2212,26 @@ protected:
 };
 
 
+class Create_func_row_count : public Create_func_arg0
+{
+public:
+  virtual Item *create_builder(THD *thd);
+
+  static Create_func_row_count s_singleton;
+
+protected:
+  Create_func_row_count() = default;
+  virtual ~Create_func_row_count() = default;
+};
+
+
 class Create_func_rpad : public Create_native_func
 {
 public:
   virtual Item *create_native(THD *thd, const LEX_CSTRING *name,
                               List<Item> *item_list)
   {
-    return thd->variables.sql_mode & MODE_ORACLE ?
-           create_native_oracle(thd, name, item_list) :
-           create_native_std(thd, name, item_list);
+    return create_native_std(thd, name, item_list);
   }
   static Create_func_rpad s_singleton;
 
@@ -2415,6 +2669,20 @@ public:
 protected:
   Create_func_version() = default;
   virtual ~Create_func_version() = default;
+};
+
+
+class Create_func_week : public Create_native_func
+{
+public:
+  virtual Item *create_native(THD *thd, const LEX_CSTRING *name,
+                              List<Item> *item_list);
+
+  static Create_func_week s_singleton;
+
+protected:
+  Create_func_week() = default;
+  virtual ~Create_func_week() = default;
 };
 
 
@@ -2897,21 +3165,99 @@ Create_func_addtime::create_2_arg(THD *thd, Item *arg1, Item *arg2)
 }
 
 
+Create_func_addmonths Create_func_addmonths::s_singleton;
+
+Item*
+Create_func_addmonths::create_2_arg(THD *thd, Item *arg1, Item *arg2)
+{
+  return new (thd->mem_root)
+    Item_date_add_interval(thd, arg1, arg2, INTERVAL_MONTH, false);
+}
+
+
 Create_func_aes_encrypt Create_func_aes_encrypt::s_singleton;
 
 Item*
-Create_func_aes_encrypt::create_2_arg(THD *thd, Item *arg1, Item *arg2)
+Create_func_aes_encrypt::create_native(THD *thd, const LEX_CSTRING *name,
+                                       List<Item> *item_list)
 {
-  return new (thd->mem_root) Item_func_aes_encrypt(thd, arg1, arg2);
+  Item *a[4];
+  uint arg_count= 0;
+
+  if (item_list != NULL)
+    arg_count= item_list->elements;
+
+  for (uint i=0; i < MY_MIN(array_elements(a), arg_count); i++)
+    a[i]= item_list->pop();
+  switch (arg_count)
+  {
+  case 2:
+    return new (thd->mem_root) Item_func_aes_encrypt(thd, a[0], a[1]);
+  case 3:
+    return new (thd->mem_root) Item_func_aes_encrypt(thd, a[0], a[1], a[2]);
+  case 4:
+    return new (thd->mem_root) Item_func_aes_encrypt(thd, a[0], a[1], a[2], a[3]);
+  }
+  my_error(ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, MYF(0), name->str);
+  return NULL;
 }
 
 
 Create_func_aes_decrypt Create_func_aes_decrypt::s_singleton;
 
 Item*
-Create_func_aes_decrypt::create_2_arg(THD *thd, Item *arg1, Item *arg2)
+Create_func_aes_decrypt::create_native(THD *thd, const LEX_CSTRING *name,
+                                       List<Item> *item_list)
 {
-  return new (thd->mem_root) Item_func_aes_decrypt(thd, arg1, arg2);
+  Item *a[4];
+  uint arg_count= 0;
+
+  if (item_list != NULL)
+    arg_count= item_list->elements;
+
+  for (uint i=0; i < MY_MIN(array_elements(a), arg_count); i++)
+    a[i]= item_list->pop();
+  switch (arg_count)
+  {
+  case 2:
+    return new (thd->mem_root) Item_func_aes_decrypt(thd, a[0], a[1]);
+  case 3:
+    return new (thd->mem_root) Item_func_aes_decrypt(thd, a[0], a[1], a[2]);
+  case 4:
+    return new (thd->mem_root) Item_func_aes_decrypt(thd, a[0], a[1], a[2], a[3]);
+  }
+  my_error(ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, MYF(0), name->str);
+  return NULL;
+}
+
+
+Create_func_kdf Create_func_kdf::s_singleton;
+
+Item*
+Create_func_kdf::create_native(THD *thd, const LEX_CSTRING *name,
+                               List<Item> *item_list)
+{
+  Item *a[5];
+  uint arg_count= 0;
+
+  if (item_list != NULL)
+    arg_count= item_list->elements;
+
+  for (uint i=0; i < MY_MIN(array_elements(a), arg_count); i++)
+    a[i]= item_list->pop();
+  switch (arg_count)
+  {
+  case 2:
+    return new (thd->mem_root) Item_func_kdf(thd, a[0], a[1]);
+  case 3:
+    return new (thd->mem_root) Item_func_kdf(thd, a[0], a[1], a[2]);
+  case 4:
+    return new (thd->mem_root) Item_func_kdf(thd, a[0], a[1], a[2], a[3]);
+  case 5:
+    return new (thd->mem_root) Item_func_kdf(thd, a[0], a[1], a[2], a[3], a[4]);
+  }
+  my_error(ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, MYF(0), name->str);
+  return NULL;
 }
 
 
@@ -3026,6 +3372,15 @@ Create_func_ceiling::create_1_arg(THD *thd, Item *arg1)
 }
 
 
+Create_func_collation Create_func_collation::s_singleton;
+
+Item*
+Create_func_collation::create_1_arg(THD *thd, Item *arg1)
+{
+  return new (thd->mem_root) Item_func_collation(thd, arg1);
+}
+
+
 Create_func_chr Create_func_chr::s_singleton;
 
 Item*
@@ -3086,6 +3441,26 @@ Create_func_dyncol_json::create_1_arg(THD *thd, Item *arg1)
   return new (thd->mem_root) Item_func_dyncol_json(thd, arg1);
 }
 
+Create_func_coalesce Create_func_coalesce::s_singleton;
+
+Item*
+Create_func_coalesce::create_native(THD *thd, const LEX_CSTRING *name,
+                                  List<Item> *item_list)
+{
+  int arg_count= 0;
+
+  if (item_list != NULL)
+    arg_count= item_list->elements;
+
+  if (unlikely(arg_count < 1))
+  {
+    my_error(ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, MYF(0), name->str);
+    return NULL;
+  }
+
+  return new (thd->mem_root) Item_func_coalesce(thd, *item_list);
+}
+
 Create_func_concat Create_func_concat::s_singleton;
 
 Item*
@@ -3103,9 +3478,7 @@ Create_func_concat::create_native(THD *thd, const LEX_CSTRING *name,
     return NULL;
   }
 
-  return thd->variables.sql_mode & MODE_ORACLE ?
-    new (thd->mem_root) Item_func_concat_operator_oracle(thd, *item_list) :
-    new (thd->mem_root) Item_func_concat(thd, *item_list);
+  return new (thd->mem_root) Item_func_concat(thd, *item_list);
 }
 
 Create_func_concat_operator_oracle
@@ -3179,6 +3552,16 @@ Create_func_connection_id::create_builder(THD *thd)
 {
   thd->lex->safe_to_cache_query= 0;
   return new (thd->mem_root) Item_func_connection_id(thd);
+}
+
+
+Create_func_database Create_func_database::s_singleton;
+
+Item*
+Create_func_database::create_builder(THD *thd)
+{
+  thd->lex->safe_to_cache_query= 0;
+  return new (thd->mem_root) Item_func_database(thd);
 }
 
 
@@ -3288,6 +3671,37 @@ Create_func_datediff::create_2_arg(THD *thd, Item *arg1, Item *arg2)
   Item *i2= new (thd->mem_root) Item_func_to_days(thd, arg2);
 
   return new (thd->mem_root) Item_func_minus(thd, i1, i2);
+}
+
+Create_func_date_format Create_func_date_format::s_singleton;
+
+Item*
+Create_func_date_format::create_native(THD *thd, const LEX_CSTRING *name,
+                                      List<Item> *item_list)
+{
+  int arg_count= 0;
+
+  if (item_list != NULL)
+    arg_count= item_list->elements;
+
+  switch (arg_count) {
+  case 2:
+  {
+    Item *param_1= item_list->pop();
+    Item *param_2= item_list->pop();
+    return new (thd->mem_root) Item_func_date_format(thd, param_1, param_2);
+  }
+  case 3:
+  {
+    Item *param_1= item_list->pop();
+    Item *param_2= item_list->pop();
+    Item *param_3= item_list->pop();
+    return new (thd->mem_root) Item_func_date_format(thd,
+                                 param_1, param_2, param_3);
+  }
+  }
+  my_error(ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, MYF(0), name->str);
+  return NULL;
 }
 
 
@@ -3580,6 +3994,15 @@ Create_func_floor::create_1_arg(THD *thd, Item *arg1)
 }
 
 
+Create_func_format_pico_time Create_func_format_pico_time::s_singleton;
+
+Item*
+Create_func_format_pico_time::create_1_arg(THD *thd, Item *arg1)
+{
+  return new (thd->mem_root) Item_func_format_pico_time(thd, arg1);
+}
+
+
 Create_func_format Create_func_format::s_singleton;
 
 Item*
@@ -3780,6 +4203,15 @@ Create_func_json_normalize::create_1_arg(THD *thd, Item *arg1)
 {
   status_var_increment(thd->status_var.feature_json);
   return new (thd->mem_root) Item_func_json_normalize(thd, arg1);
+}
+
+Create_func_json_object_to_array Create_func_json_object_to_array::s_singleton;
+
+Item*
+Create_func_json_object_to_array::create_1_arg(THD *thd, Item *arg1)
+{
+  status_var_increment(thd->status_var.feature_json);
+  return new (thd->mem_root) Item_func_json_object_to_array(thd, arg1);
 }
 
 
@@ -4168,6 +4600,27 @@ Create_func_json_length::create_native(THD *thd, const LEX_CSTRING *name,
   return func;
 }
 
+Create_func_json_array_intersect Create_func_json_array_intersect::s_singleton;
+Item*
+Create_func_json_array_intersect::create_2_arg(THD *thd, Item *arg1, Item *arg2)
+{
+  if (unlikely( ( !arg1 || !arg2 ) )) // json, json
+  {
+    my_error(ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, MYF(0));
+  }
+  status_var_increment(thd->status_var.feature_json);
+  return new (thd->mem_root) Item_func_json_array_intersect(thd, arg1, arg2);
+}
+
+Create_func_json_object_filter_keys Create_func_json_object_filter_keys::s_singleton;
+
+Item*
+Create_func_json_object_filter_keys::create_2_arg(THD *thd, Item *arg1, Item *arg2)
+{
+  status_var_increment(thd->status_var.feature_json);
+  return new (thd->mem_root) Item_func_json_object_filter_keys(thd, arg1, arg2);
+}
+
 
 Create_func_json_merge Create_func_json_merge::s_singleton;
 
@@ -4394,6 +4847,24 @@ Create_func_last_insert_id::create_native(THD *thd, const LEX_CSTRING *name,
   return func;
 }
 
+Create_func_json_schema_valid Create_func_json_schema_valid::s_singleton;
+
+Item*
+Create_func_json_schema_valid::create_2_arg(THD *thd, Item *arg1, Item *arg2)
+{
+  status_var_increment(thd->status_var.feature_json);
+  return new (thd->mem_root) Item_func_json_schema_valid(thd, arg1, arg2);
+}
+
+Create_func_json_key_value Create_func_json_key_value::s_singleton;
+
+Item*
+Create_func_json_key_value::create_2_arg(THD *thd, Item *arg1, Item *arg2)
+{
+  status_var_increment(thd->status_var.feature_json);
+  return new (thd->mem_root) Item_func_json_key_value(thd, arg1, arg2);
+}
+
 
 Create_func_lcase Create_func_lcase::s_singleton;
 
@@ -4430,10 +4901,24 @@ Create_func_length Create_func_length::s_singleton;
 Item*
 Create_func_length::create_1_arg(THD *thd, Item *arg1)
 {
-  if (thd->variables.sql_mode & MODE_ORACLE)
-    return new (thd->mem_root) Item_func_char_length(thd, arg1);
-  else
-    return new (thd->mem_root) Item_func_octet_length(thd, arg1);
+  return new (thd->mem_root) Item_func_octet_length(thd, arg1);
+}
+
+Create_func_old_password Create_func_old_password::s_singleton;
+
+Item*
+Create_func_old_password::create_1_arg(THD *thd, Item *arg1)
+{
+  return new (thd->mem_root) Item_func_password(thd, arg1,
+                                                Item_func_password::OLD);
+}
+
+Create_func_password Create_func_password::s_singleton;
+
+Item*
+Create_func_password::create_1_arg(THD *thd, Item *arg1)
+{
+  return new (thd->mem_root) Item_func_password(thd, arg1);
 }
 
 Create_func_octet_length Create_func_octet_length::s_singleton;
@@ -4651,7 +5136,7 @@ Create_func_ltrim Create_func_ltrim::s_singleton;
 Item*
 Create_func_ltrim::create_1_arg(THD *thd, Item *arg1)
 {
-  return Lex_trim(TRIM_LEADING, arg1).make_item_func_trim(thd);
+  return Lex_trim(TRIM_LEADING, arg1).make_item_func_trim_std(thd);
 }
 
 
@@ -4810,6 +5295,24 @@ Item *Create_func_natural_sort_key::create_1_arg(THD *thd, Item* arg1)
   return new (thd->mem_root) Item_func_natural_sort_key(thd, arg1);
 }
 
+Create_func_microsecond Create_func_microsecond::s_singleton;
+
+Item*
+Create_func_microsecond::create_1_arg(THD *thd, Item *arg1)
+{
+  return new (thd->mem_root) Item_func_microsecond(thd, arg1);
+}
+
+
+Create_func_mod Create_func_mod::s_singleton;
+
+Item*
+Create_func_mod::create_2_arg(THD *thd, Item *arg1, Item *arg2)
+{
+  return new (thd->mem_root) Item_func_mod(thd, arg1, arg2);
+}
+
+
 Create_func_monthname Create_func_monthname::s_singleton;
 
 Item*
@@ -4912,6 +5415,15 @@ Create_func_pow::create_2_arg(THD *thd, Item *arg1, Item *arg2)
 }
 
 
+Create_func_quarter Create_func_quarter::s_singleton;
+
+Item*
+Create_func_quarter::create_1_arg(THD *thd, Item *arg1)
+{
+  return new (thd->mem_root) Item_func_quarter(thd, arg1);
+}
+
+
 Create_func_quote Create_func_quote::s_singleton;
 
 Item*
@@ -4927,15 +5439,6 @@ Item*
 Create_func_regexp_instr::create_2_arg(THD *thd, Item *arg1, Item *arg2)
 {
   return new (thd->mem_root) Item_func_regexp_instr(thd, arg1, arg2);
-}
-
-
-Create_func_regexp_replace Create_func_regexp_replace::s_singleton;
-
-Item*
-Create_func_regexp_replace::create_3_arg(THD *thd, Item *arg1, Item *arg2, Item *arg3)
-{
-  return new (thd->mem_root) Item_func_regexp_replace(thd, arg1, arg2, arg3);
 }
 
 
@@ -5097,6 +5600,17 @@ Create_func_round::create_native(THD *thd, const LEX_CSTRING *name,
 }
 
 
+Create_func_row_count Create_func_row_count::s_singleton;
+
+Item*
+Create_func_row_count::create_builder(THD *thd)
+{
+  thd->lex->set_stmt_unsafe(LEX::BINLOG_STMT_UNSAFE_SYSTEM_FUNCTION);
+  thd->lex->safe_to_cache_query= 0;
+  return new (thd->mem_root) Item_func_row_count(thd);
+}
+
+
 Create_func_rpad Create_func_rpad::s_singleton;
 
 Create_func_rpad_oracle Create_func_rpad_oracle::s_singleton;
@@ -5166,7 +5680,7 @@ Create_func_rtrim Create_func_rtrim::s_singleton;
 Item*
 Create_func_rtrim::create_1_arg(THD *thd, Item *arg1)
 {
-  return Lex_trim(TRIM_TRAILING, arg1).make_item_func_trim(thd);
+  return Lex_trim(TRIM_TRAILING, arg1).make_item_func_trim_std(thd);
 }
 
 
@@ -5551,6 +6065,43 @@ Create_func_version::create_builder(THD *thd)
 }
 
 
+Create_func_week Create_func_week::s_singleton;
+
+Item*
+Create_func_week::create_native(THD *thd, const LEX_CSTRING *name,
+                                List<Item> *item_list)
+{
+  Item* func= NULL;
+  int arg_count= 0;
+
+  if (item_list != NULL)
+    arg_count= item_list->elements;
+
+  switch (arg_count) {
+  case 1:
+  {
+    Item *param_1= item_list->pop();
+    func= new (thd->mem_root) Item_func_week(thd, param_1);
+    break;
+  }
+  case 2:
+  {
+    Item *param_1= item_list->pop();
+    Item *param_2= item_list->pop();
+    func= new (thd->mem_root) Item_func_week(thd, param_1, param_2);
+    break;
+  }
+  default:
+  {
+    my_error(ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, MYF(0), name->str);
+    break;
+  }
+  }
+
+  return func;
+}
+
+
 Create_func_weekday Create_func_weekday::s_singleton;
 
 Item*
@@ -5701,6 +6252,7 @@ const Native_func_registry func_array[] =
   { { STRING_WITH_LEN("ABS") }, BUILDER(Create_func_abs)},
   { { STRING_WITH_LEN("ACOS") }, BUILDER(Create_func_acos)},
   { { STRING_WITH_LEN("ADDTIME") }, BUILDER(Create_func_addtime)},
+  { { STRING_WITH_LEN("ADD_MONTHS") }, BUILDER(Create_func_addmonths)},
   { { STRING_WITH_LEN("AES_DECRYPT") }, BUILDER(Create_func_aes_decrypt)},
   { { STRING_WITH_LEN("AES_ENCRYPT") }, BUILDER(Create_func_aes_encrypt)},
   { { STRING_WITH_LEN("ASIN") }, BUILDER(Create_func_asin)},
@@ -5716,7 +6268,9 @@ const Native_func_registry func_array[] =
   { { STRING_WITH_LEN("CHARACTER_LENGTH") }, BUILDER(Create_func_char_length)},
   { { STRING_WITH_LEN("CHAR_LENGTH") }, BUILDER(Create_func_char_length)},
   { { STRING_WITH_LEN("CHR") }, BUILDER(Create_func_chr)},
+  { { STRING_WITH_LEN("COALESCE") }, BUILDER(Create_func_coalesce)},
   { { STRING_WITH_LEN("COERCIBILITY") }, BUILDER(Create_func_coercibility)},
+  { { STRING_WITH_LEN("COLLATION") }, BUILDER(Create_func_collation)},
   { { STRING_WITH_LEN("COLUMN_CHECK") }, BUILDER(Create_func_dyncol_check)},
   { { STRING_WITH_LEN("COLUMN_EXISTS") }, BUILDER(Create_func_dyncol_exists)},
   { { STRING_WITH_LEN("COLUMN_LIST") }, BUILDER(Create_func_dyncol_list)},
@@ -5732,7 +6286,9 @@ const Native_func_registry func_array[] =
   { { STRING_WITH_LEN("COT") }, BUILDER(Create_func_cot)},
   { { STRING_WITH_LEN("CRC32") }, BUILDER(Create_func_crc32)},
   { { STRING_WITH_LEN("CRC32C") }, BUILDER(Create_func_crc32c)},
+  { { STRING_WITH_LEN("DATABASE") }, BUILDER(Create_func_database)},
   { { STRING_WITH_LEN("DATEDIFF") }, BUILDER(Create_func_datediff)},
+  { { STRING_WITH_LEN("DATE_FORMAT") }, BUILDER(Create_func_date_format)},
   { { STRING_WITH_LEN("DAYNAME") }, BUILDER(Create_func_dayname)},
   { { STRING_WITH_LEN("DAYOFMONTH") }, BUILDER(Create_func_dayofmonth)},
   { { STRING_WITH_LEN("DAYOFWEEK") }, BUILDER(Create_func_dayofweek)},
@@ -5752,6 +6308,7 @@ const Native_func_registry func_array[] =
   { { STRING_WITH_LEN("FIELD") }, BUILDER(Create_func_field)},
   { { STRING_WITH_LEN("FIND_IN_SET") }, BUILDER(Create_func_find_in_set)},
   { { STRING_WITH_LEN("FLOOR") }, BUILDER(Create_func_floor)},
+  { { STRING_WITH_LEN("FORMAT_PICO_TIME") }, BUILDER(Create_func_format_pico_time)},
   { { STRING_WITH_LEN("FORMAT") }, BUILDER(Create_func_format)},
   { { STRING_WITH_LEN("FOUND_ROWS") }, BUILDER(Create_func_found_rows)},
   { { STRING_WITH_LEN("FROM_BASE64") }, BUILDER(Create_func_from_base64)},
@@ -5768,6 +6325,7 @@ const Native_func_registry func_array[] =
   { { STRING_WITH_LEN("JSON_ARRAY") }, BUILDER(Create_func_json_array)},
   { { STRING_WITH_LEN("JSON_ARRAY_APPEND") }, BUILDER(Create_func_json_array_append)},
   { { STRING_WITH_LEN("JSON_ARRAY_INSERT") }, BUILDER(Create_func_json_array_insert)},
+  { { STRING_WITH_LEN("JSON_ARRAY_INTERSECT") }, BUILDER(Create_func_json_array_intersect)},
   { { STRING_WITH_LEN("JSON_COMPACT") }, BUILDER(Create_func_json_compact)},
   { { STRING_WITH_LEN("JSON_CONTAINS") }, BUILDER(Create_func_json_contains)},
   { { STRING_WITH_LEN("JSON_CONTAINS_PATH") }, BUILDER(Create_func_json_contains_path)},
@@ -5778,6 +6336,7 @@ const Native_func_registry func_array[] =
   { { STRING_WITH_LEN("JSON_EXISTS") }, BUILDER(Create_func_json_exists)},
   { { STRING_WITH_LEN("JSON_EXTRACT") }, BUILDER(Create_func_json_extract)},
   { { STRING_WITH_LEN("JSON_INSERT") }, BUILDER(Create_func_json_insert)},
+   { { STRING_WITH_LEN("JSON_KEY_VALUE") }, BUILDER(Create_func_json_key_value)},
   { { STRING_WITH_LEN("JSON_KEYS") }, BUILDER(Create_func_json_keys)},
   { { STRING_WITH_LEN("JSON_LENGTH") }, BUILDER(Create_func_json_length)},
   { { STRING_WITH_LEN("JSON_LOOSE") }, BUILDER(Create_func_json_loose)},
@@ -5788,15 +6347,19 @@ const Native_func_registry func_array[] =
   { { STRING_WITH_LEN("JSON_QUERY") }, BUILDER(Create_func_json_query)},
   { { STRING_WITH_LEN("JSON_QUOTE") }, BUILDER(Create_func_json_quote)},
   { { STRING_WITH_LEN("JSON_OBJECT") }, BUILDER(Create_func_json_object)},
+  { { STRING_WITH_LEN("JSON_OBJECT_FILTER_KEYS") }, BUILDER(Create_func_json_object_filter_keys)},
+  { { STRING_WITH_LEN("JSON_OBJECT_TO_ARRAY") }, BUILDER(Create_func_json_object_to_array)},
   { { STRING_WITH_LEN("JSON_OVERLAPS") }, BUILDER(Create_func_json_overlaps)},
   { { STRING_WITH_LEN("JSON_REMOVE") }, BUILDER(Create_func_json_remove)},
   { { STRING_WITH_LEN("JSON_REPLACE") }, BUILDER(Create_func_json_replace)},
+  { { STRING_WITH_LEN("JSON_SCHEMA_VALID") }, BUILDER(Create_func_json_schema_valid)},
   { { STRING_WITH_LEN("JSON_SET") }, BUILDER(Create_func_json_set)},
   { { STRING_WITH_LEN("JSON_SEARCH") }, BUILDER(Create_func_json_search)},
   { { STRING_WITH_LEN("JSON_TYPE") }, BUILDER(Create_func_json_type)},
   { { STRING_WITH_LEN("JSON_UNQUOTE") }, BUILDER(Create_func_json_unquote)},
   { { STRING_WITH_LEN("JSON_VALID") }, BUILDER(Create_func_json_valid)},
   { { STRING_WITH_LEN("JSON_VALUE") }, BUILDER(Create_func_json_value)},
+  { { STRING_WITH_LEN("KDF") }, BUILDER(Create_func_kdf)},
   { { STRING_WITH_LEN("LAST_DAY") }, BUILDER(Create_func_last_day)},
   { { STRING_WITH_LEN("LAST_INSERT_ID") }, BUILDER(Create_func_last_insert_id)},
   { { STRING_WITH_LEN("LCASE") }, BUILDER(Create_func_lcase)},
@@ -5824,6 +6387,8 @@ const Native_func_registry func_array[] =
   { { STRING_WITH_LEN("MASTER_GTID_WAIT") }, BUILDER(Create_func_master_gtid_wait)},
   { { STRING_WITH_LEN("MASTER_POS_WAIT") }, BUILDER(Create_func_master_pos_wait)},
   { { STRING_WITH_LEN("MD5") }, BUILDER(Create_func_md5)},
+  { { STRING_WITH_LEN("MICROSECOND") }, BUILDER(Create_func_microsecond)},
+  { { STRING_WITH_LEN("MOD") }, BUILDER(Create_func_mod)},
   { { STRING_WITH_LEN("MONTHNAME") }, BUILDER(Create_func_monthname)},
   { { STRING_WITH_LEN("NAME_CONST") }, BUILDER(Create_func_name_const)},
   {  {STRING_WITH_LEN("NATURAL_SORT_KEY")}, BUILDER(Create_func_natural_sort_key)},
@@ -5832,12 +6397,15 @@ const Native_func_registry func_array[] =
   { { STRING_WITH_LEN("NULLIF") }, BUILDER(Create_func_nullif)},
   { { STRING_WITH_LEN("OCT") }, BUILDER(Create_func_oct)},
   { { STRING_WITH_LEN("OCTET_LENGTH") }, BUILDER(Create_func_octet_length)},
+  { { STRING_WITH_LEN("OLD_PASSWORD") }, BUILDER(Create_func_old_password)},
   { { STRING_WITH_LEN("ORD") }, BUILDER(Create_func_ord)},
+  { { STRING_WITH_LEN("PASSWORD") }, BUILDER(Create_func_password)},
   { { STRING_WITH_LEN("PERIOD_ADD") }, BUILDER(Create_func_period_add)},
   { { STRING_WITH_LEN("PERIOD_DIFF") }, BUILDER(Create_func_period_diff)},
   { { STRING_WITH_LEN("PI") }, BUILDER(Create_func_pi)},
   { { STRING_WITH_LEN("POW") }, BUILDER(Create_func_pow)},
   { { STRING_WITH_LEN("POWER") }, BUILDER(Create_func_pow)},
+  { { STRING_WITH_LEN("QUARTER") }, BUILDER(Create_func_quarter)},
   { { STRING_WITH_LEN("QUOTE") }, BUILDER(Create_func_quote)},
   { { STRING_WITH_LEN("RANDOM_BYTES")}, BUILDER(Create_func_random_bytes)},
   { { STRING_WITH_LEN("REGEXP_INSTR") }, BUILDER(Create_func_regexp_instr)},
@@ -5852,12 +6420,15 @@ const Native_func_registry func_array[] =
       BUILDER(Create_func_replace_oracle)},
   { { STRING_WITH_LEN("REVERSE") }, BUILDER(Create_func_reverse)},
   { { STRING_WITH_LEN("ROUND") }, BUILDER(Create_func_round)},
+  { { STRING_WITH_LEN("ROW_COUNT") }, BUILDER(Create_func_row_count)},
   { { STRING_WITH_LEN("RPAD") }, BUILDER(Create_func_rpad)},
   { { STRING_WITH_LEN("RPAD_ORACLE") }, BUILDER(Create_func_rpad_oracle)},
   { { STRING_WITH_LEN("RTRIM") }, BUILDER(Create_func_rtrim)},
   { { STRING_WITH_LEN("RTRIM_ORACLE") }, BUILDER(Create_func_rtrim_oracle)},
   { { STRING_WITH_LEN("SEC_TO_TIME") }, BUILDER(Create_func_sec_to_time)},
   { { STRING_WITH_LEN("SFORMAT") }, BUILDER(Create_func_sformat)},
+  { { STRING_WITH_LEN("SCHEMA") }, BUILDER(Create_func_database)},
+  { { STRING_WITH_LEN("SCHEMAS") }, BUILDER(Create_func_database)},
   { { STRING_WITH_LEN("SHA") }, BUILDER(Create_func_sha)},
   { { STRING_WITH_LEN("SHA1") }, BUILDER(Create_func_sha)},
   { { STRING_WITH_LEN("SHA2") }, BUILDER(Create_func_sha2)},
@@ -5890,6 +6461,7 @@ const Native_func_registry func_array[] =
   { { STRING_WITH_LEN("UPPER") }, BUILDER(Create_func_ucase)},
   { { STRING_WITH_LEN("UUID_SHORT") }, BUILDER(Create_func_uuid_short)},
   { { STRING_WITH_LEN("VERSION") }, BUILDER(Create_func_version)},
+  { { STRING_WITH_LEN("WEEK") }, BUILDER(Create_func_week)},
   { { STRING_WITH_LEN("WEEKDAY") }, BUILDER(Create_func_weekday)},
   { { STRING_WITH_LEN("WEEKOFYEAR") }, BUILDER(Create_func_weekofyear)},
 #ifdef WITH_WSREP
@@ -5903,9 +6475,27 @@ const Native_func_registry func_array[] =
 Native_func_registry_array
   native_func_registry_array(func_array, array_elements(func_array));
 
-const size_t func_array_length= sizeof(func_array) / sizeof(Native_func_registry) - 1;
+const Native_func_registry func_array_oracle_overrides[] =
+{
+  { { STRING_WITH_LEN("CONCAT") },  BUILDER(Create_func_concat_operator_oracle)},
+  { { STRING_WITH_LEN("DECODE") },  BUILDER(Create_func_decode_oracle)},
+  { { STRING_WITH_LEN("LENGTH") },  BUILDER(Create_func_char_length)},
+  { { STRING_WITH_LEN("LPAD") },    BUILDER(Create_func_lpad_oracle)},
+  { { STRING_WITH_LEN("LTRIM") },   BUILDER(Create_func_ltrim_oracle)},
+  { { STRING_WITH_LEN("REGEXP_REPLACE") },
+                                    BUILDER(Create_func_regexp_replace_oracle)},
+  { { STRING_WITH_LEN("RPAD") },    BUILDER(Create_func_rpad_oracle)},
+  { { STRING_WITH_LEN("RTRIM") },   BUILDER(Create_func_rtrim_oracle)},
+  { {0, 0}, NULL}
+};
+
+Native_func_registry_array
+  oracle_func_registry_array(func_array_oracle_overrides,
+                             array_elements(func_array_oracle_overrides));
 
 Native_functions_hash native_functions_hash;
+Native_functions_hash native_functions_hash_oracle;
+
 
 /*
   Load the hash table for native functions.
@@ -6034,13 +6624,30 @@ int item_create_init()
                                    native_func_registry_array_geom.count()))
     return true;
 #endif
-  return false;
+
+  count+= oracle_func_registry_array.count();
+
+  if (native_functions_hash_oracle.init(count) ||
+      native_functions_hash_oracle.append(native_func_registry_array.elements(),
+                                          native_func_registry_array.count()))
+    return true;
+
+#ifdef HAVE_SPATIAL
+  if (native_functions_hash_oracle.append(native_func_registry_array_geom.elements(),
+                                          native_func_registry_array_geom.count()))
+    return true;
+#endif
+
+  return 
+    native_functions_hash_oracle.replace(oracle_func_registry_array.elements(),
+                                         oracle_func_registry_array.count());
 }
 
 
 void item_create_cleanup()
 {
   native_functions_hash.cleanup();
+  native_functions_hash_oracle.cleanup();
 }
 
 

@@ -239,25 +239,17 @@ int maria_extra(MARIA_HA *info, enum ha_extra_function function,
       break;
 
     /* we're going to modify pieces of the state, stall Checkpoint */
-    mysql_mutex_lock(&share->intern_lock);
     if (info->lock_type == F_UNLCK)
     {
-      mysql_mutex_unlock(&share->intern_lock);
       error= 1;					/* Not possibly if not lock */
       break;
     }
+    mysql_mutex_lock(&share->intern_lock);
     if (maria_is_any_key_active(share->state.key_map))
     {
-      MARIA_KEYDEF *key= share->keyinfo;
-      uint i;
-      for (i =0 ; i < share->base.keys ; i++,key++)
-      {
-        if (!(key->flag & HA_NOSAME) && info->s->base.auto_key != i+1)
-        {
-          maria_clear_key_active(share->state.key_map, i);
-          info->update|= HA_STATE_CHANGED;
-        }
-      }
+      if (share->state.key_map != *(ulonglong*)extra_arg)
+        info->update|= HA_STATE_CHANGED;
+      share->state.key_map= *(ulonglong*)extra_arg;
 
       if (!share->changed)
       {
@@ -510,8 +502,17 @@ void ma_set_index_cond_func(MARIA_HA *info, index_cond_func_t func,
 {
   info->index_cond_func= func;
   info->index_cond_func_arg= func_arg;
+  info->has_cond_pushdown= (info->index_cond_func || info->rowid_filter_func);
 }
 
+void ma_set_rowid_filter_func(MARIA_HA *info,
+                              rowid_filter_func_t check_func,
+                              void *func_arg)
+{
+  info->rowid_filter_func= check_func;
+  info->rowid_filter_func_arg= func_arg;
+  info->has_cond_pushdown= (info->index_cond_func || info->rowid_filter_func);
+}
 
 /*
   Start/Stop Inserting Duplicates Into a Table, WL#1648.
@@ -542,7 +543,7 @@ int maria_reset(MARIA_HA *info)
 {
   int error= 0;
   MARIA_SHARE *share= info->s;
-  myf flag= MY_WME | (share->temporary ? MY_THREAD_SPECIFIC : 0);
+  myf flag= MY_WME | share->malloc_flag;
   DBUG_ENTER("maria_reset");
   /*
     Free buffers and reset the following flags:
@@ -599,6 +600,20 @@ uint _ma_file_callback_to_id(void *callback_data)
 {
   MARIA_SHARE *share= (MARIA_SHARE*) callback_data;
   return share ? share->id : 0;
+}
+
+/*
+  Disable MY_WAIT_IF_FULL flag for temporary tables
+
+  Temporary tables does not have MY_WAIT_IF_FULL in share->write_flags
+*/
+
+uint _ma_write_flags_callback(void *callback_data, myf flags)
+{
+  MARIA_SHARE *share= (MARIA_SHARE*) callback_data;
+  if (share)
+    flags&= ~(~share->write_flag & MY_WAIT_IF_FULL);
+  return flags;
 }
 
 

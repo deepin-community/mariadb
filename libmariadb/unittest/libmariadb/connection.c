@@ -686,6 +686,7 @@ int test_connection_timeout2(MYSQL *unused __attribute__((unused)))
   unsigned int timeout= 5;
   time_t start, elapsed;
   MYSQL *mysql;
+  my_bool no= 0;
 
   SKIP_SKYSQL;
   SKIP_MAXSCALE;
@@ -694,6 +695,7 @@ int test_connection_timeout2(MYSQL *unused __attribute__((unused)))
   mysql= mysql_init(NULL);
   mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (unsigned int *)&timeout);
   mysql_options(mysql, MYSQL_INIT_COMMAND, "set @a:=SLEEP(7)");
+  mysql_options(mysql, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &no);
   start= time(NULL);
   if (my_test_connect(mysql, hostname, username, password, schema, port, socketname, CLIENT_REMEMBER_OPTIONS))
   {
@@ -1222,6 +1224,9 @@ static int test_mdev13100(MYSQL *my __attribute__((unused)))
   int rc;
   FILE *fp;
 
+  /* MXS-4898: MaxScale sends utf8mb4 in handshake OK packet */
+  SKIP_MAXSCALE;
+
   if (!(fp= fopen("./mdev13100.cnf", "w")))
     return FAIL;
 
@@ -1240,6 +1245,7 @@ static int test_mdev13100(MYSQL *my __attribute__((unused)))
     diag("Error: %s", mysql_error(mysql));
     return FAIL;
   }
+  diag("Default charset: %s", mysql_character_set_name(mysql));
   FAIL_IF(strcmp("latin2", mysql_character_set_name(mysql)), "Expected charset latin2");
   mysql_close(mysql);
 
@@ -1374,7 +1380,6 @@ static int test_conc276(MYSQL *unused __attribute__((unused)))
     return FAIL;
   }
   diag("Cipher in use: %s", mysql_get_ssl_cipher(mysql));
-
   rc= mariadb_reconnect(mysql);
   check_mysql_rc(rc, mysql);
 
@@ -2190,6 +2195,7 @@ void my_status_callback(void *ptr, enum enum_mariadb_status_info type, ...)
         {
           MARIADB_CONST_STRING *str= va_arg(ap, MARIADB_CONST_STRING *);
           strncpy(data->database, str->str, str->length);
+          data->database[str->length]= 0;
         }
         break;
       case SESSION_TRACK_SYSTEM_VARIABLES:
@@ -2200,6 +2206,7 @@ void my_status_callback(void *ptr, enum enum_mariadb_status_info type, ...)
           if (!strncmp(key->str, "character_set_client", key->length))
           {
             strncpy(data->charset, val->str, val->length);
+            data->charset[val->length]= 0;
           }
         }
         break;
@@ -2301,7 +2308,77 @@ static int test_conc632(MYSQL *my __attribute__((unused)))
   return OK;
 }
 
+static int test_x509(MYSQL *my __attribute__((unused)))
+{
+  MYSQL *mysql1, *mysql2;
+  my_bool val= 1;
+  my_bool verify= 0;
+  char fp[65];
+  MARIADB_X509_INFO *info;
+
+  SKIP_MAXSCALE;
+
+  mysql1= mysql_init(NULL);
+  mysql2= mysql_init(NULL);
+
+  mysql_options(mysql1, MYSQL_OPT_SSL_ENFORCE, &val);
+  mysql_options(mysql2, MYSQL_OPT_SSL_ENFORCE, &val);
+
+  mysql_options(mysql1, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify);
+  if (!(my_test_connect(mysql1, hostname, username,
+                           password, schema, port,
+                           socketname, 0)))
+  {
+    diag("connection failed");
+    return FAIL;
+  }
+  mariadb_get_infov(mysql1, MARIADB_TLS_PEER_CERT_INFO, &info);
+  memset(fp, 0, 65);
+  diag("fingerprint: %s", info->fingerprint);
+  mysql_options(mysql2, MARIADB_OPT_TLS_PEER_FP, info->fingerprint);
+  if (!(my_test_connect(mysql2, hostname, username,
+                           password, schema, port,
+                           socketname, 0)))
+  {
+    diag("connection failed");
+    return FAIL;
+  }
+  mariadb_get_infov(mysql2, MARIADB_TLS_PEER_CERT_INFO, &info);
+  FAIL_IF(info->verify_mode != MARIADB_VERIFY_FINGERPRINT, "Fingerprint verification expected");
+
+  mysql_close(mysql1);
+  mysql_close(mysql2);
+  return OK;
+}
+
+static int test_conc505(MYSQL *my __attribute__((unused)))
+{
+  MYSQL *mysql= mysql_init(NULL);
+
+#define CLIENT_DEPRECATE_EOF (1ULL << 24)
+
+  if (my_test_connect(mysql, hostname, username, password, schema, port, socketname, CLIENT_DEPRECATE_EOF))
+  {
+    diag("Error expected: Invalid client flag");
+    mysql_close(mysql);
+    return FAIL;
+  }
+  diag("Error (expected): %s", mysql_error(mysql));
+  FAIL_IF(mysql_errno(mysql) != CR_INVALID_CLIENT_FLAG, "Wrong error number");
+  if (!my_test_connect(mysql, hostname, username, password, schema, port, socketname, CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS))
+  {
+    diag("Error: %s", mysql_error(mysql));
+    mysql_close(mysql);
+    return FAIL;
+  }
+
+  mysql_close(mysql);
+  return OK;
+}
+
 struct my_tests_st my_tests[] = {
+  {"test_x509", test_x509, TEST_CONNECTION_NONE, 0, NULL, NULL},
+  {"test_conc505", test_conc505, TEST_CONNECTION_NONE, 0, NULL, NULL},
   {"test_conc632", test_conc632, TEST_CONNECTION_NONE, 0, NULL, NULL},
   {"test_status_callback", test_status_callback, TEST_CONNECTION_NONE, 0, NULL, NULL},
   {"test_conc365", test_conc365, TEST_CONNECTION_NONE, 0, NULL, NULL},

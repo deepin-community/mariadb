@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1995, 2017, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2014, 2022, MariaDB Corporation.
+Copyright (c) 2014, 2023, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -36,7 +36,6 @@ Created 12/9/1995 Heikki Tuuri
 #include "log0recv.h"
 #include "fil0fil.h"
 #include "dict0stats_bg.h"
-#include "btr0defragment.h"
 #include "srv0srv.h"
 #include "srv0start.h"
 #include "trx0sys.h"
@@ -69,9 +68,7 @@ log_t	log_sys;
 
 void log_t::set_capacity()
 {
-#ifndef SUX_LOCK_GENERIC
-	ut_ad(log_sys.latch.is_write_locked());
-#endif
+	ut_ad(log_sys.latch_have_wr());
 	/* Margin for the free space in the smallest log, before a new query
 	step which modifies the database, is started */
 
@@ -100,6 +97,7 @@ bool log_t::create()
   /* LSN 0 and 1 are reserved; @see buf_page_t::oldest_modification_ */
   lsn.store(FIRST_LSN, std::memory_order_relaxed);
   flushed_to_disk_lsn.store(FIRST_LSN, std::memory_order_relaxed);
+  need_checkpoint.store(true, std::memory_order_relaxed);
   write_lsn= FIRST_LSN;
 
 #ifndef HAVE_PMEM
@@ -124,17 +122,15 @@ bool log_t::create()
   TRASH_ALLOC(flush_buf, buf_size);
   checkpoint_buf= static_cast<byte*>(aligned_malloc(4096, 4096));
   memset_aligned<4096>(checkpoint_buf, 0, 4096);
+  max_buf_free= buf_size / LOG_BUF_FLUSH_RATIO - LOG_BUF_FLUSH_MARGIN;
 #else
   ut_ad(!checkpoint_buf);
   ut_ad(!buf);
   ut_ad(!flush_buf);
+  max_buf_free= 1;
 #endif
 
   latch.SRW_LOCK_INIT(log_latch_key);
-  init_lsn_lock();
-
-  max_buf_free= buf_size / LOG_BUF_FLUSH_RATIO - LOG_BUF_FLUSH_MARGIN;
-  set_check_flush_or_checkpoint();
 
   last_checkpoint_lsn= FIRST_LSN;
   log_capacity= 0;
@@ -143,7 +139,7 @@ bool log_t::create()
   next_checkpoint_lsn= 0;
   checkpoint_pending= false;
 
-  buf_free= 0;
+  set_buf_free(0);
 
   ut_ad(is_initialised());
 #ifndef HAVE_PMEM
@@ -175,11 +171,13 @@ void log_file_t::write(os_offset_t offset, span<const byte> buf) noexcept
   ut_ad(is_opened());
   if (dberr_t err= os_file_write_func(IORequestWrite, "ib_logfile0", m_file,
                                       buf.data(), offset, buf.size()))
-    ib::fatal() << "write(\"ib_logfile0\") returned " << err;
+    ib::fatal() << "write(\"ib_logfile0\") returned " << err
+                << ". Operating system error number "
+                << IF_WIN(GetLastError(), errno) << ".";
 }
 
 #ifdef HAVE_PMEM
-# include <libpmem.h>
+# include "cache.h"
 
 /** Attempt to memory map a file.
 @param file  log file handle
@@ -236,11 +234,13 @@ void log_t::attach_low(log_file_t file, os_offset_t size)
       log.close();
       mprotect(ptr, size_t(size), PROT_READ);
       buf= static_cast<byte*>(ptr);
+      max_buf_free= 1;
 # if defined __linux__ || defined _WIN32
       set_block_size(CPU_LEVEL1_DCACHE_LINESIZE);
 # endif
       log_maybe_unbuffered= true;
       log_buffered= false;
+      mtr_t::finisher_update();
       return true;
     }
   }
@@ -264,6 +264,7 @@ void log_t::attach_low(log_file_t file, os_offset_t size)
 
   TRASH_ALLOC(buf, buf_size);
   TRASH_ALLOC(flush_buf, buf_size);
+  max_buf_free= buf_size / LOG_BUF_FLUSH_RATIO - LOG_BUF_FLUSH_MARGIN;
 #endif
 
 #if defined __linux__ || defined _WIN32
@@ -274,6 +275,7 @@ void log_t::attach_low(log_file_t file, os_offset_t size)
                         block_size);
 #endif
 
+  mtr_t::finisher_update();
 #ifdef HAVE_PMEM
   checkpoint_buf= static_cast<byte*>(aligned_malloc(block_size, block_size));
   memset_aligned<64>(checkpoint_buf, 0, block_size);
@@ -309,9 +311,7 @@ void log_t::header_write(byte *buf, lsn_t lsn, bool encrypted)
 
 void log_t::create(lsn_t lsn) noexcept
 {
-#ifndef SUX_LOCK_GENERIC
-  ut_ad(latch.is_write_locked());
-#endif
+  ut_ad(latch_have_wr());
   ut_ad(!recv_no_log_write);
   ut_ad(is_latest());
   ut_ad(this == &log_sys);
@@ -328,12 +328,12 @@ void log_t::create(lsn_t lsn) noexcept
   {
     mprotect(buf, size_t(file_size), PROT_READ | PROT_WRITE);
     memset_aligned<4096>(buf, 0, 4096);
-    buf_free= START_OFFSET;
+    set_buf_free(START_OFFSET);
   }
   else
 #endif
   {
-    buf_free= 0;
+    set_buf_free(0);
     memset_aligned<4096>(flush_buf, 0, buf_size);
     memset_aligned<4096>(buf, 0, buf_size);
   }
@@ -435,6 +435,31 @@ void log_t::set_buffered(bool buffered)
 }
 #endif
 
+  /** Try to enable or disable durable writes (update log_write_through) */
+void log_t::set_write_through(bool write_through)
+{
+  if (is_pmem() || high_level_read_only)
+    return;
+  log_resize_acquire();
+  if (!resize_in_progress() && is_opened() &&
+      bool(log_write_through) != write_through)
+  {
+    os_file_close_func(log.m_file);
+    log.m_file= OS_FILE_CLOSED;
+    std::string path{get_log_file_path()};
+    log_write_through= write_through;
+    bool success;
+    log.m_file= os_file_create_func(path.c_str(),
+                                    OS_FILE_OPEN, OS_FILE_NORMAL, OS_LOG_FILE,
+                                    false, &success);
+    ut_a(log.m_file != OS_FILE_CLOSED);
+    sql_print_information(log_write_through
+                          ? "InnoDB: Log writes write through"
+                          : "InnoDB: Log writes may be cached");
+  }
+  log_resize_release();
+}
+
 /** Start resizing the log and release the exclusive latch.
 @param size  requested new file_size
 @return whether the resizing was started successfully */
@@ -462,8 +487,7 @@ log_t::resize_start_status log_t::resize_start(os_offset_t size) noexcept
     resize_lsn.store(1, std::memory_order_relaxed);
     resize_target= 0;
     resize_log.m_file=
-      os_file_create_func(path.c_str(),
-                          OS_FILE_CREATE | OS_FILE_ON_ERROR_NO_EXIT,
+      os_file_create_func(path.c_str(), OS_FILE_CREATE,
                           OS_FILE_NORMAL, OS_LOG_FILE, false, &success);
     if (success)
     {
@@ -810,11 +834,9 @@ ATTRIBUTE_COLD void log_t::resize_write_buf(size_t length) noexcept
 @return the current log sequence number */
 template<bool release_latch> inline lsn_t log_t::write_buf() noexcept
 {
-#ifndef SUX_LOCK_GENERIC
-  ut_ad(latch.is_write_locked());
-#endif
-  ut_ad(!srv_read_only_mode);
+  ut_ad(latch_have_wr());
   ut_ad(!is_pmem());
+  ut_ad(!srv_read_only_mode);
 
   const lsn_t lsn{get_lsn(std::memory_order_relaxed)};
 
@@ -849,7 +871,7 @@ template<bool release_latch> inline lsn_t log_t::write_buf() noexcept
       ... /* TODO: Update the LSN and adjust other code. */
 #else
       /* The rest of the block will be written as garbage.
-      (We want to avoid memset() while holding mutex.)
+      (We want to avoid memset() while holding exclusive log_sys.latch)
       This block will be overwritten later, once records beyond
       the current LSN are generated. */
 # ifdef HAVE_valgrind
@@ -886,6 +908,7 @@ template<bool release_latch> inline lsn_t log_t::write_buf() noexcept
     write_lsn= lsn;
   }
 
+  set_check_for_checkpoint(false);
   return lsn;
 }
 
@@ -893,7 +916,7 @@ bool log_t::flush(lsn_t lsn) noexcept
 {
   ut_ad(lsn >= get_flushed_lsn());
   flush_lock.set_pending(lsn);
-  const bool success{srv_file_flush_method == SRV_O_DSYNC || log.flush()};
+  const bool success{log_write_through || log.flush()};
   if (UNIV_LIKELY(success))
   {
     flushed_to_disk_lsn.store(lsn, std::memory_order_release);
@@ -927,17 +950,9 @@ wait and check if an already running write is covering the request.
 void log_write_up_to(lsn_t lsn, bool durable,
                      const completion_callback *callback)
 {
-  ut_ad(!srv_read_only_mode);
+  ut_ad(!srv_read_only_mode || log_sys.buf_free_ok());
   ut_ad(lsn != LSN_MAX);
-
-  if (UNIV_UNLIKELY(recv_no_ibuf_operations))
-  {
-    /* A non-final batch of recovery is active no writes to the log
-    are allowed yet. */
-    ut_a(!callback);
-    return;
-  }
-
+  ut_ad(lsn != 0);
   ut_ad(lsn <= log_sys.get_lsn());
 
 #ifdef HAVE_PMEM
@@ -963,6 +978,7 @@ repeat:
   if (write_lock.acquire(lsn, durable ? nullptr : callback) ==
       group_commit_lock::ACQUIRED)
   {
+    ut_ad(!recv_no_log_write || srv_operation != SRV_OPERATION_NORMAL);
     log_sys.latch.wr_lock(SRW_LOCK_CALL);
     pending_write_lsn= write_lock.release(log_sys.write_buf<true>());
   }
@@ -985,7 +1001,6 @@ repeat:
 @param durable  whether to wait for a durable write to complete */
 void log_buffer_flush_to_disk(bool durable)
 {
-  ut_ad(!srv_read_only_mode);
   log_write_up_to(log_sys.get_lsn(std::memory_order_acquire), durable);
 }
 
@@ -1017,16 +1032,6 @@ ATTRIBUTE_COLD void log_write_and_flush()
 #endif
 }
 
-/********************************************************************
-
-Tries to establish a big enough margin of free space in the log buffer, such
-that a new log entry can be catenated without an immediate need for a flush. */
-ATTRIBUTE_COLD static void log_flush_margin()
-{
-  if (log_sys.buf_free > log_sys.max_buf_free)
-    log_buffer_flush_to_disk(false);
-}
-
 /****************************************************************//**
 Tries to establish a big enough margin of free space in the log, such
 that a new log entry can be catenated without an immediate need for a
@@ -1034,12 +1039,12 @@ checkpoint. NOTE: this function may only be called if the calling thread
 owns no synchronization objects! */
 ATTRIBUTE_COLD static void log_checkpoint_margin()
 {
-  while (log_sys.check_flush_or_checkpoint())
+  while (log_sys.check_for_checkpoint())
   {
     log_sys.latch.rd_lock(SRW_LOCK_CALL);
     ut_ad(!recv_no_log_write);
 
-    if (!log_sys.check_flush_or_checkpoint())
+    if (!log_sys.check_for_checkpoint())
     {
 func_exit:
       log_sys.latch.rd_unlock();
@@ -1055,7 +1060,7 @@ func_exit:
 #ifndef DBUG_OFF
     skip_checkpoint:
 #endif
-      log_sys.set_check_flush_or_checkpoint(false);
+      log_sys.set_check_for_checkpoint(false);
       goto func_exit;
     }
 
@@ -1069,30 +1074,17 @@ func_exit:
   }
 }
 
-/**
-Checks that there is enough free space in the log to start a new query step.
-Flushes the log buffer or makes a new checkpoint if necessary. NOTE: this
-function may only be called if the calling thread owns no synchronization
-objects! */
-ATTRIBUTE_COLD void log_check_margins()
-{
-  do
-  {
-    log_flush_margin();
-    log_checkpoint_margin();
-    ut_ad(!recv_no_log_write);
-  }
-  while (log_sys.check_flush_or_checkpoint());
-}
-
 /** Wait for a log checkpoint if needed.
 NOTE that this function may only be called while not holding
 any synchronization objects except dict_sys.latch. */
 void log_free_check()
 {
-  ut_ad(!lock_sys.is_writer());
-  if (log_sys.check_flush_or_checkpoint())
-    log_check_margins();
+  ut_ad(!lock_sys.is_holder());
+  if (log_sys.check_for_checkpoint())
+  {
+    ut_ad(!recv_no_log_write);
+    log_checkpoint_margin();
+  }
 }
 
 extern void buf_resize_shutdown();
@@ -1105,18 +1097,15 @@ ATTRIBUTE_COLD void logs_empty_and_mark_files_at_shutdown()
 
 	ib::info() << "Starting shutdown...";
 
-	/* Wait until the master thread and all other operations are idle: our
+	/* Wait until the master task and all other operations are idle: our
 	algorithm only works if the server is idle at shutdown */
-	bool do_srv_shutdown = false;
 	if (srv_master_timer) {
-		do_srv_shutdown = srv_fast_shutdown < 2;
 		srv_master_timer.reset();
 	}
 
 	/* Wait for the end of the buffer resize task.*/
 	buf_resize_shutdown();
 	dict_stats_shutdown();
-	btr_defragment_shutdown();
 
 	srv_shutdown_state = SRV_SHUTDOWN_CLEANUP;
 
@@ -1125,11 +1114,6 @@ ATTRIBUTE_COLD void logs_empty_and_mark_files_at_shutdown()
 		buf_dump_start();
 	}
 	srv_monitor_timer.reset();
-
-	if (do_srv_shutdown) {
-		srv_shutdown(srv_fast_shutdown == 0);
-	}
-
 
 loop:
 	ut_ad(lock_sys.is_initialised() || !srv_was_started);
@@ -1311,6 +1295,7 @@ log_print(
 void log_t::close()
 {
   ut_ad(this == &log_sys);
+  ut_ad(!(buf_free & buf_free_LOCK));
   if (!is_initialised()) return;
   close_file();
 
@@ -1328,7 +1313,6 @@ void log_t::close()
 #endif
 
   latch.destroy();
-  destroy_lsn_lock();
 
   recv_sys.close();
 

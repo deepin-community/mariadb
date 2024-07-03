@@ -1505,7 +1505,7 @@ static int plugin_initialize(MEM_ROOT *tmp_root, struct st_plugin_int *plugin,
   else
     ret= plugin_do_initialize(plugin, state);
 
-  if (ret)
+  if (ret && ret != HA_ERR_RETRY_INIT)
     plugin_variables_deinit(plugin);
 
   mysql_mutex_lock(&LOCK_plugin);
@@ -1688,7 +1688,6 @@ int plugin_init(int *argc, char **argv, int flags)
         }
       }
 
-      free_root(&tmp_root, MYF(MY_MARK_BLOCKS_FREE));
       tmp.state= PLUGIN_IS_UNINITIALIZED;
       if (register_builtin(plugin, &tmp, &plugin_ptr))
         goto err_unlock;
@@ -1787,6 +1786,7 @@ int plugin_init(int *argc, char **argv, int flags)
         uint state= plugin_ptr->state;
         mysql_mutex_unlock(&LOCK_plugin);
         error= plugin_do_initialize(plugin_ptr, state);
+        DBUG_EXECUTE_IF("fail_spider_init_retry", error= 1;);
         mysql_mutex_lock(&LOCK_plugin);
         plugin_ptr->state= state;
         if (error == HA_ERR_RETRY_INIT)
@@ -1875,6 +1875,7 @@ static bool register_builtin(struct st_maria_plugin *plugin,
 /*
   called only by plugin_init()
 */
+
 static void plugin_load(MEM_ROOT *tmp_root)
 {
   TABLE_LIST tables;
@@ -1892,6 +1893,8 @@ static void plugin_load(MEM_ROOT *tmp_root)
 
   new_thd->thread_stack= (char*) &tables;
   new_thd->store_globals();
+  new_thd->set_query_inner((char*) STRING_WITH_LEN("intern:plugin_load"),
+                           default_charset_info);
   new_thd->db= MYSQL_SCHEMA_NAME;
   bzero((char*) &new_thd->net, sizeof(new_thd->net));
   tables.init_one_table(&MYSQL_SCHEMA_NAME, &MYSQL_PLUGIN_NAME, 0, TL_READ);
@@ -1925,12 +1928,11 @@ static void plugin_load(MEM_ROOT *tmp_root)
   while (!(error= read_record_info.read_record()))
   {
     DBUG_PRINT("info", ("init plugin record"));
-    String str_name, str_dl;
-    get_field(tmp_root, table->field[0], &str_name);
-    get_field(tmp_root, table->field[1], &str_dl);
-
-    LEX_CSTRING name= {str_name.ptr(), str_name.length()};
-    LEX_CSTRING dl=   {str_dl.ptr(), str_dl.length()};
+    DBUG_ASSERT(new_thd == table->field[0]->get_thd());
+    DBUG_ASSERT(new_thd == table->field[1]->get_thd());
+    DBUG_ASSERT(!(new_thd->variables.sql_mode & MODE_PAD_CHAR_TO_FULL_LENGTH));
+    LEX_CSTRING name= table->field[0]->val_lex_string_strmake(tmp_root);
+    LEX_CSTRING dl= table->field[1]->val_lex_string_strmake(tmp_root);
 
     if (!name.length || !dl.length)
       continue;
@@ -1967,7 +1969,7 @@ static void plugin_load(MEM_ROOT *tmp_root)
       the mutex here to satisfy the assert
     */
     mysql_mutex_lock(&LOCK_plugin);
-    plugin_add(tmp_root, false, &name, &dl, MYF(ME_ERROR_LOG));
+    plugin_add(tmp_root, true, &name, &dl, MYF(ME_ERROR_LOG));
     free_root(tmp_root, MYF(MY_MARK_BLOCKS_FREE));
     mysql_mutex_unlock(&LOCK_plugin);
   }
@@ -3276,7 +3278,12 @@ void plugin_thdvar_init(THD *thd)
   /* This and all other variable cleanups are here for COM_CHANGE_USER :( */
 #ifndef EMBEDDED_LIBRARY
   thd->session_tracker.sysvars.deinit(thd);
+  my_free(thd->variables.redirect_url);
+  thd->variables.redirect_url= 0;
 #endif
+  my_free((char*) thd->variables.default_master_connection.str);
+  thd->variables.default_master_connection.str= 0;
+  thd->variables.default_master_connection.length= 0;
 
   thd->variables= global_system_variables;
 
@@ -3299,9 +3306,19 @@ void plugin_thdvar_init(THD *thd)
   intern_plugin_unlock(NULL, old_enforced_table_plugin);
   mysql_mutex_unlock(&LOCK_plugin);
 
+  thd->variables.default_master_connection.str=
+    my_strndup(key_memory_Sys_var_charptr_value,
+               global_system_variables.default_master_connection.str,
+               global_system_variables.default_master_connection.length,
+               MYF(MY_WME | MY_THREAD_SPECIFIC));
 #ifndef EMBEDDED_LIBRARY
   thd->session_tracker.sysvars.init(thd);
+  thd->variables.redirect_url=
+    my_strdup(key_memory_Sys_var_charptr_value,
+              global_system_variables.redirect_url,
+              MYF(MY_WME | MY_THREAD_SPECIFIC));
 #endif
+
   DBUG_VOID_RETURN;
 }
 
@@ -3369,7 +3386,12 @@ void plugin_thdvar_cleanup(THD *thd)
 
 #ifndef EMBEDDED_LIBRARY
   thd->session_tracker.sysvars.deinit(thd);
+  my_free(thd->variables.redirect_url);
+  thd->variables.redirect_url= 0;
 #endif
+  my_free((char*) thd->variables.default_master_connection.str);
+  thd->variables.default_master_connection.str= 0;
+  thd->variables.default_master_connection.length= 0;
 
   mysql_mutex_lock(&LOCK_plugin);
 
@@ -4262,7 +4284,7 @@ static int test_plugin_options(MEM_ROOT *tmp_root, struct st_plugin_int *tmp,
 
     if (unlikely(error))
     {
-       sql_print_error("Parsing options for plugin '%s' failed.",
+       sql_print_error("Parsing options for plugin '%s' failed. Disabling plugin",
                        tmp->name.str);
        goto err;
     }

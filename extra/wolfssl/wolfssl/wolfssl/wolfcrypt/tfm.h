@@ -290,6 +290,8 @@
 #define FP_MASK    (fp_digit)(-1)
 #define FP_DIGIT_MAX FP_MASK
 #define FP_SIZE    (FP_MAX_SIZE/DIGIT_BIT)
+#define MP_SIZE    (FP_MAX_SIZE/DIGIT_BIT) /* for compatibility with SP_INT */
+
 
 #define FP_MAX_PRIME_SIZE (FP_MAX_BITS/(2*CHAR_BIT))
 /* In terms of FP_MAX_BITS, it is double the size possible for a number
@@ -356,13 +358,13 @@ while (0)
 #define NEW_MP_INT_SIZE(name, bits, heap, type) \
     XMEMSET(name, 0, sizeof(mp_int))
 /* Dispose of static mp_int. */
-#define FREE_MP_INT_SIZE(name, heap, type)
+#define FREE_MP_INT_SIZE(name, heap, type) WC_DO_NOTHING
 #endif
 
 /* Initialize an mp_int. */
 #define INIT_MP_INT_SIZE(name, bits) \
     mp_init(name)
-/* Type to cast to when using size marcos. */
+/* Type to cast to when using size macros. */
 #define MP_INT_SIZE     mp_int
 
 
@@ -836,18 +838,20 @@ MP_API int  mp_2expt(mp_int* a, int b);
 MP_API int  mp_div(mp_int * a, mp_int * b, mp_int * c, mp_int * d);
 
 MP_API int  mp_cmp(mp_int *a, mp_int *b);
+#define mp_cmp_ct(a, b, n) mp_cmp(a, b)
 MP_API int  mp_cmp_d(mp_int *a, mp_digit b);
 
 MP_API int  mp_unsigned_bin_size(const mp_int * a);
 MP_API int  mp_read_unsigned_bin (mp_int * a, const unsigned char *b, int c);
 MP_API int  mp_to_unsigned_bin_at_pos(int x, mp_int *t, unsigned char *b);
 MP_API int  mp_to_unsigned_bin (mp_int * a, unsigned char *b);
+#define mp_to_unsigned_bin_len_ct   mp_to_unsigned_bin_len
 MP_API int  mp_to_unsigned_bin_len(mp_int * a, unsigned char *b, int c);
 
 MP_API int  mp_sub_d(fp_int *a, fp_digit b, fp_int *c);
 MP_API int  mp_copy(const fp_int* a, fp_int* b);
-MP_API int  mp_isodd(mp_int* a);
-MP_API int  mp_iszero(mp_int* a);
+MP_API int  mp_isodd(const mp_int* a);
+MP_API int  mp_iszero(const mp_int* a);
 MP_API int  mp_count_bits(const mp_int *a);
 MP_API int  mp_leading_bit(mp_int *a);
 MP_API int  mp_set_int(mp_int *a, unsigned long b);
@@ -861,19 +865,21 @@ MP_API int mp_radix_size (mp_int * a, int radix, int *size);
 #ifdef WOLFSSL_DEBUG_MATH
     MP_API void mp_dump(const char* desc, mp_int* a, byte verbose);
 #else
-    #define mp_dump(desc, a, verbose)
+    #define mp_dump(desc, a, verbose) WC_DO_NOTHING
 #endif
 
 #if defined(OPENSSL_EXTRA) || !defined(NO_DSA) || defined(HAVE_ECC)
     MP_API int mp_read_radix(mp_int* a, const char* str, int radix);
 #endif
 
+#define mp_montgomery_reduce_ct(a, m, mp) \
+    mp_montgomery_reduce_ex(a, m, mp, 1)
+MP_API int mp_montgomery_reduce(fp_int *a, fp_int *m, fp_digit mp);
+MP_API int mp_montgomery_reduce_ex(fp_int *a, fp_int *m, fp_digit mp, int ct);
+MP_API int mp_montgomery_setup(fp_int *a, fp_digit *rho);
+MP_API int mp_sqr(fp_int *a, fp_int *b);
+
 #ifdef HAVE_ECC
-    MP_API int mp_sqr(fp_int *a, fp_int *b);
-    MP_API int mp_montgomery_reduce(fp_int *a, fp_int *m, fp_digit mp);
-    MP_API int mp_montgomery_reduce_ex(fp_int *a, fp_int *m, fp_digit mp,
-                                       int ct);
-    MP_API int mp_montgomery_setup(fp_int *a, fp_digit *rho);
     MP_API int mp_div_2(fp_int * a, fp_int * b);
     MP_API int mp_div_2_mod_ct(mp_int *a, mp_int *b, mp_int *c);
 #endif
@@ -899,10 +905,12 @@ MP_API int  mp_lcm(fp_int *a, fp_int *b, fp_int *c);
 MP_API int  mp_rand_prime(mp_int* a, int len, WC_RNG* rng, void* heap);
 MP_API int  mp_exch(mp_int *a, mp_int *b);
 #endif /* WOLFSSL_KEY_GEN */
-MP_API int  mp_cond_swap_ct (mp_int * a, mp_int * b, int c, int m);
+MP_API int  mp_cond_swap_ct_ex(mp_int* a, mp_int* b, int c, int m, mp_int* t);
+MP_API int  mp_cond_swap_ct(mp_int* a, mp_int* b, int c, int m);
 
 MP_API int  mp_cnt_lsb(fp_int *a);
 MP_API int  mp_div_2d(fp_int *a, int b, fp_int *c, fp_int *d);
+MP_API int  mp_mod_2d(fp_int *a, int b, fp_int *c);
 MP_API int  mp_mod_d(fp_int* a, fp_digit b, fp_digit* c);
 MP_API int  mp_lshd (mp_int * a, int b);
 MP_API int  mp_abs(mp_int* a, mp_int* b);

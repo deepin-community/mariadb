@@ -24,8 +24,7 @@
  * class XXX interface
  */
 
-#ifndef FIFO_HPP__
-#define FIFO_HPP__
+#pragma once
 
 #include <vector>
 #include <iostream>
@@ -530,5 +529,3 @@ void FIFO<element_t>::totalFileCounts(uint64_t& numFiles, uint64_t& numBytes) co
 
 }  // namespace joblist
 
-#endif
-// vim:ts=4 sw=4:

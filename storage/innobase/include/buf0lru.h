@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1995, 2016, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2017, 2021, MariaDB Corporation.
+Copyright (c) 2017, 2022, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -62,6 +62,17 @@ bool buf_LRU_scan_and_free_block(ulint limit= ULINT_UNDEFINED);
 @retval	NULL	if the free list is empty */
 buf_block_t* buf_LRU_get_free_only();
 
+/** How to acquire a block */
+enum buf_LRU_get {
+  /** The caller is not holding buf_pool.mutex */
+  have_no_mutex= 0,
+  /** The caller is holding buf_pool.mutex */
+  have_mutex,
+  /** The caller is not holding buf_pool.mutex and is OK if a block
+  cannot be allocated. */
+  have_no_mutex_soft
+};
+
 /** Get a block from the buf_pool.free list.
 If the list is empty, blocks will be moved from the end of buf_pool.LRU
 to buf_pool.free.
@@ -83,9 +94,10 @@ we put it to free list to be used.
   * scan whole LRU list
   * scan LRU list even if buf_pool.try_LRU_scan is not set
 
-@param have_mutex  whether buf_pool.mutex is already being held
-@return the free control block, in state BUF_BLOCK_MEMORY */
-buf_block_t* buf_LRU_get_free_block(bool have_mutex)
+@param get  how to allocate the block
+@return the free control block, in state BUF_BLOCK_MEMORY
+@retval nullptr if get==have_no_mutex_soft and memory was not available */
+buf_block_t* buf_LRU_get_free_block(buf_LRU_get get)
 	MY_ATTRIBUTE((malloc,warn_unused_result));
 
 /** @return whether the unzip_LRU list should be used for evicting a victim
@@ -108,6 +120,16 @@ buf_LRU_add_block(
 				blocks in the LRU list, else put to the
 				start; if the LRU list is very short, added to
 				the start regardless of this parameter */
+
+/** Move a block to the start of the buf_pool.LRU list.
+@param bpage  buffer pool page */
+void buf_page_make_young(buf_page_t *bpage);
+/** Flag a page accessed in buf_pool and move it to the start of buf_pool.LRU
+if it is too old.
+@param bpage  buffer pool page
+@return whether this is not the first access */
+bool buf_page_make_young_if_needed(buf_page_t *bpage);
+
 /******************************************************************//**
 Adds a block to the LRU list of decompressed zip pages. */
 void
@@ -116,6 +138,10 @@ buf_unzip_LRU_add_block(
 	buf_block_t*	block,	/*!< in: control block */
 	ibool		old);	/*!< in: TRUE if should be put to the end
 				of the list, else put to the start */
+
+/** Evict the temporary tablespace pages above the given threshold
+@param threshold  Above this page to be removed from LRU list */
+void buf_LRU_truncate_temp(uint32_t threshold);
 
 /** Update buf_pool.LRU_old_ratio.
 @param[in]	old_pct		Reserve this percentage of

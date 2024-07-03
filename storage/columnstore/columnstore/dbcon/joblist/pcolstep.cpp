@@ -88,6 +88,14 @@ pColStep::pColStep(CalpontSystemCatalog::OID o, CalpontSystemCatalog::OID t,
   int err, i;
   uint32_t mask;
 
+  // MCOL-5572 Force the charset on the autoincrement column
+  // of calpontsys.syscolumn syscat table to be latin1.
+  if (fOid == execplan::OID_SYSCOLUMN_AUTOINC)
+  {
+    const CHARSET_INFO* cs = &my_charset_latin1;
+    fColType.charsetNumber = cs->number;
+  }
+
   if (fOid < 1000)
     throw runtime_error("pColStep: invalid column");
 
@@ -498,77 +506,6 @@ const string pColStep::toString() const
   return oss.str();
 }
 
-void pColStep::addFilters()
-{
-  AnyDataListSPtr dl = fInputJobStepAssociation.outAt(0);
-  DataList_t* bdl = dl->dataList();
-  FifoDataList* fifo = fInputJobStepAssociation.outAt(0)->fifoDL();
-
-  idbassert(bdl);
-  int it = -1;
-  bool more;
-  ElementType e;
-  int64_t token;
-
-  if (fifo != NULL)
-  {
-    try
-    {
-      it = fifo->getIterator();
-    }
-    catch (exception& ex)
-    {
-      cerr << "pColStep::addFilters: caught exception: " << ex.what() << " stepno: " << fStepId << endl;
-    }
-    catch (...)
-    {
-      cerr << "pColStep::addFilters: caught exception" << endl;
-    }
-
-    fBOP = BOP_OR;
-    UintRowGroup rw;
-
-    more = fifo->next(it, &rw);
-
-    while (more)
-    {
-      for (uint64_t i = 0; i < rw.count; ++i)
-        addFilter(COMPARE_EQ, (int64_t)rw.et[i].second);
-
-      more = fifo->next(it, &rw);
-    }
-  }
-  else
-  {
-    try
-    {
-      it = bdl->getIterator();
-    }
-    catch (exception& ex)
-    {
-      cerr << "pColStep::addFilters: caught exception: " << ex.what() << " stepno: " << fStepId << endl;
-    }
-    catch (...)
-    {
-      cerr << "pColStep::addFilters: caught exception" << endl;
-    }
-
-    fBOP = BOP_OR;
-
-    more = bdl->next(it, &e);
-
-    while (more)
-    {
-      token = e.second;
-      addFilter(COMPARE_EQ, token);
-
-      more = bdl->next(it, &e);
-    }
-  }
-
-  return;
-}
-
 /* This exists to avoid a DBRM lookup for every rid. */
 inline uint64_t pColStep::getLBID(uint64_t rid, bool& scan)
 {
@@ -616,4 +553,3 @@ void pColStep::appendFilter(const std::vector<const execplan::Filter*>& fs)
 }
 
 }  // namespace joblist
-// vim:ts=4 sw=4:

@@ -20,8 +20,7 @@
 
 /** @file */
 
-#ifndef JOBLIST_PRIMITIVESTEP_H
-#define JOBLIST_PRIMITIVESTEP_H
+#pragma once
 
 #include <iostream>
 #include <sstream>
@@ -34,14 +33,10 @@
 #include <map>
 #include <stdexcept>
 #include <sstream>
-#ifndef _MSC_VER
 #include <tr1/memory>
-#else
-#include <memory>
-#endif
 
 #include <boost/shared_ptr.hpp>
-#include <boost/shared_array.hpp>
+
 #include <boost/thread.hpp>
 #include <boost/thread/condition.hpp>
 
@@ -111,18 +106,18 @@ class pColStep : public JobStep
 
   pColStep(const PassThruStep& rhs);
 
-  virtual ~pColStep(){}
+  virtual ~pColStep(){};
 
   /** @brief Starts processing.  Set at least the RID list before calling.
    *
    * Starts processing.  Set at least the RID list before calling this.
    */
-  virtual void run(){}
+  virtual void run(){};
   /** @brief Sync's the caller with the end of execution.
    *
    * Does nothing.  Returns when this instance is finished.
    */
-  virtual void join(){}
+  virtual void join(){};
 
   virtual const std::string toString() const;
 
@@ -153,7 +148,6 @@ class pColStep : public JobStep
   {
     ridList = rids;
   }
-
   /** @brief Sets the String DataList to get RID values from.
    *
    * Sets the string DataList to get RID values from.  Filtering by RID distinguishes
@@ -164,7 +158,6 @@ class pColStep : public JobStep
   {
     strRidList = strDl;
   }
-
   /** @brief Set the binary operator for the filter predicate (BOP_AND or BOP_OR).
    *
    * Set the binary operator for the filter predicate (BOP_AND or BOP_OR).
@@ -183,7 +176,6 @@ class pColStep : public JobStep
   {
     fSwallowRows = swallowRows;
   }
-
   /** @brief Get the swallowRows flag.
    *
    *
@@ -267,9 +259,6 @@ class pColStep : public JobStep
     return fFilters;
   }
 
- protected:
-  void addFilters();
-
  private:
   /** @brief constructor for completeness
    */
@@ -301,13 +290,14 @@ class pColStep : public JobStep
   // 	      Running with this one will swallow rows at projection.
   bool fSwallowRows;
 
-  bool isFilterFeeder;
+  bool isFilterFeeder = false;
   uint64_t fNumBlksSkipped;  // total number of block scans skipped due to CP
   uint64_t fMsgBytesIn;      // total byte count for incoming messages
   uint64_t fMsgBytesOut;     // total byte count for outcoming messages
 
   BRM::DBRM dbrm;
 
+  boost::mutex mutex;
   boost::condition condvar;
   boost::condition flushed;
   SP_LBIDList lbidList;
@@ -347,24 +337,30 @@ class pColScanStep : public JobStep
                const execplan::CalpontSystemCatalog::ColType& ct, const JobInfo& jobInfo);
 
   pColScanStep(const pColStep& rhs);
-  ~pColScanStep(){}
+  ~pColScanStep()
+  {
+  }
 
   /** @brief Starts processing.
    *
    * Starts processing.
    */
-  virtual void run(){}
+  virtual void run()
+  {
+  }
 
   /** @brief Sync's the caller with the end of execution.
    *
    * Does nothing.  Returns when this instance is finished.
    */
-  virtual void join(){}
+  virtual void join()
+  {
+  }
 
   virtual bool isDictCol() const
   {
     return fIsDict;
-  }
+  };
 
   /** @brief Add a filter when the column is a 4-byte float type
    *
@@ -483,8 +479,6 @@ class pColScanStep : public JobStep
     return fFilters;
   }
 
- protected:
-  void addFilters();
 
  private:
   // defaults okay?
@@ -517,8 +511,9 @@ class pColScanStep : public JobStep
 
   std::vector<struct BRM::EMEntry> extents;
   uint32_t extentSize, divShift, ridsPerBlock, rpbShift, numExtents;
+  // 	config::Config *fConfig;
 
-  bool isFilterFeeder;
+  bool isFilterFeeder = false;
   uint64_t fNumBlksSkipped;  // total number of block scans skipped due to CP
   uint64_t fMsgBytesIn;      // total byte count for incoming messages
   uint64_t fMsgBytesOut;     // total byte count for outcoming messages
@@ -540,6 +535,7 @@ class pColScanStep : public JobStep
 /** @brief class pDictionaryStep
  *
  */
+#define USEEQFILTERTHRESHOLD 6
 class pDictionaryStep : public JobStep
 {
  public:
@@ -549,12 +545,18 @@ class pDictionaryStep : public JobStep
   pDictionaryStep(execplan::CalpontSystemCatalog::OID oid, execplan::CalpontSystemCatalog::OID tabelOid,
                   const execplan::CalpontSystemCatalog::ColType& ct, const JobInfo& jobInfo);
 
-  virtual ~pDictionaryStep(){}
+  virtual ~pDictionaryStep()
+  {
+  }
 
   /** @brief virtual void Run method
    */
-  virtual void run(){}
-  virtual void join(){}
+  virtual void run()
+  {
+  }
+  virtual void join()
+  {
+  }
   // void setOutList(StringDataList* rids);
   void setInputList(DataList_t* rids)
   {
@@ -790,13 +792,12 @@ class pDictionaryScan : public JobStep
   void sendError(uint16_t error);
 
  private:
-  uint16_t planFlagsToPrimFlags(uint32_t planFlags);
   pDictionaryScan();
+  uint16_t planFlagsToPrimFlags(uint32_t planFlags);
   void startPrimitiveThread();
   void startAggregationThread();
   void initializeConfigParms();
-  void sendAPrimitiveMessage(messageqcpp::ByteStream& primMsg, BRM::LBID_t msgLbidStart,
-                             uint32_t msgLbidCount, uint16_t dbroot);
+  void sendAPrimitiveMessage(BRM::LBID_t msgLbidStart, uint32_t msgLbidCount, uint16_t dbroot);
   void formatMiniStats();
 
   DistributedEngineComm* fDec;
@@ -829,6 +830,7 @@ class pDictionaryScan : public JobStep
   uint64_t extentSize;
   uint64_t divShift;
   uint64_t numExtents;
+  // request to primproc
   uint32_t fScanLbidReqThreshold;  // min level of scan LBID backlog before
   // consumer will tell producer to send
   bool fStopSending;
@@ -890,9 +892,10 @@ class BatchPrimitive : public JobStep, public DECEventListener
 
 struct _CPInfo
 {
-  _CPInfo(int64_t MIN, int64_t MAX, uint64_t l, bool val) : min(MIN), max(MAX), LBID(l), valid(val){};
+  _CPInfo(int64_t MIN, int64_t MAX, uint64_t l, bool dictScan, bool val)
+   : min(MIN), max(MAX), LBID(l), valid(val), dictScan(dictScan){};
   _CPInfo(int128_t BIGMIN, int128_t BIGMAX, uint64_t l, bool val)
-   : bigMin(BIGMIN), bigMax(BIGMAX), LBID(l), valid(val){};
+   : bigMin(BIGMIN), bigMax(BIGMAX), LBID(l), valid(val), dictScan(false){};
   union
   {
     int128_t bigMin;
@@ -905,6 +908,7 @@ struct _CPInfo
   };
   uint64_t LBID;
   bool valid;
+  bool dictScan;
 };
 
 /** @brief class TupleBPS
@@ -1088,8 +1092,8 @@ class TupleBPS : public BatchPrimitive, public TupleDeliveryStep
   {
     return uniqueID;
   }
-  void useJoiner(boost::shared_ptr<joiner::TupleJoiner>);
-  void useJoiners(const std::vector<boost::shared_ptr<joiner::TupleJoiner>>&);
+  void useJoiner(std::shared_ptr<joiner::TupleJoiner>);
+  void useJoiners(const std::vector<std::shared_ptr<joiner::TupleJoiner>>&);
   bool wasStepRun() const
   {
     return fRunExecuted;
@@ -1194,6 +1198,11 @@ class TupleBPS : public BatchPrimitive, public TupleDeliveryStep
     return bRunFEonPM;
   }
 
+  void setMaxPmJoinResultCount(uint32_t count)
+  {
+    maxPmJoinResultCount = count;
+  }
+
  protected:
   void sendError(uint16_t status);
 
@@ -1224,7 +1233,7 @@ class TupleBPS : public BatchPrimitive, public TupleDeliveryStep
   uint32_t fMaxNumThreads;
   uint32_t fNumThreads;
   PrimitiveStepType ffirstStepType;
-  bool isFilterFeeder;
+  bool isFilterFeeder = false;
   std::vector<uint64_t> fProducerThreads;  // thread pool handles
   std::vector<uint64_t> fProcessorThreads;
   messageqcpp::ByteStream fFilterString;
@@ -1232,6 +1241,9 @@ class TupleBPS : public BatchPrimitive, public TupleDeliveryStep
   execplan::CalpontSystemCatalog::ColType fColType;
   execplan::CalpontSystemCatalog::OID fOid;
   execplan::CalpontSystemCatalog::OID fTableOid;
+  execplan::CalpontSystemCatalog::OID fOidAux;
+  bool hasAuxCol;
+  std::vector<BRM::EMEntry> extentsAux;
   uint64_t fLastTupleId;
   BRM::LBIDRange_v lbidRanges;
   std::vector<int32_t> lastExtent;
@@ -1240,8 +1252,8 @@ class TupleBPS : public BatchPrimitive, public TupleDeliveryStep
   SP_LBIDList lbidList;
   uint64_t ridsRequested;
   uint64_t totalMsgs;
-  volatile uint64_t msgsSent;
-  volatile uint64_t msgsRecvd;
+  uint64_t msgsSent;
+  uint64_t msgsRecvd;
   volatile bool finishedSending;
   bool firstRead;
   bool sendWaiting;
@@ -1282,7 +1294,7 @@ class TupleBPS : public BatchPrimitive, public TupleDeliveryStep
   void serializeJoiner();
   void serializeJoiner(uint32_t connectionNumber);
 
-  std::vector<boost::shared_ptr<joiner::TupleJoiner>> tjoiners;
+  std::vector<std::shared_ptr<joiner::TupleJoiner>> tjoiners;
   bool doJoin, hasPMJoin, hasUMJoin;
   std::vector<rowgroup::RowGroup> joinerMatchesRGs;  // parses the small-side matches from joiner
 
@@ -1312,7 +1324,7 @@ class TupleBPS : public BatchPrimitive, public TupleDeliveryStep
   /* Functions & Expressions vars */
   boost::shared_ptr<funcexp::FuncExpWrapper> fe1, fe2;
   rowgroup::RowGroup fe1Input, fe2Output;
-  boost::shared_array<int> fe2Mapping;
+  std::shared_ptr<int[]> fe2Mapping;
   bool bRunFEonPM;
 
   /* for UM F & E 2 processing */
@@ -1332,6 +1344,8 @@ class TupleBPS : public BatchPrimitive, public TupleDeliveryStep
   boost::shared_ptr<RowGroupDL> deliveryDL;
   uint32_t deliveryIt;
 
+  uint32_t maxPmJoinResultCount;
+
   class JoinLocalData
   {
    public:
@@ -1345,7 +1359,7 @@ class TupleBPS : public BatchPrimitive, public TupleDeliveryStep
     JoinLocalData(TupleBPS* pTupleBPS, rowgroup::RowGroup& primRowGroup, rowgroup::RowGroup& outputRowGroup,
                   boost::shared_ptr<funcexp::FuncExpWrapper>& fe2, rowgroup::RowGroup& fe2Output,
                   std::vector<rowgroup::RowGroup>& joinerMatchesRGs, rowgroup::RowGroup& joinFERG,
-                  std::vector<boost::shared_ptr<joiner::TupleJoiner>>& tjoiners, uint32_t smallSideCount,
+                  std::vector<std::shared_ptr<joiner::TupleJoiner>>& tjoiners, uint32_t smallSideCount,
                   bool doJoin);
 
     friend class TupleBPS;
@@ -1369,7 +1383,7 @@ class TupleBPS : public BatchPrimitive, public TupleDeliveryStep
     rowgroup::RowGroup fe2Output;
     std::vector<rowgroup::RowGroup> joinerMatchesRGs;
     rowgroup::RowGroup joinFERG;
-    std::vector<boost::shared_ptr<joiner::TupleJoiner>> tjoiners;
+    std::vector<std::shared_ptr<joiner::TupleJoiner>> tjoiners;
 
     uint32_t smallSideCount;
     bool doJoin;
@@ -1384,12 +1398,12 @@ class TupleBPS : public BatchPrimitive, public TupleDeliveryStep
     boost::scoped_array<rowgroup::Row> smallNulls;
     boost::scoped_array<uint8_t> joinedBaseRowData;
     boost::scoped_array<uint8_t> joinFERowData;
-    boost::shared_array<int> largeMapping;
-    vector<boost::shared_array<int>> smallMappings;
-    vector<boost::shared_array<int>> fergMappings;
+    std::shared_ptr<int[]> largeMapping;
+    vector<std::shared_ptr<int[]>> smallMappings;
+    vector<std::shared_ptr<int[]>> fergMappings;
     rowgroup::RGData joinedData;
     boost::scoped_array<uint8_t> largeNullMemory;
-    boost::scoped_array<boost::shared_array<uint8_t>> smallNullMemory;
+    boost::scoped_array<std::shared_ptr<uint8_t[]>> smallNullMemory;
     uint32_t matchCount;
 
     rowgroup::Row postJoinRow;
@@ -1506,7 +1520,7 @@ class FilterStep : public JobStep
 
  protected:
   //	void unblockDataLists(FifoDataList* fifo, StringFifoDataList* strFifo, StrDataList* strResult,
-  //DataList_t* result);
+  // DataList_t* result);
 
  private:
   // This i/f is not meaningful in this step
@@ -1675,6 +1689,3 @@ class PseudoColStep : public pColStep
 };
 
 }  // namespace joblist
-
-#endif  // JOBLIST_PRIMITIVESTEP_H
-// vim:ts=4 sw=4:

@@ -24,12 +24,12 @@
 */
 
 /* Interfaces for Sphincs:
- *     - SPHINCS_FAST_LEVEL1 (AKA SPHINCS+-SHAKE256-128f-simple)
- *     - SPHINCS_FAST_LEVEL3 (AKA SPHINCS+-SHAKE256-192f-simple)
- *     - SPHINCS_FAST_LEVEL5 (AKA SPHINCS+-SHAKE256-256f-simple)
- *     - SPHINCS_SMALL_LEVEL1 (AKA SPHINCS+-SHAKE256-128s-simple)
- *     - SPHINCS_SMALL_LEVEL3 (AKA SPHINCS+-SHAKE256-192s-simple)
- *     - SPHINCS_SMALL_LEVEL5 (AKA SPHINCS+-SHAKE256-256s-simple)
+ *     - SPHINCS_FAST_LEVEL1 (AKA SPHINCS+-SHAKE-128f-simple)
+ *     - SPHINCS_FAST_LEVEL3 (AKA SPHINCS+-SHAKE-192f-simple)
+ *     - SPHINCS_FAST_LEVEL5 (AKA SPHINCS+-SHAKE-256f-simple)
+ *     - SPHINCS_SMALL_LEVEL1 (AKA SPHINCS+-SHAKE-128s-simple)
+ *     - SPHINCS_SMALL_LEVEL3 (AKA SPHINCS+-SHAKE-192s-simple)
+ *     - SPHINCS_SMALL_LEVEL5 (AKA SPHINCS+-SHAKE-256s-simple)
  */
 
 #ifndef WOLF_CRYPT_SPHINCS_H
@@ -41,6 +41,7 @@
 
 #ifdef HAVE_LIBOQS
 #include <oqs/oqs.h>
+#include <wolfssl/wolfcrypt/port/liboqs/liboqs.h>
 #endif
 
 #ifdef __cplusplus
@@ -51,23 +52,23 @@
 
 #ifdef HAVE_LIBOQS
 
-#define SPHINCS_FAST_LEVEL1_SIG_SIZE     OQS_SIG_sphincs_shake256_128f_simple_length_signature
-#define SPHINCS_FAST_LEVEL3_SIG_SIZE     OQS_SIG_sphincs_shake256_192f_simple_length_signature
-#define SPHINCS_FAST_LEVEL5_SIG_SIZE     OQS_SIG_sphincs_shake256_256f_simple_length_signature
-#define SPHINCS_SMALL_LEVEL1_SIG_SIZE    OQS_SIG_sphincs_shake256_128s_simple_length_signature
-#define SPHINCS_SMALL_LEVEL3_SIG_SIZE    OQS_SIG_sphincs_shake256_192s_simple_length_signature
-#define SPHINCS_SMALL_LEVEL5_SIG_SIZE    OQS_SIG_sphincs_shake256_256s_simple_length_signature
+#define SPHINCS_FAST_LEVEL1_SIG_SIZE     OQS_SIG_sphincs_shake_128f_simple_length_signature
+#define SPHINCS_FAST_LEVEL3_SIG_SIZE     OQS_SIG_sphincs_shake_192f_simple_length_signature
+#define SPHINCS_FAST_LEVEL5_SIG_SIZE     OQS_SIG_sphincs_shake_256f_simple_length_signature
+#define SPHINCS_SMALL_LEVEL1_SIG_SIZE    OQS_SIG_sphincs_shake_128s_simple_length_signature
+#define SPHINCS_SMALL_LEVEL3_SIG_SIZE    OQS_SIG_sphincs_shake_192s_simple_length_signature
+#define SPHINCS_SMALL_LEVEL5_SIG_SIZE    OQS_SIG_sphincs_shake_256s_simple_length_signature
 
-#define SPHINCS_LEVEL1_KEY_SIZE     OQS_SIG_sphincs_shake256_128f_simple_length_secret_key
-#define SPHINCS_LEVEL1_PUB_KEY_SIZE OQS_SIG_sphincs_shake256_128f_simple_length_public_key
+#define SPHINCS_LEVEL1_KEY_SIZE     OQS_SIG_sphincs_shake_128f_simple_length_secret_key
+#define SPHINCS_LEVEL1_PUB_KEY_SIZE OQS_SIG_sphincs_shake_128f_simple_length_public_key
 #define SPHINCS_LEVEL1_PRV_KEY_SIZE (SPHINCS_LEVEL1_PUB_KEY_SIZE+SPHINCS_LEVEL1_KEY_SIZE)
 
-#define SPHINCS_LEVEL3_KEY_SIZE     OQS_SIG_sphincs_shake256_192f_simple_length_secret_key
-#define SPHINCS_LEVEL3_PUB_KEY_SIZE OQS_SIG_sphincs_shake256_192f_simple_length_public_key
+#define SPHINCS_LEVEL3_KEY_SIZE     OQS_SIG_sphincs_shake_192f_simple_length_secret_key
+#define SPHINCS_LEVEL3_PUB_KEY_SIZE OQS_SIG_sphincs_shake_192f_simple_length_public_key
 #define SPHINCS_LEVEL3_PRV_KEY_SIZE (SPHINCS_LEVEL3_PUB_KEY_SIZE+SPHINCS_LEVEL3_KEY_SIZE)
 
-#define SPHINCS_LEVEL5_KEY_SIZE     OQS_SIG_sphincs_shake256_256f_simple_length_secret_key
-#define SPHINCS_LEVEL5_PUB_KEY_SIZE OQS_SIG_sphincs_shake256_256f_simple_length_public_key
+#define SPHINCS_LEVEL5_KEY_SIZE     OQS_SIG_sphincs_shake_256f_simple_length_secret_key
+#define SPHINCS_LEVEL5_PUB_KEY_SIZE OQS_SIG_sphincs_shake_256f_simple_length_public_key
 #define SPHINCS_LEVEL5_PRV_KEY_SIZE (SPHINCS_LEVEL5_PUB_KEY_SIZE+SPHINCS_LEVEL5_KEY_SIZE)
 #endif
 
@@ -99,7 +100,7 @@ struct sphincs_key {
 
 WOLFSSL_API
 int wc_sphincs_sign_msg(const byte* in, word32 inLen, byte* out, word32 *outLen,
-                        sphincs_key* key);
+                        sphincs_key* key, WC_RNG* rng);
 WOLFSSL_API
 int wc_sphincs_verify_msg(const byte* sig, word32 sigLen, const byte* msg,
                           word32 msgLen, int* res, sphincs_key* key);
@@ -124,7 +125,7 @@ int wc_sphincs_import_private_key(const byte* priv, word32 privSz,
                                   sphincs_key* key);
 
 WOLFSSL_API
-int wc_sphincs_export_public(sphincs_key*, byte* out, word32* outLen);
+int wc_sphincs_export_public(sphincs_key* key, byte* out, word32* outLen);
 WOLFSSL_API
 int wc_sphincs_export_private_only(sphincs_key* key, byte* out, word32* outLen);
 WOLFSSL_API

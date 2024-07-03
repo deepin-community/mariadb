@@ -21,11 +21,29 @@
 
 /*
  * WOLFSSL_DTLS_NO_HVR_ON_RESUME
+ * WOLFSSL_DTLS13_NO_HRR_ON_RESUME
  *     If defined, a DTLS server will not do a cookie exchange on successful
  *     client resumption: the resumption will be faster (one RTT less) and
- *     will consume less bandwidth (one ClientHello and one HelloVerifyRequest
- *     less). On the other hand, if a valid SessionID is collected, forged
- *     clientHello messages will consume resources on the server.
+ *     will consume less bandwidth (one ClientHello and one
+ *     HelloVerifyRequest/HelloRetryRequest less). On the other hand, if a valid
+ *     SessionID/ticket/psk is collected, forged clientHello messages will
+ *     consume resources on the server. For DTLS 1.3, using this option also
+ *     allows for the server to process Early Data/0-RTT Data. Without this, the
+ *     Early Data would be dropped since the server doesn't enter stateful
+ *     processing until receiving a verified ClientHello with the cookie.
+ *
+ *     To allow DTLS 1.3 resumption without the cookie exchange:
+ *     - Compile wolfSSL with WOLFSSL_DTLS13_NO_HRR_ON_RESUME defined
+ *     - Call wolfSSL_dtls13_no_hrr_on_resume(ssl, 1) on the WOLFSSL object to
+ *       disable the cookie exchange on resumption
+ *     - Continue like with a normal connection
+ * WOLFSSL_DTLS_CH_FRAG
+ *     Allow a server to process a fragmented second/verified (one containing a
+ *     valid cookie response) ClientHello message. The first/unverified (one
+ *     without a cookie extension) ClientHello MUST be unfragmented so that the
+ *     DTLS server can process it statelessly. This is only implemented for
+ *     DTLS 1.3. The user MUST call wolfSSL_dtls13_allow_ch_frag() on the server
+ *     to explicitly enable this during runtime.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -75,6 +93,7 @@ void DtlsResetState(WOLFSSL* ssl)
     ssl->options.connectState = CONNECT_BEGIN;
     ssl->options.acceptState = ACCEPT_BEGIN;
     ssl->options.handShakeState = NULL_STATE;
+    ssl->options.seenUnifiedHdr = 0;
     ssl->msgsReceived.got_client_hello = 0;
     ssl->keys.dtls_handshake_number = 0;
     ssl->keys.dtls_expected_peer_handshake_number = 0;
@@ -95,6 +114,7 @@ int DtlsIgnoreError(int err)
     case SOCKET_ERROR_E:
     case WANT_READ:
     case WANT_WRITE:
+    case COOKIE_ERROR:
         return 0;
     default:
         return 1;
@@ -188,6 +208,13 @@ static int CreateDtls12Cookie(const WOLFSSL* ssl, const WolfSSL_CH* ch,
 {
     int ret;
     Hmac cookieHmac;
+
+    if (ssl->buffers.dtlsCookieSecret.buffer == NULL ||
+            ssl->buffers.dtlsCookieSecret.length == 0) {
+        WOLFSSL_MSG("Missing DTLS 1.2 cookie secret");
+        return COOKIE_ERROR;
+    }
+
     ret = wc_HmacInit(&cookieHmac, ssl->heap, ssl->devId);
     if (ret == 0) {
         ret = wc_HmacSetKey(&cookieHmac, DTLS_COOKIE_TYPE,
@@ -262,9 +289,12 @@ static int CheckDtlsCookie(const WOLFSSL* ssl, WolfSSL_CH* ch,
     return ret;
 }
 
-static int ParseClientHello(const byte* input, word32 helloSz, WolfSSL_CH* ch)
+static int ParseClientHello(const byte* input, word32 helloSz, WolfSSL_CH* ch,
+        byte isFirstCHFrag)
 {
     word32 idx = 0;
+
+    (void)isFirstCHFrag;
 
     /* protocol version, random and session id length check */
     if (OPAQUE16_LEN + RAN_LEN + OPAQUE8_LEN > helloSz)
@@ -285,10 +315,24 @@ static int ParseClientHello(const byte* input, word32 helloSz, WolfSSL_CH* ch)
     if (idx > helloSz - OPAQUE8_LEN)
         return BUFFER_ERROR;
     idx += ReadVector8(input + idx, &ch->compression);
-    if (idx > helloSz - OPAQUE16_LEN)
-        return BUFFER_ERROR;
-    idx += ReadVector16(input + idx, &ch->extension);
-    if (idx > helloSz)
+    if (idx < helloSz - OPAQUE16_LEN) {
+        /* Extensions are optional */
+#ifdef WOLFSSL_DTLS_CH_FRAG
+        word32 extStart = idx + OPAQUE16_LEN;
+#endif
+        idx += ReadVector16(input + idx, &ch->extension);
+        if (idx > helloSz) {
+#ifdef WOLFSSL_DTLS_CH_FRAG
+            idx = helloSz;
+            /* Allow incomplete extensions if we are parsing a fragment */
+            if (isFirstCHFrag && extStart < helloSz)
+                ch->extension.size = helloSz - extStart;
+            else
+#endif
+                return BUFFER_ERROR;
+        }
+    }
+    if (idx != helloSz)
         return BUFFER_ERROR;
     ch->length = idx;
     return 0;
@@ -718,8 +762,8 @@ static int SendStatelessReplyDtls13(const WOLFSSL* ssl, WolfSSL_CH* ch)
 #ifdef HAVE_SUPPORTED_CURVES
         if (doKE) {
             byte searched = 0;
-            ret = TLSX_KeyShare_Choose(ssl, parsedExts, &cs.clientKSE,
-                    &searched);
+            ret = TLSX_KeyShare_Choose(ssl, parsedExts, cs.cipherSuite0,
+                    cs.cipherSuite, &cs.clientKSE, &searched);
             if (ret != 0)
                 goto dtls13_cleanup;
             if (cs.clientKSE == NULL && searched)
@@ -743,6 +787,15 @@ static int SendStatelessReplyDtls13(const WOLFSSL* ssl, WolfSSL_CH* ch)
             ERROR_OUT(INCOMPLETE_DATA, dtls13_cleanup);
         }
     }
+
+#ifdef WOLFSSL_DTLS13_NO_HRR_ON_RESUME
+    if (ssl->options.dtls13NoHrrOnResume && usePSK && pskInfo.isValid &&
+            !cs.doHelloRetry) {
+        /* Skip HRR on resumption */
+        ((WOLFSSL*)ssl)->options.dtlsStateful = 1;
+        goto dtls13_cleanup;
+    }
+#endif
 
 #ifdef HAVE_SUPPORTED_CURVES
     if (cs.doHelloRetry) {
@@ -823,6 +876,7 @@ static int SendStatelessReply(const WOLFSSL* ssl, WolfSSL_CH* ch, byte isTls13)
     else
 #endif
     {
+#if !defined(WOLFSSL_NO_TLS12)
         if (!ch->dtls12cookieSet) {
             ret = CreateDtls12Cookie(ssl, ch, ch->dtls12cookie);
             if (ret != 0)
@@ -831,6 +885,11 @@ static int SendStatelessReply(const WOLFSSL* ssl, WolfSSL_CH* ch, byte isTls13)
         }
         ret = SendHelloVerifyRequest((WOLFSSL*)ssl, ch->dtls12cookie,
                 DTLS_COOKIE_SZ);
+#else
+        WOLFSSL_MSG("DTLS1.2 disabled with WOLFSSL_NO_TLS12");
+        WOLFSSL_ERROR_VERBOSE(NOT_COMPILED_IN);
+        ret = NOT_COMPILED_IN;
+#endif
     }
     return ret;
 }
@@ -856,17 +915,30 @@ static int ClientHelloSanityCheck(WolfSSL_CH* ch, byte isTls13)
     return 0;
 }
 
-int DoClientHelloStateless(WOLFSSL* ssl, const byte* input,
-                           word32* inOutIdx, word32 helloSz)
+int DoClientHelloStateless(WOLFSSL* ssl, const byte* input, word32 helloSz,
+        byte isFirstCHFrag, byte* tls13)
 {
     int ret;
     WolfSSL_CH ch;
     byte isTls13 = 0;
 
+    WOLFSSL_ENTER("DoClientHelloStateless");
+    if (isFirstCHFrag) {
+#ifdef WOLFSSL_DTLS_CH_FRAG
+        WOLFSSL_MSG("\tProcessing fragmented ClientHello");
+#else
+        WOLFSSL_MSG("\tProcessing fragmented ClientHello but "
+                "WOLFSSL_DTLS_CH_FRAG is not defined. This should not happen.");
+        return BAD_STATE_E;
+#endif
+    }
+    if (tls13 != NULL)
+        *tls13 = 0;
+
     XMEMSET(&ch, 0, sizeof(ch));
 
     ssl->options.dtlsStateful = 0;
-    ret = ParseClientHello(input + *inOutIdx, helloSz, &ch);
+    ret = ParseClientHello(input, helloSz, &ch, isFirstCHFrag);
     if (ret != 0)
         return ret;
 
@@ -875,6 +947,8 @@ int DoClientHelloStateless(WOLFSSL* ssl, const byte* input,
         ret = TlsCheckSupportedVersion(ssl, &ch, &isTls13);
         if (ret != 0)
             return ret;
+        if (tls13 != NULL)
+            *tls13 = isTls13;
         if (isTls13) {
             int tlsxFound;
             ret = FindExtByType(&ch.cookieExt, TLSX_COOKIE, ch.extension,
@@ -890,7 +964,7 @@ int DoClientHelloStateless(WOLFSSL* ssl, const byte* input,
         return ret;
 
 #ifdef WOLFSSL_DTLS_NO_HVR_ON_RESUME
-    if (!isTls13) {
+    if (!isTls13 && !isFirstCHFrag) {
         int resume = FALSE;
         ret = TlsResumptionIsValid(ssl, &ch, &resume);
         if (ret != 0)
@@ -903,7 +977,13 @@ int DoClientHelloStateless(WOLFSSL* ssl, const byte* input,
 #endif
 
     if (ch.cookie.size == 0 && ch.cookieExt.size == 0) {
-        ret = SendStatelessReply((WOLFSSL*)ssl, &ch, isTls13);
+#ifdef WOLFSSL_DTLS_CH_FRAG
+        /* Don't send anything here when processing fragment */
+        if (isFirstCHFrag)
+            ret = COOKIE_ERROR;
+        else
+#endif
+            ret = SendStatelessReply(ssl, &ch, isTls13);
     }
     else {
         byte cookieGood;
@@ -918,10 +998,24 @@ int DoClientHelloStateless(WOLFSSL* ssl, const byte* input,
                 ret = INVALID_PARAMETER;
             else
 #endif
-                ret = SendStatelessReply((WOLFSSL*)ssl, &ch, isTls13);
+#ifdef WOLFSSL_DTLS_CH_FRAG
+            /* Don't send anything here when processing fragment */
+            if (isFirstCHFrag)
+                ret = COOKIE_ERROR;
+            else
+#endif
+                ret = SendStatelessReply(ssl, &ch, isTls13);
         }
-        else
+        else {
             ssl->options.dtlsStateful = 1;
+            /* Update the window now that we enter the stateful parsing */
+#ifdef WOLFSSL_DTLS13
+            if (isTls13)
+                ret = Dtls13UpdateWindowRecordRecvd(ssl);
+            else
+#endif
+                DtlsUpdateWindow(ssl);
+        }
     }
 
     return ret;
@@ -1105,7 +1199,7 @@ int TLSX_ConnectionID_Use(WOLFSSL* ssl)
     /* CIDInfo needs to be accessed every time we send or receive a record. To
      * avoid the cost of the extension lookup save a pointer to the structure
      * inside the SSL object itself, and save a pointer to the SSL object in the
-     * extension. The extension freeing routine uses te pointer to the SSL
+     * extension. The extension freeing routine uses the pointer to the SSL
      * object to find the structure and to set ssl->dtlsCidInfo pointer to NULL
      * after freeing the structure. */
     ssl->dtlsCidInfo = info;

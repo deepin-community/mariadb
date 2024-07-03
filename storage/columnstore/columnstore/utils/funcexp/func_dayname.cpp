@@ -97,7 +97,7 @@ int64_t Func_dayname::getIntVal(rowgroup::Row& row, FunctionParm& parm, bool& is
     case CalpontSystemCatalog::CHAR:
     case CalpontSystemCatalog::TEXT:
     case CalpontSystemCatalog::VARCHAR:
-      val = dataconvert::DataConvert::stringToDatetime(parm[0]->data()->getStrVal(row, isNull));
+      val = dataconvert::DataConvert::stringToDatetime(parm[0]->data()->getStrVal(row, isNull).safeString(""));
 
       if (val == -1)
       {
@@ -179,4 +179,3 @@ string Func_dayname::getStrVal(rowgroup::Row& row, FunctionParm& parm, bool& isN
 }
 
 }  // namespace funcexp
-// vim:ts=4 sw=4:

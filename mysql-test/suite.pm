@@ -4,14 +4,7 @@ use My::Platform;
 @ISA = qw(My::Suite);
 
 sub skip_combinations {
-  my @combinations;
-
-  # disable innodb combinations for configurations that were not built
-  push @combinations, 'innodb_plugin' unless $ENV{HA_INNODB_SO};
-
-  push @combinations, 'innodb' unless $::mysqld_variables{'innodb'} eq "ON";
-
-  my %skip = ( 'include/have_innodb.combinations' => [ @combinations ]);
+  my %skip;
 
   $skip{'include/innodb_encrypt_log.combinations'} = [ 'crypt' ]
                 unless $ENV{DEBUG_KEY_MANAGEMENT_SO};
@@ -80,12 +73,7 @@ sub skip_combinations {
 
   $skip{'main/openssl_6975.test'} = 'no or wrong openssl version'
     unless $openssl_ver ge "1.0.1d" and $openssl_ver lt "1.1.1";
-
-  $skip{'main/ssl_7937.combinations'} = [ 'x509v3' ]
-    unless $ssl_lib =~ /WolfSSL/ or $openssl_ver ge "1.0.2";
-
-  $skip{'main/ssl_verify_ip.test'} = 'x509v3 support required'
-    unless $openssl_ver ge "1.0.2";
+  $skip{'main/func_kdf.combinations'} = [ $ssl_lib =~ /OpenSSL 1\.0\./ ? 'new' : 'old' ];
 
   sub utf8_command_line_ok() {
    if (IS_WINDOWS) {

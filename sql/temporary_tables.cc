@@ -627,8 +627,7 @@ bool THD::drop_temporary_table(TABLE *table, bool *is_trans, bool delete_table)
                           table->s->db.str, table->s->table_name.str));
 
   // close all handlers in case it is statement abort and some can be left
-  if (is_error())
-    table->file->ha_reset();
+  table->file->ha_reset();
 
   locked= lock_temporary_tables();
 
@@ -1086,8 +1085,13 @@ TABLE *THD::find_temporary_table(const char *key, uint key_length,
       {
         share->all_tmp_tables.remove(table);
         free_temporary_table(table);
-        it.rewind();
-        continue;
+        if (share->all_tmp_tables.is_empty())
+          table= open_temporary_table(share, share->table_name.str);
+        else
+        {
+          it.rewind();
+          continue;
+        }
       }
       result= table;
       break;
@@ -1128,11 +1132,16 @@ TABLE *THD::open_temporary_table(TMP_TABLE_SHARE *share,
     DBUG_RETURN(NULL);                          /* Out of memory */
   }
 
+  uint flags= ha_open_options | (open_options & HA_OPEN_FOR_CREATE);
+  /*
+    In replication, temporary tables are not confined to a single
+    thread/THD.
+  */
+  if (slave_thread)
+    flags|= HA_OPEN_GLOBAL_TMP_TABLE;
   if (open_table_from_share(this, share, &alias,
                             (uint) HA_OPEN_KEYFILE,
-                            EXTRA_RECORD,
-                            (ha_open_options |
-                             (open_options & HA_OPEN_FOR_CREATE)),
+                            EXTRA_RECORD, flags,
                             table, false))
   {
     my_free(table);
@@ -1588,6 +1597,11 @@ void THD::close_unused_temporary_table_instances(const TABLE_LIST *tl)
        {
          /* Note: removing current list element doesn't invalidate iterator. */
          share->all_tmp_tables.remove(table);
+         /*
+           At least one instance should be left (guaratead by calling this
+           function for table which is opened and the table is under processing)
+         */
+         DBUG_ASSERT(share->all_tmp_tables.front());
          free_temporary_table(table);
        }
      }

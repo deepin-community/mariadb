@@ -52,6 +52,9 @@
 
 #include <wolfssl/wolfcrypt/hmac.h>
 #include <wolfssl/wolfcrypt/kdf.h>
+#ifdef WC_SRTP_KDF
+#include <wolfssl/wolfcrypt/aes.h>
+#endif
 
 
 #if defined(WOLFSSL_HAVE_PRF) && !defined(NO_HMAC)
@@ -113,6 +116,13 @@ int wc_PRF(byte* result, word32 resLen, const byte* secret,
         break;
     #endif
 
+    #ifdef WOLFSSL_SM3
+        case sm3_mac:
+            hash = WC_SM3;
+            len  = WC_SM3_DIGEST_SIZE;
+        break;
+    #endif
+
     #ifndef NO_SHA
         case sha_mac:
             hash = WC_SHA;
@@ -129,7 +139,7 @@ int wc_PRF(byte* result, word32 resLen, const byte* secret,
     if (lastLen)
         times += 1;
 
-    /* times == 0 iif resLen == 0, but times == 0 abides clang static analyzer
+    /* times == 0 if resLen == 0, but times == 0 abides clang static analyzer
        while resLen == 0 doesn't */
     if (times == 0)
         return BAD_FUNC_ARG;
@@ -343,17 +353,9 @@ int wc_PRF_TLS(byte* digest, word32 digLen, const byte* secret, word32 secLen,
 
     /* Extract data using HMAC, salt and input.
      * RFC 5869 - HMAC-based Extract-and-Expand Key Derivation Function (HKDF)
-     *
-     * prk      The generated pseudorandom key.
-     * salt     The salt.
-     * saltLen  The length of the salt.
-     * ikm      The input keying material.
-     * ikmLen   The length of the input keying material.
-     * digest   The type of digest to use.
-     * returns 0 on success, otherwise failure.
      */
-    int wc_Tls13_HKDF_Extract(byte* prk, const byte* salt, word32 saltLen,
-                                 byte* ikm, word32 ikmLen, int digest)
+    int wc_Tls13_HKDF_Extract_ex(byte* prk, const byte* salt, word32 saltLen,
+        byte* ikm, word32 ikmLen, int digest, void* heap, int devId)
     {
         int ret;
         word32 len = 0;
@@ -376,6 +378,13 @@ int wc_PRF_TLS(byte* digest, word32 digLen, const byte* secret, word32 secLen,
                 len = WC_SHA512_DIGEST_SIZE;
                 break;
             #endif
+
+            #ifdef WOLFSSL_SM3
+            case WC_SM3:
+                len = WC_SM3_DIGEST_SIZE;
+                break;
+            #endif
+
             default:
                 return BAD_FUNC_ARG;
         }
@@ -393,7 +402,15 @@ int wc_PRF_TLS(byte* digest, word32 digLen, const byte* secret, word32 secLen,
         WOLFSSL_BUFFER(ikm, ikmLen);
 #endif
 
+#if !defined(HAVE_SELFTEST) && (!defined(HAVE_FIPS) || \
+    (defined(FIPS_VERSION_GE) && FIPS_VERSION_GE(5,3)))
+        ret = wc_HKDF_Extract_ex(digest, salt, saltLen, ikm, ikmLen, prk, heap,
+            devId);
+#else
         ret = wc_HKDF_Extract(digest, salt, saltLen, ikm, ikmLen, prk);
+        (void)heap;
+        (void)devId;
+#endif
 
 #ifdef WOLFSSL_DEBUG_TLS
         WOLFSSL_MSG("  PRK");
@@ -403,27 +420,21 @@ int wc_PRF_TLS(byte* digest, word32 digLen, const byte* secret, word32 secLen,
         return ret;
     }
 
+    int wc_Tls13_HKDF_Extract(byte* prk, const byte* salt, word32 saltLen,
+                                 byte* ikm, word32 ikmLen, int digest)
+    {
+        return wc_Tls13_HKDF_Extract_ex(prk, salt, saltLen, ikm, ikmLen, digest,
+            NULL, INVALID_DEVID);
+    }
+
     /* Expand data using HMAC, salt and label and info.
-     * TLS v1.3 defines this function.
-     *
-     * okm          The generated pseudorandom key - output key material.
-     * okmLen       The length of generated pseudorandom key -
-     *              output key material.
-     * prk          The salt - pseudo-random key.
-     * prkLen       The length of the salt - pseudo-random key.
-     * protocol     The TLS protocol label.
-     * protocolLen  The length of the TLS protocol label.
-     * info         The information to expand.
-     * infoLen      The length of the information.
-     * digest       The type of digest to use.
-     * returns 0 on success, otherwise failure.
-     */
-    int wc_Tls13_HKDF_Expand_Label(byte* okm, word32 okmLen,
+     * TLS v1.3 defines this function. */
+    int wc_Tls13_HKDF_Expand_Label_ex(byte* okm, word32 okmLen,
                                  const byte* prk, word32 prkLen,
                                  const byte* protocol, word32 protocolLen,
                                  const byte* label, word32 labelLen,
                                  const byte* info, word32 infoLen,
-                                 int digest)
+                                 int digest, void* heap, int devId)
     {
         int    ret = 0;
         word32 idx = 0;
@@ -453,17 +464,23 @@ int wc_PRF_TLS(byte* digest, word32 digLen, const byte* secret, word32 secLen,
         data[idx++] = (byte)okmLen;
         /* Length of protocol | label. */
         data[idx++] = (byte)(protocolLen + labelLen);
-        /* Protocol */
-        XMEMCPY(&data[idx], protocol, protocolLen);
-        idx += protocolLen;
-        /* Label */
-        XMEMCPY(&data[idx], label, labelLen);
-        idx += labelLen;
+        if (protocolLen > 0) {
+            /* Protocol */
+            XMEMCPY(&data[idx], protocol, protocolLen);
+            idx += protocolLen;
+        }
+        if (labelLen > 0) {
+            /* Label */
+            XMEMCPY(&data[idx], label, labelLen);
+            idx += labelLen;
+        }
         /* Length of hash of messages */
         data[idx++] = (byte)infoLen;
-        /* Hash of messages */
-        XMEMCPY(&data[idx], info, infoLen);
-        idx += infoLen;
+        if (infoLen > 0) {
+            /* Hash of messages */
+            XMEMCPY(&data[idx], info, infoLen);
+            idx += infoLen;
+        }
 
     #ifdef WOLFSSL_CHECK_MEM_ZERO
         wc_MemZero_Add("wc_Tls13_HKDF_Expand_Label data", data, idx);
@@ -477,7 +494,15 @@ int wc_PRF_TLS(byte* digest, word32 digLen, const byte* secret, word32 secLen,
         WOLFSSL_MSG_EX("  Digest %d", digest);
 #endif
 
+#if !defined(HAVE_SELFTEST) && (!defined(HAVE_FIPS) || \
+    (defined(FIPS_VERSION_GE) && FIPS_VERSION_GE(5,3)))
+        ret = wc_HKDF_Expand_ex(digest, prk, prkLen, data, idx, okm, okmLen,
+            heap, devId);
+#else
         ret = wc_HKDF_Expand(digest, prk, prkLen, data, idx, okm, okmLen);
+        (void)heap;
+        (void)devId;
+#endif
 
 #ifdef WOLFSSL_DEBUG_TLS
         WOLFSSL_MSG("  OKM");
@@ -495,27 +520,22 @@ int wc_PRF_TLS(byte* digest, word32 digLen, const byte* secret, word32 secLen,
         return ret;
     }
 
+    int wc_Tls13_HKDF_Expand_Label(byte* okm, word32 okmLen,
+                                 const byte* prk, word32 prkLen,
+                                 const byte* protocol, word32 protocolLen,
+                                 const byte* label, word32 labelLen,
+                                 const byte* info, word32 infoLen,
+                                 int digest)
+    {
+        return wc_Tls13_HKDF_Expand_Label_ex(okm, okmLen, prk, prkLen, protocol,
+            protocolLen, label, labelLen, info, infoLen, digest,
+            NULL, INVALID_DEVID);
+    }
+
 #if defined(WOLFSSL_TICKET_NONCE_MALLOC) &&                                    \
     (!defined(HAVE_FIPS) || (defined(FIPS_VERSION_GE) && FIPS_VERSION_GE(5,3)))
     /* Expand data using HMAC, salt and label and info.
-     * TLS v1.3 defines this function.
-     *
-     * okm          The generated pseudorandom key - output key material.
-     * okmLen       The length of generated pseudorandom key -
-     *              output key material.
-     * prk          The salt - pseudo-random key.
-     * prkLen       The length of the salt - pseudo-random key.
-     * protocol     The TLS protocol label.
-     * protocolLen  The length of the TLS protocol label.
-     * info         The information to expand.
-     * infoLen      The length of the information.
-     * digest       The type of digest to use.
-     *
-     * This functions is very similar to wc_Tls13_HKDF_Expand_Label() but it
-     * allocate memory if the stack space usually used isn't enough.
-     *
-     * returns 0 on success, otherwise failure.
-     */
+     * TLS v1.3 defines this function. */
     int wc_Tls13_HKDF_Expand_Label_Alloc(byte* okm, word32 okmLen,
         const byte* prk, word32 prkLen, const byte* protocol,
         word32 protocolLen, const byte* label, word32 labelLen,
@@ -855,5 +875,479 @@ int wc_SSH_KDF(byte hashId, byte keyId, byte* key, word32 keySz,
 }
 
 #endif /* WOLFSSL_WOLFSSH */
+
+#ifdef WC_SRTP_KDF
+/* Calculate first block to encrypt.
+ *
+ * @param [in]  salt     Random value to XOR in.
+ * @param [in]  saltSz   Size of random value in bytes.
+ * @param [in]  kdrIdx   Key derivation rate. kdr = 0 when -1, otherwise
+ *                       kdr = 2^kdrIdx.
+ * @param [in]  index    Index value to XOR in.
+ * @param [in]  indexSz  Size of index value in bytes.
+ * @param [out] block    First block to encrypt.
+ */
+static void wc_srtp_kdf_first_block(const byte* salt, word32 saltSz, int kdrIdx,
+        const byte* index, int indexSz, unsigned char* block)
+{
+    int i;
+
+    /* XOR salt into zeroized buffer. */
+    for (i = 0; i < WC_SRTP_MAX_SALT - (int)saltSz; i++) {
+        block[i] = 0;
+    }
+    XMEMCPY(block + WC_SRTP_MAX_SALT - saltSz, salt, saltSz);
+    block[WC_SRTP_MAX_SALT] = 0;
+    /* block[15] is counter. */
+
+    /* When kdrIdx is -1, don't XOR in index. */
+    if (kdrIdx >= 0) {
+        /* Get the number of bits to shift index by. */
+        word32 bits = kdrIdx & 0x7;
+        /* Reduce index size by number of bytes to remove. */
+        indexSz -= kdrIdx >> 3;
+
+        if ((kdrIdx & 0x7) == 0) {
+            /* Just XOR in as no bit shifting. */
+            for (i = 0; i < indexSz; i++) {
+                block[i + WC_SRTP_MAX_SALT - indexSz] ^= index[i];
+            }
+        }
+        else {
+            /* XOR in as bit shifted index. */
+            block[WC_SRTP_MAX_SALT - indexSz] ^= index[0] >> bits;
+            for (i = 1; i < indexSz; i++) {
+                block[i + WC_SRTP_MAX_SALT - indexSz] ^=
+                    (index[i-1] << (8 - bits)) |
+                    (index[i+0] >>      bits );
+            }
+        }
+    }
+}
+
+/* Derive a key given the first block.
+ *
+ * @param [in, out] block    First block to encrypt. Need label XORed in.
+ * @param [in]      indexSz  Size of index in bytes to calculate where label is
+ *                           XORed into.
+ * @param [in]      label    Label byte that differs for each key.
+ * @param [out]     key      Derived key.
+ * @param [in]      keySz    Size of key to derive in bytes.
+ * @param [in]      aes      AES object to encrypt with.
+ * @return  0 on success.
+ */
+static int wc_srtp_kdf_derive_key(byte* block, byte indexSz, byte label,
+        byte* key, word32 keySz, Aes* aes)
+{
+    int i;
+    int ret = 0;
+    /* Calculate the number of full blocks needed for derived key. */
+    int blocks = (int)(keySz / AES_BLOCK_SIZE);
+
+    /* XOR in label. */
+    block[WC_SRTP_MAX_SALT - indexSz - 1] ^= label;
+    for (i = 0; (ret == 0) && (i < blocks); i++) {
+        /* Set counter. */
+        block[15] = (byte)i;
+        /* Encrypt block into key buffer. */
+        ret = wc_AesEcbEncrypt(aes, key, block, AES_BLOCK_SIZE);
+        /* Reposition for more derived key. */
+        key += AES_BLOCK_SIZE;
+        /* Reduce the count of key bytes required. */
+        keySz -= AES_BLOCK_SIZE;
+    }
+    /* Do any partial blocks. */
+    if ((ret == 0) && (keySz > 0)) {
+        byte enc[AES_BLOCK_SIZE];
+        /* Set counter. */
+        block[15] = (byte)i;
+        /* Encrypt block into temporary. */
+        ret = wc_AesEcbEncrypt(aes, enc, block, AES_BLOCK_SIZE);
+        if (ret == 0) {
+            /* Copy into key required amount. */
+            XMEMCPY(key, enc, keySz);
+        }
+    }
+    /* XOR out label. */
+    block[WC_SRTP_MAX_SALT - indexSz - 1] ^= label;
+
+    return ret;
+}
+
+/* Derive keys using SRTP KDF algorithm.
+ *
+ * SP 800-135 (RFC 3711).
+ *
+ * @param [in]  key      Key to use with encryption.
+ * @param [in]  keySz    Size of key in bytes.
+ * @param [in]  salt     Random non-secret value.
+ * @param [in]  saltSz   Size of random in bytes.
+ * @param [in]  kdrIdx   Key derivation rate. kdr = 0 when -1, otherwise
+ *                       kdr = 2^kdrIdx.
+ * @param [in]  index    Index value to XOR in.
+ * @param [out] key1     First key. Label value of 0x00.
+ * @param [in]  key1Sz   Size of first key in bytes.
+ * @param [out] key2     Second key. Label value of 0x01.
+ * @param [in]  key2Sz   Size of second key in bytes.
+ * @param [out] key3     Third key. Label value of 0x02.
+ * @param [in]  key3Sz   Size of third key in bytes.
+ * @return  BAD_FUNC_ARG when key or salt is NULL.
+ * @return  BAD_FUNC_ARG when key length is not 16, 24 or 32.
+ * @return  BAD_FUNC_ARG when saltSz is larger than 14.
+ * @return  BAD_FUNC_ARG when kdrIdx is less than -1 or larger than 24.
+ * @return  MEMORY_E on dynamic memory allocation failure.
+ * @return  0 on success.
+ */
+int wc_SRTP_KDF(const byte* key, word32 keySz, const byte* salt, word32 saltSz,
+        int kdrIdx, const byte* index, byte* key1, word32 key1Sz, byte* key2,
+        word32 key2Sz, byte* key3, word32 key3Sz)
+{
+    int ret = 0;
+    byte block[AES_BLOCK_SIZE];
+#ifdef WOLFSSL_SMALL_STACK
+    Aes* aes = NULL;
+#else
+    Aes aes[1];
+#endif
+    int aes_inited = 0;
+
+    /* Validate parameters. */
+    if ((key == NULL) || (keySz > AES_256_KEY_SIZE) || (salt == NULL) ||
+            (saltSz > WC_SRTP_MAX_SALT) || (kdrIdx < -1) || (kdrIdx > 24)) {
+        ret = BAD_FUNC_ARG;
+    }
+
+#ifdef WOLFSSL_SMALL_STACK
+    if (ret == 0) {
+        aes = (Aes*)XMALLOC(sizeof(Aes), NULL, DYNAMIC_TYPE_CIPHER);
+        if (aes == NULL) {
+            ret = MEMORY_E;
+        }
+    }
+    if (aes != NULL)
+#endif
+    {
+        XMEMSET(aes, 0, sizeof(Aes));
+    }
+
+    /* Setup AES object. */
+    if (ret == 0) {
+        ret = wc_AesInit(aes, NULL, INVALID_DEVID);
+    }
+    if (ret == 0) {
+        aes_inited = 1;
+        ret = wc_AesSetKey(aes, key, keySz, NULL, AES_ENCRYPTION);
+    }
+
+    /* Calculate first block that can be used in each derivation. */
+    if (ret == 0) {
+        wc_srtp_kdf_first_block(salt, saltSz, kdrIdx, index, WC_SRTP_INDEX_LEN,
+            block);
+    }
+
+    /* Calculate first key if required. */
+    if ((ret == 0) && (key1 != NULL)) {
+        ret = wc_srtp_kdf_derive_key(block, WC_SRTP_INDEX_LEN,
+            WC_SRTP_LABEL_ENCRYPTION, key1, key1Sz, aes);
+    }
+    /* Calculate second key if required. */
+    if ((ret == 0) && (key2 != NULL)) {
+        ret = wc_srtp_kdf_derive_key(block, WC_SRTP_INDEX_LEN,
+            WC_SRTP_LABEL_MSG_AUTH, key2, key2Sz, aes);
+    }
+    /* Calculate third key if required. */
+    if ((ret == 0) && (key3 != NULL)) {
+        ret = wc_srtp_kdf_derive_key(block, WC_SRTP_INDEX_LEN,
+            WC_SRTP_LABEL_SALT, key3, key3Sz, aes);
+    }
+
+    if (aes_inited)
+        wc_AesFree(aes);
+#ifdef WOLFSSL_SMALL_STACK
+    XFREE(aes, NULL, DYNAMIC_TYPE_CIPHER);
+#endif
+    return ret;
+}
+
+/* Derive keys using SRTCP KDF algorithm.
+ *
+ * SP 800-135 (RFC 3711).
+ *
+ * @param [in]  key      Key to use with encryption.
+ * @param [in]  keySz    Size of key in bytes.
+ * @param [in]  salt     Random non-secret value.
+ * @param [in]  saltSz   Size of random in bytes.
+ * @param [in]  kdrIdx   Key derivation rate index. kdr = 0 when -1, otherwise
+ *                       kdr = 2^kdrIdx. See wc_SRTP_KDF_kdr_to_idx()
+ * @param [in]  index    Index value to XOR in.
+ * @param [out] key1     First key. Label value of 0x03.
+ * @param [in]  key1Sz   Size of first key in bytes.
+ * @param [out] key2     Second key. Label value of 0x04.
+ * @param [in]  key2Sz   Size of second key in bytes.
+ * @param [out] key3     Third key. Label value of 0x05.
+ * @param [in]  key3Sz   Size of third key in bytes.
+ * @return  BAD_FUNC_ARG when key or salt is NULL.
+ * @return  BAD_FUNC_ARG when key length is not 16, 24 or 32.
+ * @return  BAD_FUNC_ARG when saltSz is larger than 14.
+ * @return  BAD_FUNC_ARG when kdrIdx is less than -1 or larger than 24.
+ * @return  MEMORY_E on dynamic memory allocation failure.
+ * @return  0 on success.
+ */
+int wc_SRTCP_KDF(const byte* key, word32 keySz, const byte* salt, word32 saltSz,
+        int kdrIdx, const byte* index, byte* key1, word32 key1Sz, byte* key2,
+        word32 key2Sz, byte* key3, word32 key3Sz)
+{
+    int ret = 0;
+    byte block[AES_BLOCK_SIZE];
+#ifdef WOLFSSL_SMALL_STACK
+    Aes* aes = NULL;
+#else
+    Aes aes[1];
+#endif
+    int aes_inited = 0;
+
+    /* Validate parameters. */
+    if ((key == NULL) || (keySz > AES_256_KEY_SIZE) || (salt == NULL) ||
+            (saltSz > WC_SRTP_MAX_SALT) || (kdrIdx < -1) || (kdrIdx > 24)) {
+        ret = BAD_FUNC_ARG;
+    }
+
+#ifdef WOLFSSL_SMALL_STACK
+    if (ret == 0) {
+        aes = (Aes*)XMALLOC(sizeof(Aes), NULL, DYNAMIC_TYPE_CIPHER);
+        if (aes == NULL) {
+            ret = MEMORY_E;
+        }
+    }
+    if (aes != NULL)
+#endif
+    {
+        XMEMSET(aes, 0, sizeof(Aes));
+    }
+
+    /* Setup AES object. */
+    if (ret == 0) {
+        ret = wc_AesInit(aes, NULL, INVALID_DEVID);
+    }
+    if (ret == 0) {
+        aes_inited = 1;
+        ret = wc_AesSetKey(aes, key, keySz, NULL, AES_ENCRYPTION);
+    }
+
+    /* Calculate first block that can be used in each derivation. */
+    if (ret == 0) {
+        wc_srtp_kdf_first_block(salt, saltSz, kdrIdx, index, WC_SRTCP_INDEX_LEN,
+            block);
+    }
+
+    /* Calculate first key if required. */
+    if ((ret == 0) && (key1 != NULL)) {
+        ret = wc_srtp_kdf_derive_key(block, WC_SRTCP_INDEX_LEN,
+            WC_SRTCP_LABEL_ENCRYPTION, key1, key1Sz, aes);
+    }
+    /* Calculate second key if required. */
+    if ((ret == 0) && (key2 != NULL)) {
+        ret = wc_srtp_kdf_derive_key(block, WC_SRTCP_INDEX_LEN,
+            WC_SRTCP_LABEL_MSG_AUTH, key2, key2Sz, aes);
+    }
+    /* Calculate third key if required. */
+    if ((ret == 0) && (key3 != NULL)) {
+        ret = wc_srtp_kdf_derive_key(block, WC_SRTCP_INDEX_LEN,
+            WC_SRTCP_LABEL_SALT, key3, key3Sz, aes);
+    }
+
+    if (aes_inited)
+        wc_AesFree(aes);
+#ifdef WOLFSSL_SMALL_STACK
+    XFREE(aes, NULL, DYNAMIC_TYPE_CIPHER);
+#endif
+    return ret;
+}
+
+/* Derive key with label using SRTP KDF algorithm.
+ *
+ * SP 800-135 (RFC 3711).
+ *
+ * @param [in]  key       Key to use with encryption.
+ * @param [in]  keySz     Size of key in bytes.
+ * @param [in]  salt      Random non-secret value.
+ * @param [in]  saltSz    Size of random in bytes.
+ * @param [in]  kdrIdx    Key derivation rate index. kdr = 0 when -1, otherwise
+ *                        kdr = 2^kdrIdx. See wc_SRTP_KDF_kdr_to_idx()
+ * @param [in]  index     Index value to XOR in.
+ * @param [in]  label     Label to use when deriving key.
+ * @param [out] outKey    Derived key.
+ * @param [in]  outKeySz  Size of derived key in bytes.
+ * @return  BAD_FUNC_ARG when key, salt or outKey is NULL.
+ * @return  BAD_FUNC_ARG when key length is not 16, 24 or 32.
+ * @return  BAD_FUNC_ARG when saltSz is larger than 14.
+ * @return  BAD_FUNC_ARG when kdrIdx is less than -1 or larger than 24.
+ * @return  MEMORY_E on dynamic memory allocation failure.
+ * @return  0 on success.
+ */
+int wc_SRTP_KDF_label(const byte* key, word32 keySz, const byte* salt,
+        word32 saltSz, int kdrIdx, const byte* index, byte label, byte* outKey,
+        word32 outKeySz)
+{
+    int ret = 0;
+    byte block[AES_BLOCK_SIZE];
+#ifdef WOLFSSL_SMALL_STACK
+    Aes* aes = NULL;
+#else
+    Aes aes[1];
+#endif
+    int aes_inited = 0;
+
+    /* Validate parameters. */
+    if ((key == NULL) || (keySz > AES_256_KEY_SIZE) || (salt == NULL) ||
+            (saltSz > WC_SRTP_MAX_SALT) || (kdrIdx < -1) || (kdrIdx > 24) ||
+            (outKey == NULL)) {
+        ret = BAD_FUNC_ARG;
+    }
+
+#ifdef WOLFSSL_SMALL_STACK
+    if (ret == 0) {
+        aes = (Aes*)XMALLOC(sizeof(Aes), NULL, DYNAMIC_TYPE_CIPHER);
+        if (aes == NULL) {
+            ret = MEMORY_E;
+        }
+    }
+    if (aes != NULL)
+#endif
+    {
+        XMEMSET(aes, 0, sizeof(Aes));
+    }
+
+    /* Setup AES object. */
+    if (ret == 0) {
+        ret = wc_AesInit(aes, NULL, INVALID_DEVID);
+    }
+    if (ret == 0) {
+        aes_inited = 1;
+        ret = wc_AesSetKey(aes, key, keySz, NULL, AES_ENCRYPTION);
+    }
+
+    /* Calculate first block that can be used in each derivation. */
+    if (ret == 0) {
+        wc_srtp_kdf_first_block(salt, saltSz, kdrIdx, index, WC_SRTP_INDEX_LEN,
+            block);
+    }
+    if (ret == 0) {
+        /* Calculate key. */
+        ret = wc_srtp_kdf_derive_key(block, WC_SRTP_INDEX_LEN, label, outKey,
+            outKeySz, aes);
+    }
+
+    if (aes_inited)
+        wc_AesFree(aes);
+#ifdef WOLFSSL_SMALL_STACK
+    XFREE(aes, NULL, DYNAMIC_TYPE_CIPHER);
+#endif
+    return ret;
+
+}
+
+/* Derive key with label using SRTCP KDF algorithm.
+ *
+ * SP 800-135 (RFC 3711).
+ *
+ * @param [in]  key       Key to use with encryption.
+ * @param [in]  keySz     Size of key in bytes.
+ * @param [in]  salt      Random non-secret value.
+ * @param [in]  saltSz    Size of random in bytes.
+ * @param [in]  kdrIdx    Key derivation rate index. kdr = 0 when -1, otherwise
+ *                        kdr = 2^kdrIdx. See wc_SRTP_KDF_kdr_to_idx()
+ * @param [in]  index     Index value to XOR in.
+ * @param [in]  label     Label to use when deriving key.
+ * @param [out] outKey    Derived key.
+ * @param [in]  outKeySz  Size of derived key in bytes.
+ * @return  BAD_FUNC_ARG when key, salt or outKey is NULL.
+ * @return  BAD_FUNC_ARG when key length is not 16, 24 or 32.
+ * @return  BAD_FUNC_ARG when saltSz is larger than 14.
+ * @return  BAD_FUNC_ARG when kdrIdx is less than -1 or larger than 24.
+ * @return  MEMORY_E on dynamic memory allocation failure.
+ * @return  0 on success.
+ */
+int wc_SRTCP_KDF_label(const byte* key, word32 keySz, const byte* salt,
+        word32 saltSz, int kdrIdx, const byte* index, byte label, byte* outKey,
+        word32 outKeySz)
+{
+    int ret = 0;
+    byte block[AES_BLOCK_SIZE];
+#ifdef WOLFSSL_SMALL_STACK
+    Aes* aes = NULL;
+#else
+    Aes aes[1];
+#endif
+    int aes_inited = 0;
+
+    /* Validate parameters. */
+    if ((key == NULL) || (keySz > AES_256_KEY_SIZE) || (salt == NULL) ||
+            (saltSz > WC_SRTP_MAX_SALT) || (kdrIdx < -1) || (kdrIdx > 24) ||
+            (outKey == NULL)) {
+        ret = BAD_FUNC_ARG;
+    }
+
+#ifdef WOLFSSL_SMALL_STACK
+    if (ret == 0) {
+        aes = (Aes*)XMALLOC(sizeof(Aes), NULL, DYNAMIC_TYPE_CIPHER);
+        if (aes == NULL) {
+            ret = MEMORY_E;
+        }
+    }
+    if (aes != NULL)
+#endif
+    {
+        XMEMSET(aes, 0, sizeof(Aes));
+    }
+
+    /* Setup AES object. */
+    if (ret == 0) {
+        ret = wc_AesInit(aes, NULL, INVALID_DEVID);
+    }
+    if (ret == 0) {
+        aes_inited = 1;
+        ret = wc_AesSetKey(aes, key, keySz, NULL, AES_ENCRYPTION);
+    }
+
+    /* Calculate first block that can be used in each derivation. */
+    if (ret == 0) {
+        wc_srtp_kdf_first_block(salt, saltSz, kdrIdx, index, WC_SRTCP_INDEX_LEN,
+            block);
+    }
+    if (ret == 0) {
+        /* Calculate key. */
+        ret = wc_srtp_kdf_derive_key(block, WC_SRTCP_INDEX_LEN, label, outKey,
+            outKeySz, aes);
+    }
+
+    if (aes_inited)
+        wc_AesFree(aes);
+#ifdef WOLFSSL_SMALL_STACK
+    XFREE(aes, NULL, DYNAMIC_TYPE_CIPHER);
+#endif
+    return ret;
+
+}
+
+/* Converts a kdr value to an index to use in SRTP/SRTCP KDF API.
+ *
+ * @param [in] kdr  Key derivation rate to convert.
+ * @return  Key derivation rate as an index.
+ */
+int wc_SRTP_KDF_kdr_to_idx(word32 kdr)
+{
+    int idx = -1;
+
+    /* Keep shifting value down and incrementing index until top bit is gone. */
+    while (kdr != 0) {
+        kdr >>= 1;
+        idx++;
+    }
+
+    /* Index of top bit set. */
+    return idx;
+}
+#endif /* WC_SRTP_KDF */
 
 #endif /* NO_KDF */

@@ -1174,7 +1174,7 @@ ulonglong ha_connect::table_flags() const
 //                   HA_FAST_KEY_READ |  causes error when sorting (???)
                      HA_NO_TRANSACTIONS | HA_DUPLICATE_KEY_NOT_IN_ORDER |
                      HA_NO_BLOBS | HA_MUST_USE_TABLE_CONDITION_PUSHDOWN |
-                     HA_REUSES_FILE_NAMES;
+                     HA_REUSES_FILE_NAMES | HA_NO_ONLINE_ALTER;
   ha_connect *hp= (ha_connect*)this;
   PTOS        pos= hp->GetTableOptionStruct();
 
@@ -6454,6 +6454,9 @@ char *ha_connect::GetDBfromName(const char *name)
   ha_create_table() in handle.cc
 */
 
+/* Stack size 25608 in clang */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
+
 int ha_connect::create(const char *name, TABLE *table_arg,
                        HA_CREATE_INFO *create_info)
 {
@@ -6998,6 +7001,7 @@ int ha_connect::create(const char *name, TABLE *table_arg,
   table= st;
   DBUG_RETURN(rc);
 } // end of create
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 /**
   Used to check whether a file based outward table can be populated by
@@ -7005,6 +7009,10 @@ int ha_connect::create(const char *name, TABLE *table_arg,
   - file does not exist or is void
   - user has file privilege
 */
+
+/* Stack size 16664 in clang */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
+
 bool ha_connect::FileExists(const char *fn, bool bf)
 {
   if (!fn || !*fn)
@@ -7055,6 +7063,7 @@ bool ha_connect::FileExists(const char *fn, bool bf)
 
   return true;
 } // end of FileExists
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 // Called by SameString and NoFieldOptionChange
 bool ha_connect::CheckString(PCSZ str1, PCSZ str2)
@@ -7397,7 +7406,8 @@ int ha_connect::multi_range_read_next(range_id_t *range_info)
 ha_rows ha_connect::multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq,
                                                void *seq_init_param,
                                                uint n_ranges, uint *bufsz,
-                                               uint *flags, Cost_estimate *cost)
+                                                uint *flags, ha_rows limit,
+                                                Cost_estimate *cost)
 {
   /*
     This call is here because there is no location where this->table would
@@ -7411,7 +7421,7 @@ ha_rows ha_connect::multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq,
     *flags|= HA_MRR_USE_DEFAULT_IMPL;
 
   ha_rows rows= ds_mrr.dsmrr_info_const(keyno, seq, seq_init_param, n_ranges,
-                                        bufsz, flags, cost);
+                                        bufsz, flags, limit, cost);
   xp->g->Mrr= !(*flags & HA_MRR_USE_DEFAULT_IMPL);
   return rows;
 } // end of multi_range_read_info_const
