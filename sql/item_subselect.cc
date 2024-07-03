@@ -42,6 +42,7 @@
 #include "sql_parse.h"                          // check_stack_overrun
 #include "sql_cte.h"
 #include "sql_test.h"
+#include "opt_trace.h"
 
 double get_post_group_estimate(JOIN* join, double join_op_rows);
 
@@ -567,6 +568,9 @@ void Item_subselect::recalc_used_tables(st_select_lex *new_parent,
   estimate of the number of rows the subquery will access during execution.
   This measure is used instead of JOIN::read_time, because it is considered
   to be much more reliable than the cost estimate.
+
+  Note: the logic in this function must agree with
+  JOIN::init_join_cache_and_keyread().
 
   @return true if the subquery is expensive
   @return false otherwise
@@ -1606,8 +1610,9 @@ Item_exists_subselect::Item_exists_subselect(THD *thd,
 {
   DBUG_ENTER("Item_exists_subselect::Item_exists_subselect");
 
-
   init(select_lex, new (thd->mem_root) select_exists_subselect(thd, this));
+  select_lex->distinct= 1;
+  select_lex->master_unit()->distinct= 1;
   max_columns= UINT_MAX;
   null_value= FALSE; //can't be NULL
   base_flags&= ~item_base_t::MAYBE_NULL; //can't be NULL
@@ -1658,6 +1663,39 @@ Item_in_subselect::Item_in_subselect(THD *thd, Item * left_exp,
       Item_row(thd, static_cast<Item_row*>(left_exp));
   func= &eq_creator;
   init(select_lex, new (thd->mem_root) select_exists_subselect(thd, this));
+  select_lex->distinct= 1;
+
+  /*
+    If the IN subquery (xxx IN (SELECT ...) is a join without grouping,
+    we don't need duplicates from the tables it is joining. These
+    tables can be derived tables, like shown in the following
+    example. In this case, it's useful to indicate that we don't need
+    duplicates from them either.
+
+    Example:
+     col IN (SELECT ...   -- this is the select_lex
+              FROM
+                (SELECT ... FROM t1) AS t1, -- child1, first_inner_init().
+                (SELECT ... FROM t2) AS t2, -- child2
+              WHERE
+                ...
+            )
+
+     We don't need duplicates from either child1 or child2.
+     We only indicate this to child1 (select_lex->first_inner_unit()), as that
+     catches most of practically important use cases.
+
+     (The check for item==NULL is to make sure the subquery is a derived table
+     and not any other kind of subquery like another IN (SELECT ...) or a scalar-
+     context (SELECT 'foo'))
+  */
+
+  select_lex->master_unit()->distinct= 1;
+  if (!select_lex->with_sum_func &&
+      select_lex->first_inner_unit() &&
+      select_lex->first_inner_unit()->item == NULL)
+    select_lex->first_inner_unit()->distinct= 1;
+
   max_columns= UINT_MAX;
   set_maybe_null();
   reset();
@@ -1685,6 +1723,16 @@ Item_allany_subselect::Item_allany_subselect(THD *thd, Item * left_exp,
       Item_row(thd, static_cast<Item_row*>(left_exp));
   func= func_creator(all_arg);
   init(select_lex, new (thd->mem_root) select_exists_subselect(thd, this));
+  select_lex->distinct= 1;
+  /*
+    If this is is 'xxx IN (SELECT ...) mark that the we are only interested in
+    unique values for the select
+  */
+  select_lex->master_unit()->distinct= 1;
+  if (!select_lex->with_sum_func &&
+      select_lex->first_inner_unit() &&
+      select_lex->first_inner_unit()->item == NULL)
+    select_lex->first_inner_unit()->distinct= 1;
   max_columns= 1;
   reset();
   //if test_limit will fail then error will be reported to client
@@ -2919,7 +2967,9 @@ bool Item_exists_subselect::select_prepare_to_be_in()
   if (!optimizer &&
       (thd->lex->sql_command == SQLCOM_SELECT ||
        thd->lex->sql_command == SQLCOM_UPDATE_MULTI ||
-       thd->lex->sql_command == SQLCOM_DELETE_MULTI) &&
+       thd->lex->sql_command == SQLCOM_DELETE_MULTI ||
+       thd->lex->sql_command == SQLCOM_UPDATE ||
+       thd->lex->sql_command == SQLCOM_DELETE) &&
       !unit->first_select()->is_part_of_union() &&
       optimizer_flag(thd, OPTIMIZER_SWITCH_EXISTS_TO_IN) &&
       (is_top_level_item() ||
@@ -3281,8 +3331,12 @@ bool Item_exists_subselect::exists2in_processor(void *opt_arg)
           if (eqs.at(i).outer_exp->
               walk(&Item::find_item_processor, TRUE, upper->item))
             break;
+        DBUG_ASSERT(thd->stmt_arena->is_stmt_prepare_or_first_stmt_execute() ||
+                    thd->stmt_arena->is_conventional());
+        DBUG_ASSERT(thd->stmt_arena->mem_root == thd->mem_root);
         if (i == (uint)eqs.elements() &&
-            (in_subs->upper_refs.push_back(upper, thd->stmt_arena->mem_root)))
+            (in_subs->upper_refs.push_back(
+               upper, thd->mem_root)))
           goto out;
       }
     }
@@ -3311,6 +3365,14 @@ bool Item_exists_subselect::exists2in_processor(void *opt_arg)
     set possible optimization strategies
   */
   in_subs->emb_on_expr_nest= emb_on_expr_nest;
+
+  {
+    OPT_TRACE_TRANSFORM(thd, trace_wrapper, trace_transform,
+  		        in_subs->get_select_lex()->select_number,
+  			"EXISTS (SELECT)", "IN (SELECT)");
+    trace_transform.add( "upper_not", ( upper_not?true:false ) );
+  }
+
   res= check_and_do_in_subquery_rewrites(join);
   first_select->join->prepare_stage2();
 
@@ -3989,14 +4051,14 @@ bool subselect_union_engine::fix_length_and_dec(Item_cache **row)
 
   if (unit->first_select()->item_list.elements == 1)
   {
-    if (set_row(unit->types, row))
+    if (set_row(unit->item_list, row))
       return TRUE;
     item->collation.set(row[0]->collation);
   }
   else
   {
     bool maybe_null_saved= maybe_null;
-    if (set_row(unit->types, row))
+    if (set_row(unit->item_list, row))
       return TRUE;
     maybe_null= maybe_null_saved;
   }
@@ -4020,6 +4082,7 @@ int subselect_single_select_engine::exec()
   char const *save_where= thd->where;
   SELECT_LEX *save_select= thd->lex->current_select;
   thd->lex->current_select= select_lex;
+  bool exec_error= 0;
   DBUG_ENTER("subselect_single_select_engine::exec");
 
   if (join->optimization_state == JOIN::NOT_OPTIMIZED)
@@ -4111,7 +4174,7 @@ int subselect_single_select_engine::exec()
       }
     }
     
-    join->exec();
+    exec_error= join->exec();
 
     /* Enable the optimizations back */
     for (JOIN_TAB **ptab= changed_tabs; ptab != last_changed_tab; ptab++)
@@ -4129,7 +4192,7 @@ int subselect_single_select_engine::exec()
       item->make_const();
     thd->where= save_where;
     thd->lex->current_select= save_select;
-    DBUG_RETURN(join->error || thd->is_fatal_error || thd->is_error());
+    DBUG_RETURN(exec_error || thd->is_error());
   }
   thd->where= save_where;
   thd->lex->current_select= save_select;
@@ -5226,7 +5289,7 @@ bool subselect_hash_sj_engine::init(List<Item> *tmp_columns, uint subquery_id)
     //fprintf(stderr, "Q: %s\n", current_thd->query());
     DBUG_ASSERT(0);
     DBUG_ASSERT(
-      tmp_table->s->uniques ||
+      (tmp_table->key_info->flags & HA_UNIQUE_HASH) ||
       tmp_table->key_info->key_length >= tmp_table->file->max_key_length() ||
       tmp_table->key_info->user_defined_key_parts >
       tmp_table->file->max_key_parts());
@@ -5680,9 +5743,8 @@ int subselect_hash_sj_engine::exec()
   /* The subquery should be optimized, and materialized only once. */
   DBUG_ASSERT(materialize_join->optimization_state == JOIN::OPTIMIZATION_DONE &&
               !is_materialized);
-  materialize_join->exec();
-  if (unlikely((res= MY_TEST(materialize_join->error || thd->is_fatal_error ||
-                             thd->is_error()))))
+  res= materialize_join->exec();
+  if (unlikely((res= (res || thd->is_error()))))
     goto err;
 
   /*
@@ -6712,9 +6774,10 @@ exists_complementing_null_row(MY_BITMAP *keys_to_complement)
     return FALSE;
   }
 
-  return bitmap_exists_intersection((const MY_BITMAP**) null_bitmaps,
+  return bitmap_exists_intersection(null_bitmaps,
                                     count_null_keys,
-                                    (uint)highest_min_row, (uint)lowest_max_row);
+                                    (uint)highest_min_row,
+                                    (uint)lowest_max_row);
 }
 
 

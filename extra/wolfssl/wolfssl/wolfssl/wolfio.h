@@ -26,6 +26,8 @@
 #ifndef WOLFSSL_IO_H
 #define WOLFSSL_IO_H
 
+#include <wolfssl/ssl.h>
+
 #ifdef __cplusplus
     extern "C" {
 #endif
@@ -64,6 +66,8 @@
             #include <errno.h>
             #define LWIP_PROVIDE_ERRNO 1
         #endif
+    #elif defined(ARDUINO)
+        /* TODO Add specific boards */
     #elif defined(FREESCALE_MQX)
         #include <posix.h>
         #include <rtcs.h>
@@ -116,8 +120,6 @@
         #include <errno.h>
         #include <unistd.h>
         #include <fcntl.h>
-        #include <netdb.h>
-        #include <sys/ioctl.h>
     #elif defined(WOLFSSL_SGX)
         #include <errno.h>
     #elif defined(WOLFSSL_APACHE_MYNEWT) && !defined(WOLFSSL_LWIP)
@@ -159,17 +161,16 @@
             #include <sys/socket.h>
             #include <arpa/inet.h>
             #include <netinet/in.h>
-            #include <netdb.h>
             #ifdef __PPU
                 #include <netex/errno.h>
             #else
-                #include <sys/ioctl.h>
             #endif
         #endif
     #endif
 
     #if defined(WOLFSSL_RENESAS_RA6M3G) || defined(WOLFSSL_RENESAS_RA6M3) ||\
-                    defined(WOLFSSL_RENESAS_RA6M4)
+                    defined(WOLFSSL_RENESAS_RA6M4) || \
+                    defined(WOLFSSL_RENESAS_RZN2L)
       /* Uses FREERTOS_TCP */
         #include <errno.h>
     #endif
@@ -315,6 +316,12 @@
     #include <network.h>
     #define SEND_FUNCTION net_send
     #define RECV_FUNCTION net_recv
+#elif defined(WOLFSSL_ESPIDF)
+    #define SEND_FUNCTION send
+    #define RECV_FUNCTION recv
+    #if !defined(HAVE_SOCKADDR) && !defined(WOLFSSL_NO_SOCK)
+        #define HAVE_SOCKADDR
+    #endif
 #elif defined(WOLFSSL_LWIP) && !defined(WOLFSSL_APACHE_MYNEWT)
     #define SEND_FUNCTION lwip_send
     #define RECV_FUNCTION lwip_recv
@@ -381,6 +388,13 @@
             #define XSOCKLENT socklen_t
         #endif
     #endif
+    #ifndef XSOCKOPT_TYPE_OPTVAL_TYPE
+        #ifdef USE_WINDOWS_API
+            #define XSOCKOPT_TYPE_OPTVAL_TYPE void*
+        #else
+            #define XSOCKOPT_TYPE_OPTVAL_TYPE char*
+        #endif
+    #endif
 
     /* Socket Addr Support */
     #ifdef HAVE_SOCKADDR
@@ -429,7 +443,7 @@ WOLFSSL_API  int wolfIO_Recv(SOCKET_T sd, char *buf, int sz, int rdFlags);
         extern int closesocket(int);
         #define CloseSocket(s) closesocket(s)
     #endif
-    #define StartTCP()
+    #define StartTCP() WC_DO_NOTHING
 #elif defined(FUSION_RTOS)
     #ifndef CloseSocket
         #define CloseSocket(s) do {                     \
@@ -441,7 +455,7 @@ WOLFSSL_API  int wolfIO_Recv(SOCKET_T sd, char *buf, int sz, int rdFlags);
     #ifndef CloseSocket
         #define CloseSocket(s) close(s)
     #endif
-    #define StartTCP()
+    #define StartTCP() WC_DO_NOTHING
     #ifdef FREERTOS_TCP_WINSIM
         extern int close(int);
     #endif

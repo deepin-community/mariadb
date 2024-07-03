@@ -320,8 +320,6 @@ repeat(select 1) into outfile 'b2';
 insert into test.t1 values (repeat("b2",3), x);
 set x = x-1;
 until x = 0 end repeat|
-Warnings:
-Warning	1287	'<select expression> INTO <destination>;' is deprecated and will be removed in a future release. Please use 'SELECT <select list> INTO <destination> FROM...' instead
 drop procedure b2|
 drop procedure if exists c|
 create procedure c(x int)
@@ -4283,9 +4281,6 @@ select i as  'A local variable in a nested compound statement takes precedence o
 end;
 end;
 end|
-Warnings:
-Warning	1287	'<select expression> INTO <destination>;' is deprecated and will be removed in a future release. Please use 'SELECT <select list> INTO <destination> FROM...' instead
-Warning	1287	'<select expression> INTO <destination>;' is deprecated and will be removed in a future release. Please use 'SELECT <select list> INTO <destination> FROM...' instead
 call bug5967("a - stored procedure parameter")|
 a
 a - stored procedure parameter
@@ -5779,8 +5774,6 @@ end;
 select 1 from no_such_view limit 1 into x;
 return x;
 end|
-Warnings:
-Warning	1287	'<select expression> INTO <destination>;' is deprecated and will be removed in a future release. Please use 'SELECT <select list> INTO <destination> FROM...' instead
 create function func_8407_b() returns int
 begin
 declare x int default 0;
@@ -6782,7 +6775,7 @@ call p1$
 a
 alter table t1 add b integer$
 call p1$
-a
+a	b
 drop table t1;
 drop procedure p1;
 # ------------------------------------------------------------------
@@ -7179,15 +7172,14 @@ CREATE VIEW t1 AS SELECT 10 AS f1;
 CALL p1(1);
 ERROR HY000: The target table t1 of the INSERT is not insertable-into
 CREATE TEMPORARY TABLE t1 (f1 INT);
-# t1 still refers to the view since it was inlined
 CALL p1(2);
-ERROR HY000: The target table t1 of the INSERT is not insertable-into
 DROP VIEW t1;
 # t1 now refers to the temporary table
 CALL p1(3);
 # Check which values were inserted into the temp table.
 SELECT * FROM t1;
 f1
+2
 3
 DROP TEMPORARY TABLE t1;
 DROP PROCEDURE p1;
@@ -7247,12 +7239,12 @@ create table t1 (a int);
 insert into t1 (a) values (1), (2), (3), (4), (5);
 #
 # Do we correctly resolve identifiers in LIMIT?
-# Since DROP and CREATE did not invalidate
-# the SP cache, we can't test until
-# we drop and re-create the procedure.
+# DROP and CREATE results in SP statement recompilation
+# so second execution of the procedure p1() doesn't lead
+# to issuing an error
 #
 call p1();
-ERROR 42S22: Unknown column 'test.t1.c1' in 'field list'
+a
 # 
 # Drop and recreate the procedure, then repeat
 #
@@ -8955,6 +8947,21 @@ DROP FUNCTION f1;
 DROP FUNCTION f2;
 DROP FUNCTION f3;
 DROP VIEW v1;
+#
+# MDEV-33270: Call of SP invoking another SP with a parameter
+#             requiring type conversion
+#
+SET NAMES latin1;
+CREATE PROCEDURE p1 (a text) BEGIN SELECT a; END |
+CREATE PROCEDURE p2 () CALL p1(concat('x',_utf8'x')) |
+CALL p2();
+a
+xx
+CALL p2();
+a
+xx
+DROP PROCEDURE p1;
+DROP PROCEDURE p2;
 # End of 10.4 tests
 #
 #
@@ -9008,6 +9015,79 @@ BEGIN NOT ATOMIC DECLARE r ROW TYPE OF t1 DEFAULT (SELECT * FROM t1); SELECT r.a
 r.a
 1
 SET SESSION log_slow_verbosity= @tmp;
+# 
+# MDEV-31616 Problems with a stored function EMPTY() on upgrade to 10.6.
+# 
+CREATE OR REPLACE FUNCTION empty(a VARCHAR(128)) RETURNS int RETURN LENGTH(a)=0;
+Warnings:
+Note	1585	This function 'empty' has the same name as a native function
+SELECT empty('1');
+empty('1')
+0
+Warnings:
+Note	1585	This function 'empty' has the same name as a native function
+DROP FUNCTION empty;
+CREATE OR REPLACE FUNCTION json_table(a VARCHAR(128)) RETURNS int RETURN LENGTH(a)=0;
+Warnings:
+Note	1585	This function 'json_table' has the same name as a native function
+SELECT json_table('1');
+json_table('1')
+0
+Warnings:
+Note	1585	This function 'json_table' has the same name as a native function
+DROP FUNCTION json_table;
+CREATE OR REPLACE FUNCTION nested(a VARCHAR(128)) RETURNS int RETURN LENGTH(a)=0;
+Warnings:
+Note	1585	This function 'nested' has the same name as a native function
+SELECT nested('1');
+nested('1')
+0
+Warnings:
+Note	1585	This function 'nested' has the same name as a native function
+DROP FUNCTION nested;
+CREATE OR REPLACE FUNCTION ordinality(a VARCHAR(128)) RETURNS int RETURN LENGTH(a)=0;
+Warnings:
+Note	1585	This function 'ordinality' has the same name as a native function
+SELECT ordinality('1');
+ordinality('1')
+0
+Warnings:
+Note	1585	This function 'ordinality' has the same name as a native function
+DROP FUNCTION ordinality;
+CREATE OR REPLACE FUNCTION path(a VARCHAR(128)) RETURNS int RETURN LENGTH(a)=0;
+Warnings:
+Note	1585	This function 'path' has the same name as a native function
+SELECT path('1');
+path('1')
+0
+Warnings:
+Note	1585	This function 'path' has the same name as a native function
+DROP FUNCTION path;
+CREATE OR REPLACE FUNCTION fast(a VARCHAR(128)) RETURNS int RETURN LENGTH(a)=0;
+Warnings:
+Note	1585	This function 'fast' has the same name as a native function
+SELECT fast('1');
+fast('1')
+0
+Warnings:
+Note	1585	This function 'fast' has the same name as a native function
+DROP FUNCTION fast;
+CREATE OR REPLACE FUNCTION relay(a VARCHAR(128)) RETURNS int RETURN LENGTH(a)=0;
+Warnings:
+Note	1585	This function 'relay' has the same name as a native function
+SELECT relay('1');
+relay('1')
+0
+Warnings:
+Note	1585	This function 'relay' has the same name as a native function
+DROP FUNCTION relay;
+CREATE OR REPLACE FUNCTION database() RETURNS int RETURN 333;
+Warnings:
+Note	1585	This function 'database' has the same name as a native function
+SELECT database();
+database()
+test
+DROP FUNCTION database;
 DROP TABLE t1;
 #
 # MDEV-28129: MariaDB UAF issue at lex_end_nops(LEX*)

@@ -28,6 +28,7 @@
 #include "field.h"                              /* Derivation */
 #include "sql_type.h"
 #include "sql_time.h"
+#include "sql_schema.h"
 #include "mem_root_array.h"
 
 #include "cset_narrowing.h"
@@ -945,7 +946,7 @@ protected:
                                             const Tmp_field_param *param,
                                             bool is_explicit_null);
 
-  void raise_error_not_evaluable();
+  virtual void raise_error_not_evaluable();
   void push_note_converted_to_negative_complement(THD *thd);
   void push_note_converted_to_positive_complement(THD *thd);
 
@@ -1015,6 +1016,19 @@ public:
     expressions with subqueries in the ORDER/GROUP clauses.
   */
   String *val_str() { return val_str(&str_value); }
+  String *val_str_null_to_empty(String *to)
+  {
+    String *res= val_str(to);
+    if (res)
+      return res;
+    to->set_charset(collation.collation);
+    to->length(0);
+    return to;
+  }
+  String *val_str_null_to_empty(String *to, bool null_to_empty)
+  {
+    return null_to_empty ? val_str_null_to_empty(to) : val_str(to);
+  }
   virtual Item_func *get_item_func() { return NULL; }
 
   const MY_LOCALE *locale_from_val_str();
@@ -1038,7 +1052,7 @@ public:
 
   LEX_CSTRING name;			/* Name of item */
   /* Original item name (if it was renamed)*/
-  const char *orig_name;
+  LEX_CSTRING orig_name;
 
   /* All common bool variables for an Item is stored here */
   item_base_t base_flags;
@@ -1986,7 +2000,8 @@ public:
                                        QT_ITEM_IDENT_SKIP_DB_NAMES |
                                        QT_ITEM_IDENT_SKIP_TABLE_NAMES |
                                        QT_NO_DATA_EXPANSION |
-                                       QT_TO_SYSTEM_CHARSET),
+                                       QT_TO_SYSTEM_CHARSET |
+                                       QT_FOR_FRM),
                      LOWEST_PRECEDENCE);
   }
   virtual void print(String *str, enum_query_type query_type);
@@ -2502,6 +2517,10 @@ public:
   { return this; }
   virtual Item *multiple_equality_transformer(THD *thd, uchar *arg)
   { return this; }
+  virtual Item* varchar_upper_cmp_transformer(THD *thd, uchar *arg)
+  { return this; }
+  virtual Item* date_conds_transformer(THD *thd, uchar *arg)
+  { return this; }
   virtual bool expr_cache_is_needed(THD *) { return FALSE; }
   virtual Item *safe_charset_converter(THD *thd, CHARSET_INFO *tocs);
   bool needs_charset_converter(uint32 length, CHARSET_INFO *tocs) const
@@ -2720,6 +2739,18 @@ public:
     Checks if this item consists in the left part of arg IN subquery predicate
   */
   bool pushable_equality_checker_for_subquery(uchar *arg);
+
+  /**
+    This method is to set relationship between a positional parameter
+    represented by the '?' and an actual argument value passed to the
+    call of PS/SP by the USING clause. The method is overridden in classes
+    Item_param and Item_default_value.
+  */
+  virtual bool associate_with_target_field(THD *, Item_field *)
+  {
+    DBUG_ASSERT(fixed());
+    return false;
+  }
 };
 
 MEM_ROOT *get_thd_memroot(THD *thd);
@@ -3547,8 +3578,9 @@ public:
   */
   bool collect_outer_ref_processor(void *arg) override;
   friend bool insert_fields(THD *thd, Name_resolution_context *context,
-                            const char *db_name,
-                            const char *table_name, List_iterator<Item> *it,
+                            const LEX_CSTRING &db_name,
+                            const LEX_CSTRING &table_name,
+                            List_iterator<Item> *it,
                             bool any_privileges, bool returning_field);
 };
 
@@ -3769,6 +3801,7 @@ public:
   Item_equal *get_item_equal() override { return item_equal; }
   void set_item_equal(Item_equal *item_eq) override { item_equal= item_eq; }
   Item_equal *find_item_equal(COND_EQUAL *cond_equal) override;
+  bool contains(Field *field);
   Item* propagate_equal_fields(THD *, const Context &, COND_EQUAL *) override;
   Item *replace_equal_field(THD *thd, uchar *arg) override;
   uint32 max_display_length() const override
@@ -4121,6 +4154,12 @@ public:
   Item_param(THD *thd, const LEX_CSTRING *name_arg,
              uint pos_in_query_arg, uint len_in_query_arg);
 
+  void cleanup() override
+  {
+    m_default_field= NULL;
+    Item::cleanup();
+  }
+
   Type type() const override
   {
     // Don't pretend to be a constant unless value for this item is set.
@@ -4325,6 +4364,10 @@ public:
   void sync_clones();
   bool register_clone(Item_param *i) { return m_clones.push_back(i); }
 
+  void raise_error_not_evaluable() override
+  {
+    invalid_default_param();
+  }
 private:
   void invalid_default_param() const;
   bool set_value(THD *thd, sp_rcontext *ctx, Item **it) override;
@@ -4335,6 +4378,17 @@ public:
   Item_param *get_item_param() override { return this; }
   void make_send_field(THD *thd, Send_field *field) override;
 
+  /**
+    See comments on @see Item::associate_with_target_field for method
+    description
+  */
+  bool associate_with_target_field(THD *, Item_field *field) override
+  {
+    m_associated_field= field;
+    return false;
+  }
+  bool assign_default(Field *field);
+
 private:
   Send_field *m_out_param_info;
   bool m_is_settable_routine_parameter;
@@ -4344,6 +4398,8 @@ private:
     synchronize the actual value of the parameter with the values of the clones.
   */
   Mem_root_array<Item_param *, true> m_clones;
+  Item_field *m_associated_field;
+  Field *m_default_field;
 };
 
 
@@ -4471,15 +4527,24 @@ protected:
   MYSQL_TIME ltime;
 public:
   Item_datetime(THD *thd): Item_int(thd, 0) { unsigned_flag=0; }
+  Item_datetime(THD *thd, const Datetime &dt, decimal_digits_t dec)
+   :Item_int(thd, 0),
+    ltime(*dt.get_mysql_time())
+  {
+    unsigned_flag= 0;
+    decimals= dec;
+  }
   int save_in_field(Field *field, bool no_conversions) override;
   longlong val_int() override;
   double val_real() override { return (double)val_int(); }
-  void set(longlong packed, enum_mysql_timestamp_type ts_type);
+  void set(const MYSQL_TIME *datetime) { ltime= *datetime; }
+  void set_from_packed(longlong packed, enum_mysql_timestamp_type ts_type);
   bool get_date(THD *thd, MYSQL_TIME *to, date_mode_t fuzzydate) override
   {
     *to= ltime;
     return false;
   }
+  void print(String *str, enum_query_type query_type) override;
 };
 
 
@@ -4995,9 +5060,23 @@ class Item_timestamp_literal: public Item_literal
 public:
   Item_timestamp_literal(THD *thd)
    :Item_literal(thd)
-  { }
+  {
+    collation= DTCollation_numeric();
+  }
+  Item_timestamp_literal(THD *thd,
+                         const Timestamp_or_zero_datetime &value,
+                         decimal_digits_t dec)
+   :Item_literal(thd),
+    m_value(value)
+  {
+    DBUG_ASSERT(value.is_zero_datetime() ||
+                !value.to_timestamp().fraction_remainder(dec));
+    collation= DTCollation_numeric();
+    decimals= dec;
+  }
   const Type_handler *type_handler() const override
   { return &type_handler_timestamp2; }
+  void print(String *str, enum_query_type query_type) override;
   int save_in_field(Field *field, bool) override
   {
     Timestamp_or_zero_datetime_native native(m_value, decimals);
@@ -5028,6 +5107,10 @@ public:
   bool val_native(THD *thd, Native *to) override
   {
     return m_value.to_native(to, decimals);
+  }
+  const Timestamp_or_zero_datetime &value() const
+  {
+    return m_value;
   }
   void set_value(const Timestamp_or_zero_datetime &value)
   {
@@ -5480,6 +5563,14 @@ public:
     if (walk_args(processor, walk_subquery, arg))
       return true;
     return (this->*processor)(arg);
+  }
+  /*
+    Built-in schema, e.g. mariadb_schema, oracle_schema, maxdb_schema
+  */
+  virtual const Schema *schema() const
+  {
+    // A function does not belong to a built-in schema by default
+    return NULL;
   }
   /*
     This method is used for debug purposes to print the name of an
@@ -6031,6 +6122,8 @@ class Item_direct_view_ref :public Item_direct_ref
     if (!view->is_inner_table_of_outer_join() ||
         !(null_ref_table= view->get_real_join_table()))
       null_ref_table= NO_NULL_TABLE;
+    if (null_ref_table && null_ref_table != NO_NULL_TABLE)
+      set_maybe_null();
   }
 
   bool check_null_ref()
@@ -6225,6 +6318,7 @@ public:
   Item *field_transformer_for_having_pushdown(THD *, uchar *) override
   { return this; }
   Item *remove_item_direct_ref() override { return this; }
+  void print(String *str, enum_query_type query_type) override;
 };
 
 
@@ -6670,6 +6764,8 @@ public:
 class Item_default_value : public Item_field
 {
   bool vcol_assignment_ok;
+  bool m_associated= false;
+
   void calculate();
 public:
   Item *arg= nullptr;
@@ -6738,6 +6834,15 @@ public:
     override;
   Field *create_tmp_field_ex(MEM_ROOT *root, TABLE *table, Tmp_field_src *src,
                              const Tmp_field_param *param) override;
+
+  /**
+    See comments on @see Item::associate_with_target_field for method
+    description
+  */
+  bool associate_with_target_field(THD *thd, Item_field *field) override;
+
+private:
+  bool tie_field(THD *thd);
 };
 
 
@@ -6937,6 +7042,14 @@ private:
 public:
   /* Next in list of all Item_trigger_field's in trigger */
   Item_trigger_field *next_trg_field;
+
+  /**
+    Pointer to the next list of Item_trigger_field objects. This pointer
+    is used to organize an intrusive list of lists of Item_trigger_field
+    objects managed by sp_head.
+  */
+  SQL_I_List<Item_trigger_field> *next_trig_field_list;
+
   /* Pointer to Table_trigger_list object for table of this trigger */
   Table_triggers_list *triggers;
   /* Is this item represents row from NEW or OLD row ? */
@@ -6971,7 +7084,8 @@ Item_trigger_field(THD *thd, Name_resolution_context *context_arg,
                      const LEX_CSTRING &field_name_arg,
                      privilege_t priv, const bool ro)
     :Item_field(thd, context_arg, field_name_arg),
-    table_grants(NULL),  next_trg_field(NULL),  triggers(NULL),
+    table_grants(nullptr),  next_trg_field(nullptr),
+    next_trig_field_list(nullptr), triggers(nullptr),
     row_version(row_ver_arg), field_idx(NO_CACHED_FIELD_INDEX),
     read_only (ro),  original_privilege(priv), want_privilege(priv)
   {
@@ -7799,7 +7913,7 @@ bool fix_escape_item(THD *thd, Item *escape_item, String *tmp_str,
 inline bool Virtual_column_info::is_equal(const Virtual_column_info* vcol) const
 {
   return type_handler()  == vcol->type_handler()
-      && stored_in_db == vcol->is_stored()
+      && is_stored() == vcol->is_stored()
       && expr->eq(vcol->expr, true);
 }
 

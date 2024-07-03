@@ -1,5 +1,6 @@
 # This tests not performed with embedded server
 -- source include/not_embedded.inc
+
 -- disable_ps_protocol
 use test;
 
@@ -92,10 +93,8 @@ DROP FUNCTION f3;
 --echo #
 --echo # Bug #26807 "set global event_scheduler=1" and --skip-grant-tables crashes server
 --echo #
---disable_warnings
+--error ER_OPTION_PREVENTS_STATEMENT
 set global event_scheduler=1;
---enable_warnings
-set global event_scheduler=0;
 
 --echo #
 --echo # Bug#26285 Selecting information_schema crahes server
@@ -176,12 +175,12 @@ drop user baz@baz;
 SELECT @@skip_grant_tables AS EXPECT_1;
 
 # Also check when the server starts without "--skip-grant-table" option
---let $restart_parameters = "--skip-skip-grant-tables"
+--let $restart_parameters = --skip-skip-grant-tables
 --source include/restart_mysqld.inc
 SELECT @@skip_grant_tables AS EXPECT_0;
 
 # Need to restart the server to restore the "--skip-grant-tables" state
---let $restart_parameters = "--skip-grant-tables"
+--let $restart_parameters = --skip-grant-tables
 --source include/restart_mysqld.inc
 
 --echo #

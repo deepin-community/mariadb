@@ -30,8 +30,9 @@
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/coding.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
+#include <stdio.h>
 
-#ifdef WOLFSSL_ASN_PRINT
+#if defined(WOLFSSL_ASN_PRINT) && !defined(NO_FILESYSTEM)
 
 /* Increment allocated data by this much. */
 #define DATA_INC_LEN    256
@@ -59,7 +60,7 @@ static Asn1 asn1;
  * @return  0 on success.
  * @return  1 on failure.
  */
-static int ReadFile(FILE* fp, unsigned char** pdata, word32* plen)
+static int asn1App_ReadFile(FILE* fp, unsigned char** pdata, word32* plen)
 {
     int ret = 0;
     word32 len = 0;
@@ -91,8 +92,6 @@ static int ReadFile(FILE* fp, unsigned char** pdata, word32* plen)
             /* Set data to new pointer. */
             data = p;
         }
-        /* Done with file. */
-        fclose(fp);
     }
 
     if (data != NULL) {
@@ -120,7 +119,7 @@ static int PrintDer(FILE* fp)
     unsigned char* data = NULL;
 
     /* Load DER/BER file. */
-    if (ReadFile(fp, &data, &len) != 0) {
+    if (asn1App_ReadFile(fp, &data, &len) != 0) {
         ret = 1;
     }
 
@@ -147,7 +146,7 @@ static int PrintBase64(FILE* fp)
     unsigned char* data = NULL;
 
     /* Load Base64 encoded file. */
-    if (ReadFile(fp, &data, &len) != 0) {
+    if (asn1App_ReadFile(fp, &data, &len) != 0) {
         ret = 1;
     }
 
@@ -181,8 +180,8 @@ static int FindPem(unsigned char* data, word32 offset, word32 len,
     word32* start, word32* end)
 {
     int ret = 0;
-    word32 i;
-    word32 j;
+    word32 i = 0;
+    word32 j = 0;
 
     /* Find header. */
     for (i = offset; i < len; i++) {
@@ -227,7 +226,7 @@ static int FindPem(unsigned char* data, word32 offset, word32 len,
     }
 
     if (ret == 0) {
-        /* Return start and end indeces. */
+        /* Return start and end indices. */
         *start = i;
         *end = j;
     }
@@ -250,7 +249,7 @@ static int PrintPem(FILE* fp, int pem_skip)
     word32 len = 0;
 
     /* Load PEM file. */
-    if (ReadFile(fp, &data, &len) != 0) {
+    if (asn1App_ReadFile(fp, &data, &len) != 0) {
         ret = 1;
     }
 
@@ -283,7 +282,7 @@ static int PrintPem(FILE* fp, int pem_skip)
 
 /* Usage lines to show. */
 const char* usage[] = {
-    "asn1 [OPTOIN]... [FILE]",
+    "asn1 [OPTION]... [FILE]",
     "Display a human-readable version of a DER/BER encoding.",
     "",
     "Options:",
@@ -317,8 +316,8 @@ static void Usage(void)
 
 /* Main entry of ASN.1 printing program.
  *
- * @param [in] argc  Count of command line argements.
- * @param [in] argv  Command line argements.
+ * @param [in] argc  Count of command line arguments.
+ * @param [in] argv  Command line arguments.
  * @return  0 on success.
  * @return  1 on failure.
  */
@@ -328,7 +327,7 @@ int main(int argc, char* argv[])
     /* Default to reading STDIN. */
     FILE* fp = stdin;
     int file_format = FORMAT_DER;
-    int indent = 0;
+    word32 indent = 0;
     int pem_skip = 0;
 
     /* Reset options. */
@@ -375,7 +374,7 @@ int main(int argc, char* argv[])
             argc--;
             argv++;
             wc_Asn1PrintOptions_Set(&opts, ASN1_PRINT_OPT_LENGTH,
-                atoi(argv[0]));
+                (word32)atoi(argv[0]));
         }
         /* Do not show text representations of ASN.1 item data. */
         else if ((strcmp(argv[0], "-n") == 0) ||
@@ -397,7 +396,7 @@ int main(int argc, char* argv[])
             argc--;
             argv++;
             wc_Asn1PrintOptions_Set(&opts, ASN1_PRINT_OPT_OFFSET,
-                atoi(argv[0]));
+                (word32)atoi(argv[0]));
         }
         /* Show wolfSSL OID value for all OBJECT_IDs. */
         else if ((strcmp(argv[0], "-O") == 0) ||
@@ -430,7 +429,7 @@ int main(int argc, char* argv[])
             Usage();
             return 0;
         }
-        /* Unknown option dectection. */
+        /* Unknown option detection. */
         else if (argv[0][0] == '-') {
             fprintf(stderr, "Bad option: %s\n", argv[0]);
             Usage();
@@ -469,6 +468,10 @@ int main(int argc, char* argv[])
     if (ret != 0) {
         fprintf(stderr, "%s\n", wc_GetErrorString(ret));
     }
+
+    if (fp != stdin) {
+        fclose(fp);
+    }
     return (ret == 0) ? 0 : 1;
 }
 
@@ -476,8 +479,8 @@ int main(int argc, char* argv[])
 
 /* Main entry of ASN.1 printing program.
  *
- * @param [in] argc  Count of command line argements.
- * @param [in] argv  Command line argements.
+ * @param [in] argc  Count of command line arguments.
+ * @param [in] argv  Command line arguments.
  * @return  0 on success.
  * @return  1 on failure.
  */
@@ -485,10 +488,9 @@ int main(int argc, char* argv[])
 {
     (void)argc;
     (void)argv;
-    fprintf(stderr, "ASN.1 Parsing and Printing not compiled in.\n");
+    fprintf(stderr, "ASN.1 Parsing and Printing or file system not compiled"
+                    " in.\n");
     return 0;
 }
 
-#endif
-
-
+#endif /* WOLFSSL_ASN_PRINT && !defined(NO_FILESYSTEM)*/

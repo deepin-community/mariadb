@@ -49,6 +49,7 @@
 #define HA_OPEN_MERGE_TABLE		2048U
 #define HA_OPEN_FOR_CREATE              4096U
 #define HA_OPEN_FOR_DROP                (1U << 13) /* Open part of drop */
+#define HA_OPEN_GLOBAL_TMP_TABLE	(1U << 14) /* TMP table used by repliction */
 
 /*
   Allow opening even if table is incompatible as this is for ALTER TABLE which
@@ -105,7 +106,8 @@ enum ha_key_alg {
   HA_KEY_ALG_RTREE=	2,		/* R-tree, for spatial searches */
   HA_KEY_ALG_HASH=	3,		/* HASH keys (HEAP tables) */
   HA_KEY_ALG_FULLTEXT=	4,		/* FULLTEXT (MyISAM tables) */
-  HA_KEY_ALG_LONG_HASH= 5		/* long BLOB keys */
+  HA_KEY_ALG_LONG_HASH= 5,		/* long BLOB keys */
+  HA_KEY_ALG_UNIQUE_HASH= 6		/* Internal UNIQUE hash (Aria) */
 };
 
         /* Storage media types */ 
@@ -274,10 +276,17 @@ enum ha_base_keytype {
 #define HA_SPATIAL		1024U   /* For spatial search */
 #define HA_NULL_ARE_EQUAL	2048U	/* NULL in key are cmp as equal */
 #define HA_GENERATED_KEY	8192U	/* Automatically generated key */
+/* 
+  Part of unique hash key. Used only for temporary (work) tables so is not
+  written to .frm files.
+*/
+#define HA_UNIQUE_HASH          262144U
 
         /* The combination of the above can be used for key type comparison. */
-#define HA_KEYFLAG_MASK (HA_NOSAME | HA_AUTO_KEY | HA_FULLTEXT | \
-                         HA_SPATIAL | HA_NULL_ARE_EQUAL | HA_GENERATED_KEY)
+#define HA_KEYFLAG_MASK (HA_NOSAME | HA_AUTO_KEY | \
+                         HA_FULLTEXT | \
+                         HA_SPATIAL | HA_NULL_ARE_EQUAL | HA_GENERATED_KEY | \
+                         HA_UNIQUE_HASH)
 
 /*
   Key contains partial segments.
@@ -369,6 +378,12 @@ enum ha_base_keytype {
 #define HA_CREATE_INTERNAL_TABLE 256U
 #define HA_PRESERVE_INSERT_ORDER 512U
 #define HA_CREATE_NO_ROLLBACK    1024U
+/*
+  A temporary table that can be used by different threads, eg. replication
+  threads. This flag ensure that memory is not allocated with THREAD_SPECIFIC,
+  as we do for other temporary tables.
+*/
+#define HA_CREATE_GLOBAL_TMP_TABLE 2048U
 
 /* Flags used by start_bulk_insert */
 

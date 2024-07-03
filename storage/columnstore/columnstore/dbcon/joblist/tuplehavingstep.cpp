@@ -24,7 +24,7 @@
 using namespace std;
 
 #include <boost/shared_ptr.hpp>
-#include <boost/shared_array.hpp>
+
 #include <boost/uuid/uuid_io.hpp>
 using namespace boost;
 
@@ -408,4 +408,3 @@ void TupleHavingStep::formatMiniStats()
 }
 
 }  // namespace joblist
-// vim:ts=4 sw=4:

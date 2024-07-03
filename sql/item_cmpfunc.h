@@ -25,6 +25,7 @@
 
 #include "item_func.h"             /* Item_int_func, Item_bool_func */
 #include "item.h"
+#include "opt_rewrite_date_cmp.h"
 
 extern Item_result item_cmp_type(Item_result a,Item_result b);
 inline Item_result item_cmp_type(const Item *a, const Item *b)
@@ -57,6 +58,7 @@ class Arg_comparator: public Sql_alloc
                                    //   when one of arguments is NULL.
 
   int set_cmp_func(THD *thd, Item_func_or_sum *owner_arg,
+                   const Type_handler *compare_handler,
                    Item **a1, Item **a2);
 
   int compare_not_null_values(longlong val1, longlong val2)
@@ -95,11 +97,24 @@ public:
   bool set_cmp_func_decimal(THD *thd);
 
   inline int set_cmp_func(THD *thd, Item_func_or_sum *owner_arg,
-			  Item **a1, Item **a2, bool set_null_arg)
+                          const Type_handler *compare_handler,
+                          Item **a1, Item **a2, bool set_null_arg)
   {
     set_null= set_null_arg;
-    return set_cmp_func(thd, owner_arg, a1, a2);
+    return set_cmp_func(thd, owner_arg, compare_handler, a1, a2);
   }
+  int set_cmp_func(THD *thd, Item_func_or_sum *owner_arg,
+                   Item **a1, Item **a2, bool set_null_arg)
+  {
+    Item *tmp_args[2]= { *a1, *a2 };
+    Type_handler_hybrid_field_type tmp;
+    if (tmp.aggregate_for_comparison(owner_arg->func_name_cstring(),
+                                     tmp_args, 2, false))
+      return 1;
+    return set_cmp_func(thd, owner_arg, tmp.type_handler(),
+                        a1, a2, set_null_arg);
+  }
+
   inline int compare() { return (this->*func)(); }
 
   int compare_string();		 // compare args[0] & args[1]
@@ -414,6 +429,7 @@ public:
   void fix_after_pullout(st_select_lex *new_parent, Item **ref,
                          bool merge) override;
   bool invisible_mode();
+  bool walk(Item_processor processor, bool walk_subquery, void *arg) override;
   void reset_cache() { cache= NULL; }
   void print(String *str, enum_query_type query_type) override;
   void restore_first_argument();
@@ -561,9 +577,17 @@ public:
     return this;
   }
   bool fix_length_and_dec(THD *thd) override;
+  bool fix_length_and_dec_generic(THD *thd,
+                                  const Type_handler *compare_handler)
+  {
+    DBUG_ASSERT(args == tmp_arg);
+    return cmp.set_cmp_func(thd, this, compare_handler,
+                            tmp_arg, tmp_arg + 1, true/*set_null*/);
+  }
   int set_cmp_func(THD *thd)
   {
-    return cmp.set_cmp_func(thd, this, tmp_arg, tmp_arg + 1, true);
+    DBUG_ASSERT(args == tmp_arg);
+    return cmp.set_cmp_func(thd, this, tmp_arg, tmp_arg + 1, true/*set_null*/);
   }
   CHARSET_INFO *compare_collation() const override
   { return cmp.compare_collation(); }
@@ -788,6 +812,9 @@ public:
   friend class  Arg_comparator;
   Item *get_copy(THD *thd) override
   { return get_item_copy<Item_func_eq>(thd, this); }
+  Item* date_conds_transformer(THD *thd, uchar *arg) override
+  { return do_date_conds_transformation(thd, this); }
+  Item* varchar_upper_cmp_transformer(THD *thd, uchar *arg) override;
 };
 
 class Item_func_equal final :public Item_bool_rowready_func2
@@ -837,6 +864,8 @@ public:
   Item *negated_item(THD *thd) override;
   Item *get_copy(THD *thd) override
   { return get_item_copy<Item_func_ge>(thd, this); }
+  Item* date_conds_transformer(THD *thd, uchar *arg) override
+  { return do_date_conds_transformation(thd, this); }
 };
 
 
@@ -857,6 +886,8 @@ public:
   Item *negated_item(THD *thd) override;
   Item *get_copy(THD *thd) override
   { return get_item_copy<Item_func_gt>(thd, this); }
+  Item* date_conds_transformer(THD *thd, uchar *arg) override
+  { return do_date_conds_transformation(thd, this); }
 };
 
 
@@ -877,6 +908,8 @@ public:
   Item *negated_item(THD *thd) override;
   Item *get_copy(THD *thd) override
   { return get_item_copy<Item_func_le>(thd, this); }
+  Item* date_conds_transformer(THD *thd, uchar *arg) override
+  { return do_date_conds_transformation(thd, this); }
 };
 
 
@@ -897,6 +930,8 @@ public:
   Item *negated_item(THD *thd) override;
   Item *get_copy(THD *thd) override
   { return get_item_copy<Item_func_lt>(thd, this); }
+  Item* date_conds_transformer(THD *thd, uchar *arg) override
+  { return do_date_conds_transformation(thd, this); }
 };
 
 
@@ -1590,7 +1625,7 @@ public:
   {
     packed_longlong *val= reinterpret_cast<packed_longlong*>(base)+pos;
     Item_datetime *dt= static_cast<Item_datetime*>(item);
-    dt->set(val->val, type_handler()->mysql_timestamp_type());
+    dt->set_from_packed(val->val, type_handler()->mysql_timestamp_type());
   }
   friend int cmp_longlong(void *cmp_arg, packed_longlong *a,packed_longlong *b);
 };
@@ -2439,9 +2474,10 @@ public:
   Item_func_decode_oracle(THD *thd, List<Item> &list)
    :Item_func_case_simple(thd, list)
   { }
+  const Schema *schema() const override { return &oracle_schema_ref; }
   LEX_CSTRING func_name_cstring() const override
   {
-    static LEX_CSTRING name= {STRING_WITH_LEN("decode_oracle") };
+    static LEX_CSTRING name= {STRING_WITH_LEN("decode") };
     return name;
   }
   void print(String *str, enum_query_type query_type) override;
@@ -2638,6 +2674,7 @@ public:
   Item *in_predicate_to_in_subs_transformer(THD *thd, uchar *arg) override;
   Item *in_predicate_to_equality_transformer(THD *thd, uchar *arg) override;
   uint32 max_length_of_left_expr();
+  Item* varchar_upper_cmp_transformer(THD *thd, uchar *arg) override;
 };
 
 class cmp_item_row :public cmp_item
@@ -3020,11 +3057,11 @@ public:
     m_pcre(NULL), m_pcre_match_data(NULL),
     m_conversion_is_needed(true), m_is_const(0),
     m_library_flags(0),
-    m_library_charset(&my_charset_utf8mb3_general_ci)
+    m_library_charset(&my_charset_utf8mb4_general_ci)
   {}
   int default_regex_flags();
   void init(CHARSET_INFO *data_charset, int extra_flags);
-  void fix_owner(Item_func *owner, Item *subject_arg, Item *pattern_arg);
+  bool fix_owner(Item_func *owner, Item *subject_arg, Item *pattern_arg);
   bool compile(String *pattern, bool send_error);
   bool compile(Item *item, bool send_error);
   bool recompile(Item *item)
@@ -3059,6 +3096,7 @@ public:
   bool is_const() const { return m_is_const; }
   void set_const(bool arg) { m_is_const= arg; }
   CHARSET_INFO * library_charset() const { return m_library_charset; }
+  void unset_flag(int flag) { m_library_flags&= ~flag; }
 };
 
 
@@ -3492,13 +3530,11 @@ template <template<class> class LI, typename T> class Item_equal_iterator
 {
 protected:
   Item_equal *item_equal;
-  Item *curr_item;
+  Item *curr_item= nullptr;
 public:
   Item_equal_iterator(Item_equal &item_eq)
-    :LI<T> (item_eq.equal_items)
+    :LI<T> (item_eq.equal_items), item_equal(&item_eq)
   {
-    curr_item= NULL;
-    item_equal= &item_eq;
     if (item_eq.with_const)
     {
       LI<T> *list_it= this;

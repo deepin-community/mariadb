@@ -47,6 +47,9 @@ int bug_8378(MYSQL *mysql) {
   MYSQL_RES *res;
   MYSQL_ROW row;
 
+  /* MXS-4898: MaxScale sends utf8mb4 in handshake OK packet */
+  SKIP_MAXSCALE;
+
   len= mysql_real_escape_string(mysql, out, TEST_BUG8378_IN, 4);
   FAIL_IF(memcmp(out, TEST_BUG8378_OUT, len), "wrong result");
 
@@ -791,6 +794,10 @@ static int test_conc223(MYSQL *mysql)
   MYSQL_ROW row;
   int found= 0;
   int mdev27266= 0;
+  int unsupported[]= {
+                      579, /* utf8mb3_general1400_as_ci added in 11.5 */
+                      611, /* utf8mb4_general1400_as_ci added in 11.5 */
+                      0};
 
   SKIP_MYSQL(mysql);
 
@@ -836,8 +843,11 @@ static int test_conc223(MYSQL *mysql)
       id= atoi(row[0]);
       if (!mariadb_get_charset_by_nr(id))
       {
-        diag("%04d %s %s", id, row[1], row[2]);
+        int j=0;
         found++;
+        for (j=0; unsupported[j]; j++)
+          if (unsupported[j] == id)
+            found--;
       }
     }
   }

@@ -232,7 +232,7 @@ my_bool _ma_bitmap_init(MARIA_SHARE *share, File file,
   uint max_page_size;
   MARIA_FILE_BITMAP *bitmap= &share->bitmap;
   uint size= share->block_size;
-  myf flag= MY_WME | (share->temporary ? MY_THREAD_SPECIFIC : 0);
+  myf flag= MY_WME | share->malloc_flag;
   pgcache_page_no_t first_bitmap_with_space;
 #ifndef DBUG_OFF
   /* We want to have a copy of the bitmap to be able to print differences */
@@ -1172,6 +1172,7 @@ static my_bool move_to_next_bitmap(MARIA_HA *info, MARIA_FILE_BITMAP *bitmap)
 {
   pgcache_page_no_t page= bitmap->page;
   MARIA_STATE_INFO *state= &info->s->state;
+  my_bool res;
   DBUG_ENTER("move_to_next_bitmap");
 
   if (state->first_bitmap_with_space != ~(pgcache_page_no_t) 0 &&
@@ -1186,7 +1187,8 @@ static my_bool move_to_next_bitmap(MARIA_HA *info, MARIA_FILE_BITMAP *bitmap)
     page+= bitmap->pages_covered;
     DBUG_ASSERT(page % bitmap->pages_covered == 0);
   }
-  DBUG_RETURN(_ma_change_bitmap_page(info, bitmap, page));
+  res= _ma_change_bitmap_page(info, bitmap, page);
+  DBUG_RETURN(res);
 }
 
 

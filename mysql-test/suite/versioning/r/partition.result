@@ -178,8 +178,6 @@ x	C	D
 1	1	1
 set @str= concat('select row_start from t1 partition (pn) into @ts0');
 prepare stmt from @str;
-Warnings:
-Warning	1287	'<select expression> INTO <destination>;' is deprecated and will be removed in a future release. Please use 'SELECT <select list> INTO <destination> FROM...' instead
 execute stmt;
 drop prepare stmt;
 set @now= now(6);
@@ -191,8 +189,6 @@ execute select_pn;
 x	C	D
 set @str= concat('select row_start from t1 partition (p0) into @ts1');
 prepare stmt from @str;
-Warnings:
-Warning	1287	'<select expression> INTO <destination>;' is deprecated and will be removed in a future release. Please use 'SELECT <select list> INTO <destination> FROM...' instead
 execute stmt;
 drop prepare stmt;
 select @ts0 = @ts1;
@@ -208,8 +204,6 @@ x	C	D
 2	1	1
 set @str= concat('select row_start from t1 partition (pn) into @ts0');
 prepare stmt from @str;
-Warnings:
-Warning	1287	'<select expression> INTO <destination>;' is deprecated and will be removed in a future release. Please use 'SELECT <select list> INTO <destination> FROM...' instead
 execute stmt;
 drop prepare stmt;
 set @now= now(6);
@@ -225,20 +219,14 @@ drop prepare select_p0;
 drop prepare select_pn;
 set @str= concat('select row_start from t1 partition (p0) where x = 2 into @ts1');
 prepare stmt from @str;
-Warnings:
-Warning	1287	'<select expression> INTO <destination>;' is deprecated and will be removed in a future release. Please use 'SELECT <select list> INTO <destination> FROM...' instead
 execute stmt;
 drop prepare stmt;
 set @str= concat('select row_end from t1 partition (p0) where x = 2 into @ts2');
 prepare stmt from @str;
-Warnings:
-Warning	1287	'<select expression> INTO <destination>;' is deprecated and will be removed in a future release. Please use 'SELECT <select list> INTO <destination> FROM...' instead
 execute stmt;
 drop prepare stmt;
 set @str= concat('select row_start from t1 partition (pn) into @ts3');
 prepare stmt from @str;
-Warnings:
-Warning	1287	'<select expression> INTO <destination>;' is deprecated and will be removed in a future release. Please use 'SELECT <select list> INTO <destination> FROM...' instead
 execute stmt;
 drop prepare stmt;
 select @ts0 = @ts1;
@@ -821,8 +809,6 @@ create or replace table t2 (f int);
 create or replace trigger tr before insert on t2
 for each row select table_rows from information_schema.tables
 where table_name = 't1' into @a;
-Warnings:
-Warning	1287	'<select expression> INTO <destination>;' is deprecated and will be removed in a future release. Please use 'SELECT <select list> INTO <destination> FROM...' instead
 insert into t2 values (1);
 #
 # MDEV-14740 Locking assertion for system_time partitioning
@@ -832,8 +818,6 @@ partition by system_time interval 1 week;
 create or replace table t2 (f int);
 create or replace trigger tr before insert on t2
 for each row select count(*) from t1 into @a;
-Warnings:
-Warning	1287	'<select expression> INTO <destination>;' is deprecated and will be removed in a future release. Please use 'SELECT <select list> INTO <destination> FROM...' instead
 insert into t2 values (1);
 #
 # MDEV-14747 ALTER PARTITION BY SYSTEM_TIME after LOCK TABLES
@@ -3446,5 +3430,28 @@ create table t (a int) with system versioning partition by system_time partition
 ERROR HY000: Maybe missing parameters: no rotation condition for multiple HISTORY partitions.
 #
 # End of 10.5 tests
+#
+#
+# MDEV-31903 Server crashes in _ma_reset_history upon UNLOCK table with auto-create history partitions
+#
+set timestamp= unix_timestamp('2000-01-01 00:00:00');
+create table t1 (x int) engine=aria with system versioning partition by system_time interval 1 hour auto partitions 3;
+insert into t1 values (1);
+create table t2 (x int) engine=aria;
+create trigger tr after insert on t2 for each row update t1 set x= x + 11;
+lock tables t1 write, t2 write;
+update t1 set x= x + 1;
+set timestamp= unix_timestamp('2000-01-01 13:00:00');
+insert into t2 values (5);
+unlock tables;
+drop table t1, t2;
+set timestamp= default;
+#
+# MDEV-29872 MSAN/Valgrind uninitialised value errors in TABLE::vers_switch_partition
+#
+create table t (a int) with system versioning partition by system_time limit 100 partitions 3;
+drop table t;
+#
+# End of 10.9 tests
 #
 set global innodb_stats_persistent= @save_persistent;

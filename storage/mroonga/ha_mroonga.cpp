@@ -3635,7 +3635,7 @@ bool ha_mroonga::storage_create_foreign_key(TABLE *table,
   Alter_info *alter_info = &lex->alter_info;
   List_iterator<Key> key_iterator(alter_info->key_list);
   Key *key;
-  char ref_db_buff[NAME_LEN + 1], ref_table_buff[NAME_LEN + 1];
+  IdentBuffer<NAME_LEN> ref_db_buff, ref_table_buff;
   while ((key = key_iterator++))
   {
     if (key->type != MRN_KEYTYPE_FOREIGN)
@@ -3670,9 +3670,7 @@ bool ha_mroonga::storage_create_foreign_key(TABLE *table,
 #endif
     DBUG_PRINT("info", ("mroonga: ref_db_name=%s", ref_db_name.str));
     if (ref_db_name.str && lower_case_table_names) {
-      strmake(ref_db_buff, ref_db_name.str, sizeof(ref_db_buff) - 1);
-      my_casedn_str(system_charset_info, ref_db_buff);
-      ref_db_name.str = ref_db_buff;
+      ref_db_name= ref_db_buff.copy_casedn(ref_db_name).to_lex_cstring();
       DBUG_PRINT("info", ("mroonga: casedn ref_db_name=%s", ref_db_name.str));
     }
 #ifdef MRN_FOREIGN_KEY_USE_CONST_STRING
@@ -3682,9 +3680,7 @@ bool ha_mroonga::storage_create_foreign_key(TABLE *table,
 #endif
     DBUG_PRINT("info", ("mroonga: ref_table_name=%s", ref_table_name.str));
     if (ref_table_name.str && lower_case_table_names) {
-      strmake(ref_table_buff, ref_table_name.str, sizeof(ref_table_buff) - 1);
-      my_casedn_str(system_charset_info, ref_table_buff);
-      ref_table_name.str = ref_table_buff;
+      ref_table_name= ref_table_buff.copy_casedn(ref_table_name).to_lex_cstring();
       DBUG_PRINT("info", ("mroonga: casedn ref_table_name=%s", ref_table_name.str));
     }
     if (ref_db_name.str && strcmp(table->s->db.str, ref_db_name.str))
@@ -4305,6 +4301,7 @@ int ha_mroonga::wrapper_open(const char *name, int mode, uint open_options)
     wrap_handler->set_ha_share_ref(&table->s->ha_share);
 #endif
     error = wrap_handler->ha_open(table, name, mode, open_options);
+    wrap_handler->set_optimizer_costs(ha_thd());
   } else {
     if (!(wrap_handler = parent_for_clone->wrap_handler->clone(name,
       mem_root_for_clone)))
@@ -4351,9 +4348,9 @@ int ha_mroonga::wrapper_open(const char *name, int mode, uint open_options)
             // TODO: implemented by "reindex" instead of "remove and recreate".
             // Because "remove and recreate" invalidates opened indexes by
             // other threads.
-            error = wrapper_disable_indexes_mroonga(HA_KEY_SWITCH_ALL);
+            error = wrapper_disable_indexes_mroonga(key_map(table->s->keys), false);
             if (!error) {
-              error = wrapper_enable_indexes_mroonga(HA_KEY_SWITCH_ALL);
+              error = wrapper_enable_indexes_mroonga(key_map(table->s->keys), false);
             }
           }
         }
@@ -12320,6 +12317,7 @@ ha_rows ha_mroonga::wrapper_multi_range_read_info_const(uint keyno,
                                                         uint n_ranges,
                                                         uint *bufsz,
                                                         uint *flags,
+                                                        ha_rows limit,
                                                         Cost_estimate *cost)
 {
   MRN_DBUG_ENTER_METHOD();
@@ -12327,7 +12325,8 @@ ha_rows ha_mroonga::wrapper_multi_range_read_info_const(uint keyno,
   KEY *key_info = &(table->key_info[keyno]);
   if (mrn_is_geo_key(key_info)) {
     rows = handler::multi_range_read_info_const(keyno, seq, seq_init_param,
-                                                n_ranges, bufsz, flags, cost);
+                                                n_ranges, bufsz, flags, limit,
+                                                cost);
     DBUG_RETURN(rows);
   }
   MRN_SET_WRAP_SHARE_KEY(share, table->s);
@@ -12336,7 +12335,7 @@ ha_rows ha_mroonga::wrapper_multi_range_read_info_const(uint keyno,
     set_pk_bitmap();
   rows = wrap_handler->multi_range_read_info_const(keyno, seq, seq_init_param,
                                                    n_ranges, bufsz, flags,
-                                                   cost);
+                                                   limit, cost);
   MRN_SET_BASE_SHARE_KEY(share, table->s);
   MRN_SET_BASE_TABLE_KEY(this, table);
   DBUG_RETURN(rows);
@@ -12348,20 +12347,21 @@ ha_rows ha_mroonga::storage_multi_range_read_info_const(uint keyno,
                                                         uint n_ranges,
                                                         uint *bufsz,
                                                         uint *flags,
+                                                        ha_rows limit,
                                                         Cost_estimate *cost)
 {
   MRN_DBUG_ENTER_METHOD();
   ha_rows rows = handler::multi_range_read_info_const(keyno, seq,
                                                       seq_init_param,
                                                       n_ranges, bufsz, flags,
-                                                      cost);
+                                                      limit, cost);
   DBUG_RETURN(rows);
 }
 
 ha_rows ha_mroonga::multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq,
                                                 void *seq_init_param,
                                                 uint n_ranges, uint *bufsz,
-                                                uint *flags,
+                                                uint *flags, ha_rows limit,
                                                 Cost_estimate *cost)
 {
   MRN_DBUG_ENTER_METHOD();
@@ -12370,11 +12370,11 @@ ha_rows ha_mroonga::multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq,
   {
     rows = wrapper_multi_range_read_info_const(keyno, seq, seq_init_param,
                                                n_ranges, bufsz,
-                                               flags, cost);
+                                               flags, limit, cost);
   } else {
     rows = storage_multi_range_read_info_const(keyno, seq, seq_init_param,
                                                n_ranges, bufsz,
-                                               flags, cost);
+                                               flags, limit, cost);
   }
   DBUG_RETURN(rows);
 }
@@ -13015,9 +13015,9 @@ int ha_mroonga::truncate()
   DBUG_RETURN(error);
 }
 
-double ha_mroonga::wrapper_scan_time()
+IO_AND_CPU_COST ha_mroonga::wrapper_scan_time()
 {
-  double res;
+  IO_AND_CPU_COST res;
   MRN_DBUG_ENTER_METHOD();
   MRN_SET_WRAP_SHARE_KEY(share, table->s);
   MRN_SET_WRAP_TABLE_KEY(this, table);
@@ -13027,17 +13027,16 @@ double ha_mroonga::wrapper_scan_time()
   DBUG_RETURN(res);
 }
 
-double ha_mroonga::storage_scan_time()
+IO_AND_CPU_COST ha_mroonga::storage_scan_time()
 {
   MRN_DBUG_ENTER_METHOD();
-  double time = handler::scan_time();
-  DBUG_RETURN(time);
+  DBUG_RETURN(handler::scan_time());
 }
 
-double ha_mroonga::scan_time()
+IO_AND_CPU_COST ha_mroonga::scan_time()
 {
   MRN_DBUG_ENTER_METHOD();
-  double time;
+  IO_AND_CPU_COST time;
   if (share->wrapper_mode)
   {
     time = wrapper_scan_time();
@@ -13047,50 +13046,86 @@ double ha_mroonga::scan_time()
   DBUG_RETURN(time);
 }
 
-double ha_mroonga::wrapper_read_time(uint index, uint ranges, ha_rows rows)
+IO_AND_CPU_COST ha_mroonga::wrapper_rnd_pos_time(ha_rows rows)
 {
-  double res;
+  IO_AND_CPU_COST res;
+  MRN_DBUG_ENTER_METHOD();
+  MRN_SET_WRAP_SHARE_KEY(share, table->s);
+  MRN_SET_WRAP_TABLE_KEY(this, table);
+  res = wrap_handler->rnd_pos_time(rows);
+  MRN_SET_BASE_SHARE_KEY(share, table->s);
+  MRN_SET_BASE_TABLE_KEY(this, table);
+  DBUG_RETURN(res);
+}
+
+IO_AND_CPU_COST ha_mroonga::storage_rnd_pos_time(ha_rows rows)
+{
+  MRN_DBUG_ENTER_METHOD();
+  IO_AND_CPU_COST time = handler::rnd_pos_time(rows);
+  DBUG_RETURN(time);
+}
+
+
+IO_AND_CPU_COST ha_mroonga::rnd_pos_time(ha_rows rows)
+{
+  MRN_DBUG_ENTER_METHOD();
+  IO_AND_CPU_COST time;
+  if (share->wrapper_mode)
+  {
+    time = wrapper_rnd_pos_time(rows);
+  } else {
+    time = storage_rnd_pos_time(rows);
+  }
+  DBUG_RETURN(time);
+}
+
+
+IO_AND_CPU_COST ha_mroonga::wrapper_keyread_time(uint index, ulong ranges,
+                                                 ha_rows rows, ulonglong blocks)
+{
+  IO_AND_CPU_COST res;
   MRN_DBUG_ENTER_METHOD();
   if (index < MAX_KEY) {
     KEY *key_info = &(table->key_info[index]);
     if (mrn_is_geo_key(key_info)) {
-      res = handler::read_time(index, ranges, rows);
+      res = handler::keyread_time(index, ranges, rows, blocks);
       DBUG_RETURN(res);
     }
     MRN_SET_WRAP_SHARE_KEY(share, table->s);
     MRN_SET_WRAP_TABLE_KEY(this, table);
-    res = wrap_handler->read_time(share->wrap_key_nr[index], ranges, rows);
+    res = wrap_handler->keyread_time(share->wrap_key_nr[index], ranges, rows, blocks);
     MRN_SET_BASE_SHARE_KEY(share, table->s);
     MRN_SET_BASE_TABLE_KEY(this, table);
   } else {
     MRN_SET_WRAP_SHARE_KEY(share, table->s);
     MRN_SET_WRAP_TABLE_KEY(this, table);
-    res = wrap_handler->read_time(index, ranges, rows);
+    res = wrap_handler->keyread_time(index, ranges, rows, blocks);
     MRN_SET_BASE_SHARE_KEY(share, table->s);
     MRN_SET_BASE_TABLE_KEY(this, table);
   }
   DBUG_RETURN(res);
 }
 
-double ha_mroonga::storage_read_time(uint index, uint ranges, ha_rows rows)
+IO_AND_CPU_COST ha_mroonga::storage_keyread_time(uint index, ulong ranges, ha_rows rows, ulonglong blocks)
 {
   MRN_DBUG_ENTER_METHOD();
-  double time = handler::read_time(index, ranges, rows);
+  IO_AND_CPU_COST time = handler::keyread_time(index, ranges, rows, blocks);
   DBUG_RETURN(time);
 }
 
-double ha_mroonga::read_time(uint index, uint ranges, ha_rows rows)
+IO_AND_CPU_COST ha_mroonga::keyread_time(uint index, ulong ranges, ha_rows rows, ulonglong blocks)
 {
   MRN_DBUG_ENTER_METHOD();
-  double time;
+  IO_AND_CPU_COST time;
   if (share->wrapper_mode)
   {
-    time = wrapper_read_time(index, ranges, rows);
+    time = wrapper_keyread_time(index, ranges, rows, blocks);
   } else {
-    time = storage_read_time(index, ranges, rows);
+    time = storage_keyread_time(index, ranges, rows, blocks);
   }
   DBUG_RETURN(time);
 }
+
 
 #ifdef MRN_HANDLER_HAVE_KEYS_TO_USE_FOR_SCANNING
 const key_map *ha_mroonga::wrapper_keys_to_use_for_scanning()
@@ -13639,197 +13674,184 @@ int ha_mroonga::generic_disable_index(int i, KEY *key_info)
   DBUG_RETURN(error);
 }
 
-int ha_mroonga::wrapper_disable_indexes_mroonga(uint mode)
+int ha_mroonga::wrapper_disable_indexes_mroonga(key_map map, bool persist)
 {
   int error = 0;
   MRN_DBUG_ENTER_METHOD();
-  if (mode == HA_KEY_SWITCH_NONUNIQ_SAVE || mode == HA_KEY_SWITCH_ALL) {
-    uint i;
-    for (i = 0; i < table_share->keys; i++) {
-      if (i == table->s->primary_key) {
-        continue;
-      }
-      if (share->wrap_key_nr[i] < MAX_KEY) {
-        continue;
-      }
-      if (!grn_index_tables[i]) {
-        DBUG_PRINT("info", ("mroonga: keys are disabled already %u", i));
-        DBUG_RETURN(0);
-      }
+  uint i;
+  for (i = 0; i < table_share->keys; i++) {
+    if (i == table->s->primary_key) {
+      continue;
     }
-    KEY *key_info = table_share->key_info;
-    for (i = 0; i < table_share->keys; i++) {
-      if (!(key_info[i].flags & HA_FULLTEXT) &&
-          !mrn_is_geo_key(&key_info[i])) {
-        continue;
-      }
+    if (share->wrap_key_nr[i] < MAX_KEY) {
+      continue;
+    }
+    if (!grn_index_tables[i]) {
+      DBUG_PRINT("info", ("mroonga: keys are disabled already %u", i));
+      DBUG_RETURN(0);
+    }
+  }
+  KEY *key_info = table_share->key_info;
+  for (i = 0; i < table_share->keys; i++) {
+    if (!(key_info[i].flags & HA_FULLTEXT) &&
+        !mrn_is_geo_key(&key_info[i])) {
+      continue;
+    }
 
-      int sub_error = generic_disable_index(i, key_info);
-      if (error != 0 && sub_error != 0) {
-        error = sub_error;
-      }
+    int sub_error = generic_disable_index(i, key_info);
+    if (error != 0 && sub_error != 0) {
+      error = sub_error;
     }
-  } else {
-    error = HA_ERR_WRONG_COMMAND;
   }
   DBUG_RETURN(error);
 }
 
-int ha_mroonga::wrapper_disable_indexes(uint mode)
+int ha_mroonga::wrapper_disable_indexes(key_map map, bool persist)
 {
   int error = 0;
   MRN_DBUG_ENTER_METHOD();
   MRN_SET_WRAP_SHARE_KEY(share, table->s);
   MRN_SET_WRAP_TABLE_KEY(this, table);
-  error = wrap_handler->ha_disable_indexes(mode);
+  error = wrap_handler->ha_disable_indexes(map, persist);
   MRN_SET_BASE_SHARE_KEY(share, table->s);
   MRN_SET_BASE_TABLE_KEY(this, table);
   if (error == HA_ERR_WRONG_COMMAND) {
     error = 0;
   }
   if (!error) {
-    error = wrapper_disable_indexes_mroonga(mode);
+    error = wrapper_disable_indexes_mroonga(map, persist);
   }
   DBUG_RETURN(error);
 }
 
-int ha_mroonga::storage_disable_indexes(uint mode)
+int ha_mroonga::storage_disable_indexes(key_map map, bool persist)
 {
   int error = 0;
   MRN_DBUG_ENTER_METHOD();
-  if (mode == HA_KEY_SWITCH_NONUNIQ_SAVE || mode == HA_KEY_SWITCH_ALL) {
-    uint i;
-    for (i = 0; i < table_share->keys; i++) {
-      if (i == table->s->primary_key) {
-        continue;
-      }
-      if (!grn_index_tables[i]) {
-        DBUG_PRINT("info", ("mroonga: keys are disabled already %u", i));
-        DBUG_RETURN(0);
-      }
+  uint i;
+  for (i = 0; i < table_share->keys; i++) {
+    if (i == table->s->primary_key) {
+      continue;
     }
-    KEY *key_info = table_share->key_info;
-    for (i = 0; i < table_share->keys; i++) {
-      if (i == table->s->primary_key) {
-        continue;
-      }
-      if (mode == HA_KEY_SWITCH_NONUNIQ_SAVE &&
-          (key_info[i].flags & HA_NOSAME)) {
-        continue;
-      }
+    if (!grn_index_tables[i]) {
+      DBUG_PRINT("info", ("mroonga: keys are disabled already %u", i));
+      DBUG_RETURN(0);
+    }
+  }
+  KEY *key_info = table_share->key_info;
+  for (i = 0; i < table_share->keys; i++) {
+    if (i == table->s->primary_key) {
+      continue;
+    }
+    if (map.is_set(i)) {
+      continue;
+    }
 
-      int sub_error = generic_disable_index(i, key_info);
-      if (error != 0 && sub_error != 0) {
-        error = sub_error;
-      }
+    int sub_error = generic_disable_index(i, key_info);
+    if (error != 0 && sub_error != 0) {
+      error = sub_error;
     }
-  } else {
-    DBUG_RETURN(HA_ERR_WRONG_COMMAND);
   }
   DBUG_RETURN(error);
 }
 
-int ha_mroonga::disable_indexes(uint mode)
+int ha_mroonga::disable_indexes(key_map map, bool persist)
 {
   int error = 0;
   MRN_DBUG_ENTER_METHOD();
   if (share->wrapper_mode)
   {
-    error = wrapper_disable_indexes(mode);
+    error = wrapper_disable_indexes(map, persist);
   } else {
-    error = storage_disable_indexes(mode);
+    error = storage_disable_indexes(map, persist);
   }
   DBUG_RETURN(error);
 }
 
-int ha_mroonga::wrapper_enable_indexes_mroonga(uint mode)
+int ha_mroonga::wrapper_enable_indexes_mroonga(key_map map, bool persist)
 {
   int error = 0;
   MRN_DBUG_ENTER_METHOD();
-  if (mode == HA_KEY_SWITCH_NONUNIQ_SAVE || mode == HA_KEY_SWITCH_ALL) {
-    uint i, j;
-    for (i = 0; i < table_share->keys; i++) {
-      if (i == table->s->primary_key) {
-        continue;
-      }
-      if (share->wrap_key_nr[i] < MAX_KEY) {
-        continue;
-      }
-      if (!grn_index_columns[i]) {
-        break;
-      }
+  uint i, j;
+  for (i = 0; i < table_share->keys; i++) {
+    if (i == table->s->primary_key) {
+      continue;
     }
-    if (i == table_share->keys) {
-      DBUG_PRINT("info", ("mroonga: keys are enabled already"));
-      DBUG_RETURN(0);
+    if (share->wrap_key_nr[i] < MAX_KEY) {
+      continue;
     }
-    KEY *p_key_info = &table->key_info[table_share->primary_key];
-    KEY *key_info = table_share->key_info;
-    uint n_keys = table_share->keys;
-    MRN_ALLOCATE_VARIABLE_LENGTH_ARRAYS(grn_obj *, index_tables, n_keys);
-    MRN_ALLOCATE_VARIABLE_LENGTH_ARRAYS(grn_obj *, index_columns, n_keys);
-    bitmap_clear_all(table->read_set);
-    mrn_set_bitmap_by_key(table->read_set, p_key_info);
-    mrn::PathMapper mapper(share->table_name);
-    for (i = 0, j = 0; i < n_keys; i++) {
-      if (!(key_info[i].flags & HA_FULLTEXT) &&
-        !mrn_is_geo_key(&key_info[i])) {
-        j++;
-        continue;
-      }
+    if (!grn_index_columns[i]) {
+      break;
+    }
+  }
+  if (i == table_share->keys) {
+    DBUG_PRINT("info", ("mroonga: keys are enabled already"));
+    DBUG_RETURN(0);
+  }
+  KEY *p_key_info = &table->key_info[table_share->primary_key];
+  KEY *key_info = table_share->key_info;
+  uint n_keys = table_share->keys;
+  MRN_ALLOCATE_VARIABLE_LENGTH_ARRAYS(grn_obj *, index_tables, n_keys);
+  MRN_ALLOCATE_VARIABLE_LENGTH_ARRAYS(grn_obj *, index_columns, n_keys);
+  bitmap_clear_all(table->read_set);
+  mrn_set_bitmap_by_key(table->read_set, p_key_info);
+  mrn::PathMapper mapper(share->table_name);
+  for (i = 0, j = 0; i < n_keys; i++) {
+    if (!(key_info[i].flags & HA_FULLTEXT) &&
+      !mrn_is_geo_key(&key_info[i])) {
+      j++;
+      continue;
+    }
 
-      if ((error = mrn_add_index_param(share, &key_info[i], i)))
-      {
-        break;
-      }
-      index_tables[i] = NULL;
-      index_columns[i] = NULL;
-      if (!grn_index_columns[i]) {
-        if (
-          (key_info[i].flags & HA_FULLTEXT) &&
-          (error = wrapper_create_index_fulltext(mapper.table_name(),
-                                                 i, &key_info[i],
-                                                 index_tables, index_columns,
-                                                 share))
-        ) {
-          break;
-        } else if (
-          mrn_is_geo_key(&key_info[i]) &&
-          (error = wrapper_create_index_geo(mapper.table_name(),
-                                            i, &key_info[i],
-                                            index_tables, index_columns,
-                                            share))
-        ) {
-          break;
-        }
-        grn_index_columns[i] = index_columns[i];
-      }
-      mrn_set_bitmap_by_key(table->read_set, &key_info[i]);
-    }
-    if (!error && i > j)
+    if ((error = mrn_add_index_param(share, &key_info[i], i)))
     {
-      error = wrapper_fill_indexes(ha_thd(), table->key_info, index_columns,
-                                   n_keys);
+      break;
     }
-    bitmap_set_all(table->read_set);
-    MRN_FREE_VARIABLE_LENGTH_ARRAYS(index_tables);
-    MRN_FREE_VARIABLE_LENGTH_ARRAYS(index_columns);
-  } else {
-    error = HA_ERR_WRONG_COMMAND;
+    index_tables[i] = NULL;
+    index_columns[i] = NULL;
+    if (!grn_index_columns[i]) {
+      if (
+        (key_info[i].flags & HA_FULLTEXT) &&
+        (error = wrapper_create_index_fulltext(mapper.table_name(),
+                                               i, &key_info[i],
+                                               index_tables, index_columns,
+                                               share))
+      ) {
+        break;
+      } else if (
+        mrn_is_geo_key(&key_info[i]) &&
+        (error = wrapper_create_index_geo(mapper.table_name(),
+                                          i, &key_info[i],
+                                          index_tables, index_columns,
+                                          share))
+      ) {
+        break;
+      }
+      grn_index_columns[i] = index_columns[i];
+    }
+    mrn_set_bitmap_by_key(table->read_set, &key_info[i]);
   }
+  if (!error && i > j)
+  {
+    error = wrapper_fill_indexes(ha_thd(), table->key_info, index_columns,
+                                 n_keys);
+  }
+  bitmap_set_all(table->read_set);
+  MRN_FREE_VARIABLE_LENGTH_ARRAYS(index_tables);
+  MRN_FREE_VARIABLE_LENGTH_ARRAYS(index_columns);
   DBUG_RETURN(error);
 }
 
-int ha_mroonga::wrapper_enable_indexes(uint mode)
+int ha_mroonga::wrapper_enable_indexes(key_map map, bool persist)
 {
   int error = 0;
   MRN_DBUG_ENTER_METHOD();
 
-  int mroonga_error = wrapper_enable_indexes_mroonga(mode);
+  int mroonga_error = wrapper_enable_indexes_mroonga(map, persist);
 
   MRN_SET_WRAP_SHARE_KEY(share, table->s);
   MRN_SET_WRAP_TABLE_KEY(this, table);
-  error = wrap_handler->ha_enable_indexes(mode);
+  error = wrap_handler->ha_enable_indexes(map, persist);
   MRN_SET_BASE_SHARE_KEY(share, table->s);
   MRN_SET_BASE_TABLE_KEY(this, table);
   if (error == HA_ERR_WRONG_COMMAND) {
@@ -13838,95 +13860,86 @@ int ha_mroonga::wrapper_enable_indexes(uint mode)
   DBUG_RETURN(error);
 }
 
-int ha_mroonga::storage_enable_indexes(uint mode)
+int ha_mroonga::storage_enable_indexes(key_map map, bool persist)
 {
   int error = 0;
   uint n_keys = table_share->keys;
   MRN_ALLOCATE_VARIABLE_LENGTH_ARRAYS(grn_obj *, index_tables, n_keys);
   MRN_ALLOCATE_VARIABLE_LENGTH_ARRAYS(grn_obj *, index_columns, n_keys);
   bool have_multiple_column_index = false;
-  bool skip_unique_key = (mode == HA_KEY_SWITCH_NONUNIQ_SAVE);
   MRN_DBUG_ENTER_METHOD();
-  if (mode == HA_KEY_SWITCH_NONUNIQ_SAVE || mode == HA_KEY_SWITCH_ALL) {
-    uint i;
-    for (i = 0; i < table_share->keys; i++) {
-      if (i == table->s->primary_key) {
-        continue;
-      }
-      if (!grn_index_columns[i]) {
-        break;
-      }
+  uint i;
+  for (i = 0; i < n_keys; i++) {
+    if (i == table->s->primary_key) {
+      continue;
     }
-    if (i == table_share->keys) {
-      DBUG_PRINT("info", ("mroonga: keys are enabled already"));
-      MRN_FREE_VARIABLE_LENGTH_ARRAYS(index_tables);
-      MRN_FREE_VARIABLE_LENGTH_ARRAYS(index_columns);
-      DBUG_RETURN(0);
+    if (!grn_index_columns[i]) {
+      break;
     }
-    KEY *key_info = table->key_info;
-    bitmap_clear_all(table->read_set);
-    mrn::PathMapper mapper(share->table_name);
-    for (i = 0; i < n_keys; i++) {
-      if (i == table->s->primary_key) {
-        continue;
-      }
-      if (skip_unique_key && (key_info[i].flags & HA_NOSAME)) {
-        continue;
-      }
+  }
+  if (i == n_keys) {
+    DBUG_PRINT("info", ("mroonga: keys are enabled already"));
+    MRN_FREE_VARIABLE_LENGTH_ARRAYS(index_tables);
+    MRN_FREE_VARIABLE_LENGTH_ARRAYS(index_columns);
+    DBUG_RETURN(0);
+  }
+  KEY *key_info = table->key_info;
+  bitmap_clear_all(table->read_set);
+  mrn::PathMapper mapper(share->table_name);
+  for (; i < n_keys; i++) {
+    if (!map.is_set(i)) {
+      continue;
+    }
 
-      if ((error = mrn_add_index_param(share, &key_info[i], i)))
+    if ((error = mrn_add_index_param(share, &key_info[i], i)))
+    {
+      break;
+    }
+    index_tables[i] = NULL;
+    if (!grn_index_columns[i]) {
+      if ((error = storage_create_index(table, mapper.table_name(), grn_table,
+                                        share, &key_info[i], index_tables,
+                                        index_columns, i)))
       {
         break;
       }
-      index_tables[i] = NULL;
-      if (!grn_index_columns[i]) {
-        if ((error = storage_create_index(table, mapper.table_name(), grn_table,
-                                          share, &key_info[i], index_tables,
-                                          index_columns, i)))
-        {
-          break;
-        }
-        if (
-          KEY_N_KEY_PARTS(&(key_info[i])) != 1 &&
-          !(key_info[i].flags & HA_FULLTEXT)
-        ) {
-          mrn_set_bitmap_by_key(table->read_set, &key_info[i]);
-          have_multiple_column_index = true;
-        }
-        grn_index_tables[i] = index_tables[i];
-        grn_index_columns[i] = index_columns[i];
-      } else {
-        index_columns[i] = NULL;
+      if (
+        KEY_N_KEY_PARTS(&(key_info[i])) != 1 &&
+        !(key_info[i].flags & HA_FULLTEXT)
+      ) {
+        mrn_set_bitmap_by_key(table->read_set, &key_info[i]);
+        have_multiple_column_index = true;
       }
+      grn_index_tables[i] = index_tables[i];
+      grn_index_columns[i] = index_columns[i];
+    } else {
+      index_columns[i] = NULL;
     }
-    if (!error && have_multiple_column_index)
-    {
-      error = storage_add_index_multiple_columns(key_info, n_keys,
-                                                 index_tables,
-                                                 index_columns,
-                                                 skip_unique_key);
-    }
-    bitmap_set_all(table->read_set);
-  } else {
-    MRN_FREE_VARIABLE_LENGTH_ARRAYS(index_tables);
-    MRN_FREE_VARIABLE_LENGTH_ARRAYS(index_columns);
-    DBUG_RETURN(HA_ERR_WRONG_COMMAND);
   }
+  if (!error && have_multiple_column_index)
+  {
+    bool skip_unique_key= !table->s->keys_in_use.is_clear_all();
+    error = storage_add_index_multiple_columns(key_info, n_keys,
+                                               index_tables,
+                                               index_columns,
+                                               skip_unique_key);
+  }
+  bitmap_set_all(table->read_set);
   MRN_FREE_VARIABLE_LENGTH_ARRAYS(index_tables);
   MRN_FREE_VARIABLE_LENGTH_ARRAYS(index_columns);
   DBUG_RETURN(error);
 }
 
-int ha_mroonga::enable_indexes(uint mode)
+int ha_mroonga::enable_indexes(key_map map, bool persist)
 {
   int error = 0;
   MRN_DBUG_ENTER_METHOD();
   share->disable_keys = false;
   if (share->wrapper_mode)
   {
-    error = wrapper_enable_indexes(mode);
+    error = wrapper_enable_indexes(map, persist);
   } else {
-    error = storage_enable_indexes(mode);
+    error = storage_enable_indexes(map, persist);
   }
   DBUG_RETURN(error);
 }
@@ -16648,7 +16661,7 @@ bool ha_mroonga::can_switch_engines()
   DBUG_RETURN(res);
 }
 
-int ha_mroonga::wrapper_get_foreign_key_list(THD *thd,
+int ha_mroonga::wrapper_get_foreign_key_list(const THD *thd,
                                            List<FOREIGN_KEY_INFO> *f_key_list)
 {
   MRN_DBUG_ENTER_METHOD();
@@ -16662,7 +16675,7 @@ int ha_mroonga::wrapper_get_foreign_key_list(THD *thd,
 }
 
 #ifdef MRN_SUPPORT_FOREIGN_KEYS
-int ha_mroonga::storage_get_foreign_key_list(THD *thd,
+int ha_mroonga::storage_get_foreign_key_list(const THD *thd,
                                              List<FOREIGN_KEY_INFO> *f_key_list)
 {
   int error;
@@ -16772,7 +16785,7 @@ int ha_mroonga::storage_get_foreign_key_list(THD *thd,
 }
 #endif
 
-int ha_mroonga::get_foreign_key_list(THD *thd,
+int ha_mroonga::get_foreign_key_list(const THD *thd,
                                      List<FOREIGN_KEY_INFO> *f_key_list)
 {
   MRN_DBUG_ENTER_METHOD();
@@ -16786,7 +16799,7 @@ int ha_mroonga::get_foreign_key_list(THD *thd,
   DBUG_RETURN(res);
 }
 
-int ha_mroonga::wrapper_get_parent_foreign_key_list(THD *thd,
+int ha_mroonga::wrapper_get_parent_foreign_key_list(const THD *thd,
                                             List<FOREIGN_KEY_INFO> *f_key_list)
 {
   MRN_DBUG_ENTER_METHOD();
@@ -16799,7 +16812,7 @@ int ha_mroonga::wrapper_get_parent_foreign_key_list(THD *thd,
   DBUG_RETURN(res);
 }
 
-int ha_mroonga::storage_get_parent_foreign_key_list(THD *thd,
+int ha_mroonga::storage_get_parent_foreign_key_list(const THD *thd,
                                             List<FOREIGN_KEY_INFO> *f_key_list)
 {
   MRN_DBUG_ENTER_METHOD();
@@ -16807,7 +16820,7 @@ int ha_mroonga::storage_get_parent_foreign_key_list(THD *thd,
   DBUG_RETURN(res);
 }
 
-int ha_mroonga::get_parent_foreign_key_list(THD *thd,
+int ha_mroonga::get_parent_foreign_key_list(const THD *thd,
                                             List<FOREIGN_KEY_INFO> *f_key_list)
 {
   MRN_DBUG_ENTER_METHOD();

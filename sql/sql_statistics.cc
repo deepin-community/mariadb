@@ -2906,6 +2906,9 @@ int collect_statistics_for_table(THD *thd, TABLE *table)
   After having been updated the statistical system tables are closed.     
 */
 
+/* Stack usage 20248 from clang */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
+
 int update_statistics_for_table(THD *thd, TABLE *table)
 {
   TABLE_LIST tables[STATISTICS_TABLES];
@@ -2990,6 +2993,7 @@ int update_statistics_for_table(THD *thd, TABLE *table)
   new_trans.restore_old_transaction();
   DBUG_RETURN(rc);
 }
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 
 /**
@@ -3397,6 +3401,9 @@ end:
   The function is called when executing the statement DROP TABLE 'tab'.
 */
 
+/* Stack size 20248 with clang */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
+
 int delete_statistics_for_table(THD *thd, const LEX_CSTRING *db,
                                 const LEX_CSTRING *tab)
 {
@@ -3465,6 +3472,7 @@ int delete_statistics_for_table(THD *thd, const LEX_CSTRING *db,
   new_trans.restore_old_transaction();
   DBUG_RETURN(rc);
 }
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 
 /**
@@ -4009,6 +4017,9 @@ int rename_indexes_in_stat_table(THD *thd, TABLE *tab,
   The function is called when executing any statement that renames a table
 */
 
+/* Stack size 20968 with clang */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
+
 int rename_table_in_stat_tables(THD *thd, const LEX_CSTRING *db,
                                 const LEX_CSTRING *tab,
                                 const LEX_CSTRING *new_db,
@@ -4086,6 +4097,7 @@ int rename_table_in_stat_tables(THD *thd, const LEX_CSTRING *db,
   new_trans.restore_old_transaction();
   DBUG_RETURN(rc);
 }
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 
 /**
@@ -4105,13 +4117,17 @@ int rename_table_in_stat_tables(THD *thd, const LEX_CSTRING *db,
 
 void set_statistics_for_table(THD *thd, TABLE *table)
 {
-  TABLE_STATISTICS_CB *stats_cb= table->stats_cb;
-
+  TABLE_STATISTICS_CB *stats_cb= table->s->stats_cb;
   Table_statistics *read_stats= stats_cb ? stats_cb->table_stats : 0;
-  table->used_stat_records= 
+
+  /*
+    The MAX below is to ensure that we don't return 0 rows for a table if it
+    not guaranteed to be empty.
+  */
+  table->used_stat_records=
     (!check_eits_preferred(thd) ||
      !table->stats_is_read || !read_stats || read_stats->cardinality_is_null) ?
-    table->file->stats.records : read_stats->cardinality;
+    table->file->stats.records : MY_MAX(read_stats->cardinality, 1);
 
   /*
     For partitioned table, EITS statistics is based on data from all partitions.
@@ -4472,7 +4488,7 @@ bool is_eits_usable(Field *field)
   Column_statistics* col_stats= field->read_stats;
   
   // check if column_statistics was allocated for this field
-  if (!col_stats || !field->table->stats_is_read)
+  if (!col_stats || !field->orig_table->stats_is_read)
     return false;
 
   /*
@@ -4486,8 +4502,8 @@ bool is_eits_usable(Field *field)
   return !col_stats->no_stat_values_provided() &&        //(1)
     field->type() != MYSQL_TYPE_GEOMETRY &&              //(2)
 #ifdef WITH_PARTITION_STORAGE_ENGINE
-    (!field->table->part_info ||
-     !field->table->part_info->field_in_partition_expr(field)) &&     //(3)
+    (!field->orig_table->part_info ||
+     !field->orig_table->part_info->field_in_partition_expr(field)) &&     //(3)
 #endif
     true;
 }

@@ -60,15 +60,6 @@ IF(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND (NOT MSVC))
   ENDIF()
 ENDIF()
 
-# workaround for old gcc on x86, gcc atomic ops only work under -march=i686
-IF(CMAKE_SYSTEM_PROCESSOR STREQUAL "i686" AND CMAKE_COMPILER_IS_GNUCC AND
-   CMAKE_C_COMPILER_VERSION VERSION_LESS "4.4.0")
-  SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=i686")
-  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=i686")
-  # query_response_time.cc causes "error: unable to find a register to spill"
-  SET(PLUGIN_QUERY_RESPONSE_TIME NO CACHE BOOL "Disabled, gcc is too old")
-ENDIF()
-
 # use runtime atomic-support detection in aarch64
 IF(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
   MY_CHECK_AND_SET_COMPILER_FLAG("-moutline-atomics")
@@ -325,7 +316,6 @@ ENDIF()
 #
 CHECK_FUNCTION_EXISTS (accept4 HAVE_ACCEPT4)
 CHECK_FUNCTION_EXISTS (access HAVE_ACCESS)
-CHECK_FUNCTION_EXISTS (alarm HAVE_ALARM)
 SET(HAVE_ALLOCA 1)
 CHECK_FUNCTION_EXISTS (backtrace HAVE_BACKTRACE)
 CHECK_FUNCTION_EXISTS (backtrace_symbols HAVE_BACKTRACE_SYMBOLS)
@@ -418,7 +408,6 @@ CHECK_FUNCTION_EXISTS (strtoul HAVE_STRTOUL)
 CHECK_FUNCTION_EXISTS (strtoull HAVE_STRTOULL)
 CHECK_FUNCTION_EXISTS (strcasecmp HAVE_STRCASECMP)
 CHECK_FUNCTION_EXISTS (tell HAVE_TELL)
-CHECK_FUNCTION_EXISTS (thr_setconcurrency HAVE_THR_SETCONCURRENCY)
 CHECK_FUNCTION_EXISTS (thr_yield HAVE_THR_YIELD)
 CHECK_FUNCTION_EXISTS (vasprintf HAVE_VASPRINTF)
 CHECK_FUNCTION_EXISTS (vsnprintf HAVE_VSNPRINTF)
@@ -836,7 +825,6 @@ CHECK_CXX_SOURCE_COMPILES("
   "
   HAVE_SOLARIS_STYLE_GETHOST)
 
-SET(NO_ALARM 1 CACHE BOOL  "No need to use alarm to implement timeout")
 
 # As a consequence of ALARMs no longer being used, thread
 # notification for KILL must close the socket to wake up
@@ -952,6 +940,8 @@ SET(SPRINTF_RETURNS_INT 1)
 CHECK_STRUCT_HAS_MEMBER("struct timespec" tv_sec "time.h" STRUCT_TIMESPEC_HAS_TV_SEC)
 CHECK_STRUCT_HAS_MEMBER("struct timespec" tv_nsec "time.h" STRUCT_TIMESPEC_HAS_TV_NSEC)
 
+CHECK_STRUCT_HAS_MEMBER("struct tm" tm_gmtoff "time.h" STRUCT_TM_HAS_TM_GMTOFF)
+
 IF(NOT MSVC)
   CHECK_C_SOURCE_COMPILES(
   "
@@ -984,4 +974,9 @@ IF(have_C__Werror)
     HAVE_VFORK
   )
   SET(CMAKE_REQUIRED_FLAGS ${SAVE_CMAKE_REQUIRED_FLAGS})
+ENDIF()
+
+IF(CMAKE_C_COMPILER_ID MATCHES "Intel")
+  MY_CHECK_AND_SET_COMPILER_FLAG("-no-ansi-alias")
+  MY_CHECK_AND_SET_COMPILER_FLAG("-fp-model precise")
 ENDIF()

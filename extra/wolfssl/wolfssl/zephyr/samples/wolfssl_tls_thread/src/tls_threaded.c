@@ -44,10 +44,6 @@
 
 #define BUFFER_SIZE           2048
 #define STATIC_MEM_SIZE       (192*1024)
-#define THREAD_STACK_SIZE     (24*1024)
-
-/* The stack to use in the server's thread. */
-K_THREAD_STACK_DEFINE(server_stack, THREAD_STACK_SIZE);
 
 #ifdef WOLFSSL_STATIC_MEMORY
     static WOLFSSL_HEAP_HINT* HEAP_HINT_SERVER;
@@ -515,22 +511,8 @@ static void wolfssl_memstats(WOLFSSL* ssl)
 #endif
 }
 
-
-/* Start the server thread. */
-void start_thread(THREAD_FUNC func, func_args* args, THREAD_TYPE* thread)
-{
-    k_thread_create(thread, server_stack, K_THREAD_STACK_SIZEOF(server_stack),
-                    func, args, NULL, NULL, 5, 0, K_NO_WAIT);
-}
-
-void join_thread(THREAD_TYPE thread)
-{
-    /* Threads are handled in the kernel. */
-}
-
-
 /* Thread to do the server operations. */
-void server_thread(void* arg1, void* arg2, void* arg3)
+void server_thread(void* arg1)
 {
     int ret = 0;
     WOLFSSL_CTX* server_ctx = NULL;
@@ -602,7 +584,10 @@ int main()
     wc_InitMutex(&server_mutex);
 
     /* Start server */
-    start_thread(server_thread, NULL, &serverThread);
+    if (wolfSSL_NewThread(&serverThread, server_thread, NULL) != 0) {
+        printf("Failed to start server thread\n");
+        return -1;
+    }
 
 #ifdef WOLFSSL_STATIC_MEMORY
     if (wc_LoadStaticMemory(&HEAP_HINT_CLIENT, gMemoryClient,
@@ -643,8 +628,10 @@ int main()
     printf("Client Return: %d\n", ret);
     printf("Client Error: %d\n", wolfSSL_get_error(client_ssl, ret));
 
-
-    join_thread(serverThread);
+    if (wolfSSL_JoinThread(serverThread) != 0) {
+        printf("Failed to join server thread\n");
+        return -1;
+    }
 
 #ifdef WOLFSSL_STATIC_MEMORY
     printf("Client Memory Stats\n");

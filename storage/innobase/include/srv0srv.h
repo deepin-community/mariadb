@@ -121,10 +121,6 @@ struct srv_stats_t
 	ulint_ctr_n_t		n_temp_blocks_decrypted;
 };
 
-/** We are prepared for a situation that we have this many threads waiting for
-a transactional lock inside InnoDB. srv_start() sets the value. */
-extern ulint srv_max_n_threads;
-
 extern const char*	srv_main_thread_op_info;
 
 /** Prefix used by MySQL to indicate pre-5.1 table name encoding */
@@ -165,9 +161,9 @@ extern char*	srv_data_home;
 recovery and open all tables in RO mode instead of RW mode. We don't
 sync the max trx id to disk either. */
 extern my_bool	srv_read_only_mode;
-/** Set if InnoDB operates in read-only mode or innodb-force-recovery
-is greater than SRV_FORCE_NO_IBUF_MERGE. */
-extern my_bool	high_level_read_only;
+/** Set if innodb_read_only is set or innodb_force_recovery
+is SRV_FORCE_NO_UNDO_LOG_SCAN or greater. */
+extern bool high_level_read_only;
 /** store to its own file each table created by an user; data
 dictionary tables are in the system tablespace 0 */
 extern my_bool	srv_file_per_table;
@@ -210,14 +206,11 @@ extern unsigned long long	srv_max_undo_log_size;
 extern uint	srv_n_fil_crypt_threads;
 extern uint	srv_n_fil_crypt_threads_started;
 
-/** Rate at which UNDO records should be purged. */
-extern ulong	srv_purge_rseg_truncate_frequency;
-
 /** Enable or Disable Truncate of UNDO tablespace. */
 extern my_bool	srv_undo_log_truncate;
 
 /** Default size of UNDO tablespace (10MiB for innodb_page_size=16k) */
-constexpr ulint SRV_UNDO_TABLESPACE_SIZE_IN_PAGES= (10U << 20) /
+constexpr uint32_t SRV_UNDO_TABLESPACE_SIZE_IN_PAGES= (10U << 20) /
   UNIV_PAGE_SIZE_DEF;
 
 extern char*	srv_log_group_home_dir;
@@ -260,18 +253,6 @@ extern ulong	srv_read_ahead_threshold;
 extern uint	srv_n_read_io_threads;
 extern uint	srv_n_write_io_threads;
 
-/* Defragmentation, Origianlly facebook default value is 100, but it's too high */
-#define SRV_DEFRAGMENT_FREQUENCY_DEFAULT 40
-extern my_bool	srv_defragment;
-extern uint	srv_defragment_n_pages;
-extern uint	srv_defragment_stats_accuracy;
-extern uint	srv_defragment_fill_factor_n_recs;
-extern double	srv_defragment_fill_factor;
-extern uint	srv_defragment_frequency;
-extern ulonglong	srv_defragment_interval;
-
-extern uint	srv_change_buffer_max_size;
-
 /* Number of IO operations per second the server can do */
 extern ulong    srv_io_capacity;
 
@@ -296,7 +277,7 @@ extern ulong	srv_flushing_avg_loops;
 
 extern ulong	srv_force_recovery;
 
-/** innodb_fast_shutdown=1 skips purge and change buffer merge.
+/** innodb_fast_shutdown=1 skips purge.
 innodb_fast_shutdown=2 effectively crashes the server (no log checkpoint).
 innodb_fast_shutdown=3 is a clean shutdown that skips the rollback
 of active transaction (to be done on restart). */
@@ -312,7 +293,6 @@ extern my_bool			srv_stats_include_delete_marked;
 extern unsigned long long	srv_stats_modified_counter;
 extern my_bool			srv_stats_sample_traditional;
 
-extern my_bool	srv_use_doublewrite_buf;
 extern ulong	srv_checksum_algorithm;
 
 extern my_bool	srv_force_primary_key;
@@ -569,11 +549,6 @@ void srv_monitor_task(void*);
 void srv_master_callback(void*);
 
 
-/**
-Complete the shutdown tasks such as background DROP TABLE,
-and optionally change buffer merge (on innodb_fast_shutdown=0). */
-void srv_shutdown(bool ibuf_merge);
-
 } /* extern "C" */
 
 #ifdef UNIV_DEBUG
@@ -637,14 +612,6 @@ struct export_var_t{
 
 	/** Number of undo tablespace truncation operations */
 	ulong innodb_undo_truncations;
-	ulint innodb_defragment_compression_failures; /*!< Number of
-						defragment re-compression
-						failures */
-
-	ulint innodb_defragment_failures;	/*!< Number of defragment
-						failures*/
-	ulint innodb_defragment_count;		/*!< Number of defragment
-						operations*/
 
 	/** Number of instant ALTER TABLE operations that affect columns */
 	ulong innodb_instant_alter_column;

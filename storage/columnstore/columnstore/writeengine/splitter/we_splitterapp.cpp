@@ -151,9 +151,6 @@ WESplitterApp::~WESplitterApp()
 
 void WESplitterApp::setupSignalHandlers()
 {
-#ifdef _MSC_VER
-  // FIXME
-#else
   struct sigaction sa;
   memset(&sa, 0, sizeof(sa));
   sa.sa_handler = WESplitterApp::onSigInterrupt;
@@ -171,7 +168,6 @@ void WESplitterApp::setupSignalHandlers()
       signal(SIGINT, WESplitterApp::onSigInterrupt);
       signal(SIGTERM, WESplitterApp::onSigTerminate);
       signal(SIGHUP, WESplitterApp::onSigHup); */
-#endif
 }
 //------------------------------------------------------------------------------
 // handles on signal Terminate
@@ -572,4 +568,3 @@ int main(int argc, char** argv)
 
   return SPLTR_EXIT_STATUS;
 }
-// vim:ts=4 sw=4:

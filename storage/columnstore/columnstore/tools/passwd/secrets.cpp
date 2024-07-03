@@ -12,6 +12,8 @@
  */
 #include "secrets.h"
 
+#include <array>
+#include <cstdint>
 #include <cctype>
 #include <fstream>
 #include <pwd.h>
@@ -23,9 +25,8 @@
 #include <openssl/rand.h>
 #include <openssl/opensslv.h>
 
-#define BOOST_SPIRIT_THREADSAFE
-#include <boost/property_tree/ptree.hpp>
-#include <boost/property_tree/json_parser.hpp>
+#include "utils/json/json.hpp"
+
 #include "idberrorinfo.h"
 #include "logger.h"
 #include "mcsconfig.h"
@@ -35,12 +36,11 @@
 
 using std::string;
 
-
 #ifdef OPENSSL_VERSION_PREREQ
-#if OPENSSL_VERSION_PREREQ(3,0)
-  #define EVP_CIPHER_key_length EVP_CIPHER_get_key_length
-  #define EVP_CIPHER_iv_length EVP_CIPHER_get_iv_length
-  #define EVP_CIPHER_blocksize EVP_CIPHER_get_blocksize
+#if OPENSSL_VERSION_PREREQ(3, 0)
+#define EVP_CIPHER_key_length EVP_CIPHER_get_key_length
+#define EVP_CIPHER_iv_length EVP_CIPHER_get_iv_length
+#define EVP_CIPHER_blocksize EVP_CIPHER_get_blocksize
 #endif
 #endif
 
@@ -96,10 +96,6 @@ void CSPasswdLogging::log(int priority, const char* format, ...)
 namespace
 {
 using HexLookupTable = std::array<uint8_t, 256>;
-HexLookupTable init_hex_lookup_table() noexcept;
-
-// Hex char -> byte val lookup table.
-const HexLookupTable hex_lookup_table = init_hex_lookup_table();
 
 /* used in the bin2hex function */
 const char hex_upper[] = "0123456789ABCDEF";
@@ -133,6 +129,9 @@ HexLookupTable init_hex_lookup_table() noexcept
   }
   return rval;
 }
+
+// Hex char -> byte val lookup table.
+const HexLookupTable hex_lookup_table = init_hex_lookup_table();
 
 bool hex2bin(const char* in, unsigned int in_len, uint8_t* out)
 {
@@ -393,16 +392,16 @@ ReadKeyResult secrets_readkeys(const string& filepath)
   {
     // File contents should be json.
     // json_error_t err;
-    boost::property_tree::ptree jsontree;
+    nlohmann::json jsontree;
     try
     {
-      boost::property_tree::read_json(filepath, jsontree);
+      std::ifstream i(filepath);
+      jsontree = nlohmann::json::parse(i);
     }
-    catch (boost::property_tree::json_parser::json_parser_error& je)
+    catch (const nlohmann::json::exception& je)
     {
-      std::cout << "Error reading JSON from secrets file: " << je.filename() << " on line: " << je.line()
-                << std::endl;
-      std::cout << je.message() << std::endl;
+      std::cout << "Error reading JSON from secrets file: " << filepath << std::endl;
+      std::cout << je.what() << std::endl;
     }
     catch (...)
     {
@@ -410,8 +409,8 @@ ReadKeyResult secrets_readkeys(const string& filepath)
              strerror(errno));
     }
     // json_t* obj = json_load_file(filepathc, 0, &err);
-    string enc_cipher = jsontree.get<string>(field_cipher);
-    string enc_key = jsontree.get<string>(field_key);
+    string enc_cipher = jsontree[field_cipher];
+    string enc_key = jsontree[field_key];
     // const char* enc_cipher = json_string_value(json_object_get(obj, field_cipher));
     // const char* enc_key = json_string_value(json_object_get(obj, field_key));
     bool cipher_ok = !enc_cipher.empty() && (enc_cipher == CIPHER_NAME);
@@ -623,10 +622,8 @@ bool load_encryption_keys()
     {
       if (!ret.key.empty())
       {
-        // CSPasswdLogging::get()->log(LOG_INFO,"Using encrypted passwords. Encryption key read from '%s'.",
-        // path.c_str());
-        this_unit.key = move(ret.key);
-        this_unit.iv = move(ret.iv);
+        this_unit.key = ret.key;
+        this_unit.iv = ret.iv;
       }
       return ret.ok;
     }
@@ -648,23 +645,24 @@ bool secrets_write_keys(const ByteVec& key, const string& filepath, const string
   utils::VLArray<char> key_hex(2 * keylen + 1);
   bin2hex(key.data(), keylen, key_hex.data());
 
-  boost::property_tree::ptree jsontree;
-  jsontree.put(field_desc, desc);
-  jsontree.put(field_version, columnstore_version.c_str());
-  jsontree.put(field_cipher, CIPHER_NAME);
-  jsontree.put(field_key, (const char*)key_hex.data());
+  nlohmann::json jsontree;
+  jsontree[field_desc] = desc;
+  jsontree[field_version] = columnstore_version;
+  jsontree[field_cipher] = CIPHER_NAME;
+  jsontree[field_key] = (const char*)key_hex.data();
 
   auto filepathc = filepath.c_str();
   bool write_ok = false;
   errno = 0;
   try
   {
-    write_json(filepathc, jsontree);
+    std::ofstream o(filepath);
+    o << jsontree;
   }
-  catch (boost::property_tree::json_parser::json_parser_error& je)
+  catch (const nlohmann::json::exception& je)
   {
-    std::cout << "Write to secrets file: " << je.filename() << " on line: " << je.line() << std::endl;
-    std::cout << je.message() << std::endl;
+    std::cout << "Write to secrets file: " << filepath << std::endl;
+    std::cout << je.what() << std::endl;
   }
   catch (...)
   {

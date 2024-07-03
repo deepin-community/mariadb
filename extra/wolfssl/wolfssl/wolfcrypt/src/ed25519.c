@@ -22,6 +22,12 @@
 
  /* Based On Daniel J Bernstein's ed25519 Public Domain ref10 work. */
 
+
+/* Possible Ed25519 enable options:
+ *   WOLFSSL_EDDSA_CHECK_PRIV_ON_SIGN                               Default: OFF
+ *     Check that the private key didn't change during the signing operations.
+ */
+
 #ifdef HAVE_CONFIG_H
     #include <config.h>
 #endif
@@ -32,6 +38,7 @@
 #ifdef HAVE_ED25519
 
 #include <wolfssl/wolfcrypt/ed25519.h>
+#include <wolfssl/wolfcrypt/ge_operations.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
 #include <wolfssl/wolfcrypt/hash.h>
 #ifdef NO_INLINE
@@ -182,11 +189,12 @@ static int ed25519_hash(ed25519_key* key, const byte* in, word32 inLen,
     return ret;
 }
 
+#ifdef HAVE_ED25519_MAKE_KEY
 int wc_ed25519_make_public(ed25519_key* key, unsigned char* pubKey,
                            word32 pubKeySz)
 {
     int   ret = 0;
-    byte  az[ED25519_PRV_KEY_SIZE];
+    ALIGN16 byte az[ED25519_PRV_KEY_SIZE];
 #if !defined(FREESCALE_LTC_ECC)
     ge_p3 A;
 #endif
@@ -267,6 +275,7 @@ int wc_ed25519_make_key(WC_RNG* rng, int keySz, ed25519_key* key)
 
     return ret;
 }
+#endif /* HAVE_ED25519_MAKE_KEY */
 
 
 #ifdef HAVE_ED25519_SIGN
@@ -294,14 +303,17 @@ int wc_ed25519_sign_msg_ex(const byte* in, word32 inLen, byte* out,
     ret = se050_ed25519_sign_msg(in, inLen, out, outLen, key);
 #else
 #ifdef FREESCALE_LTC_ECC
-    byte   tempBuf[ED25519_PRV_KEY_SIZE];
+    ALIGN16 byte tempBuf[ED25519_PRV_KEY_SIZE];
     ltc_pkha_ecc_point_t ltcPoint = {0};
 #else
     ge_p3  R;
 #endif
-    byte   nonce[WC_SHA512_DIGEST_SIZE];
-    byte   hram[WC_SHA512_DIGEST_SIZE];
-    byte   az[ED25519_PRV_KEY_SIZE];
+    ALIGN16 byte nonce[WC_SHA512_DIGEST_SIZE];
+    ALIGN16 byte hram[WC_SHA512_DIGEST_SIZE];
+    ALIGN16 byte az[ED25519_PRV_KEY_SIZE];
+#ifdef WOLFSSL_EDDSA_CHECK_PRIV_ON_SIGN
+    byte orig_k[ED25519_KEY_SIZE];
+#endif
 
     /* sanity check on arguments */
     if (in == NULL || out == NULL || outLen == NULL || key == NULL ||
@@ -328,6 +340,10 @@ int wc_ed25519_sign_msg_ex(const byte* in, word32 inLen, byte* out,
         return BUFFER_E;
     }
     *outLen = ED25519_SIG_SIZE;
+
+#ifdef WOLFSSL_EDDSA_CHECK_PRIV_ON_SIGN
+    XMEMCPY(orig_k, key->k, ED25519_KEY_SIZE);
+#endif
 
     /* step 1: create nonce to use where nonce is r in
        r = H(h_b, ... ,h_2b-1,M) */
@@ -439,6 +455,18 @@ int wc_ed25519_sign_msg_ex(const byte* in, word32 inLen, byte* out,
     sc_muladd(out + (ED25519_SIG_SIZE/2), hram, az, nonce);
 #endif
 #endif /* WOLFSSL_SE050 */
+
+#ifdef WOLFSSL_EDDSA_CHECK_PRIV_ON_SIGN
+    {
+        int  i;
+        byte c = 0;
+        for (i = 0; i < ED25519_KEY_SIZE; i++) {
+            c |= key->k[i] ^ orig_k[i];
+        }
+        ret = ctMaskGT(c, 0) & SIG_VERIFY_E;
+    }
+#endif
+
     return ret;
 }
 
@@ -615,8 +643,8 @@ static int ed25519_verify_msg_final_with_sha(const byte* sig, word32 sigLen,
                                              int* res, ed25519_key* key,
                                              wc_Sha512 *sha)
 {
-    byte   rcheck[ED25519_KEY_SIZE];
-    byte   h[WC_SHA512_DIGEST_SIZE];
+    ALIGN16 byte rcheck[ED25519_KEY_SIZE];
+    ALIGN16 byte h[WC_SHA512_DIGEST_SIZE];
 #ifndef FREESCALE_LTC_ECC
     ge_p3  A;
     ge_p2  R;
@@ -1236,7 +1264,8 @@ int wc_ed25519_export_key(ed25519_key* key,
 int wc_ed25519_check_key(ed25519_key* key)
 {
     int ret = 0;
-    unsigned char pubKey[ED25519_PUB_KEY_SIZE];
+#ifdef HAVE_ED25519_MAKE_KEY
+    ALIGN16 unsigned char pubKey[ED25519_PUB_KEY_SIZE];
 
     if (!key->pubKeySet)
         ret = PUBLIC_KEY_E;
@@ -1244,6 +1273,9 @@ int wc_ed25519_check_key(ed25519_key* key)
         ret = wc_ed25519_make_public(key, pubKey, sizeof(pubKey));
     if (ret == 0 && XMEMCMP(pubKey, key->p, ED25519_PUB_KEY_SIZE) != 0)
         ret = PUBLIC_KEY_E;
+#else
+     (void)key;
+#endif /* HAVE_ED25519_MAKE_KEY */
 
     return ret;
 }

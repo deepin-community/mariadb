@@ -33,9 +33,9 @@
 [#list SWIPdatas as SWIP]
 [#-- Global variables --]
 [#if SWIP.variables??]
-	[#list SWIP.variables as variable]
+    [#list SWIP.variables as variable]
 extern ${variable.value} ${variable.name};
-	[/#list]
+    [/#list]
 [/#if]
 
 [#-- Global variables --]
@@ -45,16 +45,16 @@ extern ${variable.value} ${variable.name};
 [#assign version = SWIP.version]
 
 /**
-	MiddleWare name : ${instName}
-	MiddleWare fileName : ${fileName}
-	MiddleWare version : ${version}
+    MiddleWare name : ${instName}
+    MiddleWare fileName : ${fileName}
+    MiddleWare version : ${version}
 */
 [#if SWIP.defines??]
-	[#list SWIP.defines as definition]
+    [#list SWIP.defines as definition]
 /*---------- [#if definition.comments??]${definition.comments}[/#if] -----------*/
 #define ${definition.name} #t#t ${definition.value}
 [#if definition.description??]${definition.description} [/#if]
-	[/#list]
+    [/#list]
 [/#if]
 
 
@@ -76,6 +76,11 @@ extern ${variable.value} ${variable.name};
     #define WOLFSSL_STM32_PKA
     #undef  NO_STM32_CRYPTO
     #define HAL_CONSOLE_UART huart1
+#elif defined(STM32WL55xx)
+    #define WOLFSSL_STM32WL
+    #define WOLFSSL_STM32_PKA
+    #undef  NO_STM32_CRYPTO
+    #define HAL_CONSOLE_UART huart2
 #elif defined(STM32F407xx)
     #define WOLFSSL_STM32F4
     #define HAL_CONSOLE_UART huart2
@@ -102,7 +107,7 @@ extern ${variable.value} ${variable.name};
     #undef  NO_STM32_HASH
     #undef  NO_STM32_CRYPTO
     #define HAL_CONSOLE_UART huart3
-#elif defined(STM32H723xx)
+#elif defined(STM32H723xx) || defined(STM32H725xx)
     #define WOLFSSL_STM32H7
     #define HAL_CONSOLE_UART huart3
 #elif defined(STM32L4A6xx)
@@ -177,7 +182,8 @@ extern ${variable.value} ${variable.name};
     //#define NO_STM32_RNG
     //#undef  NO_STM32_HASH
     //#undef  NO_STM32_CRYPTO
-    //#define WOLFSSL_GENSEED_FORTEST /* if no HW RNG is available use test seed */
+    /* if no HW RNG is available use test seed */
+    //#define WOLFSSL_GENSEED_FORTEST
     //#define STM32_HAL_V2
 #endif
 
@@ -207,18 +213,27 @@ extern ${variable.value} ${variable.name};
 /* ------------------------------------------------------------------------- */
 /* Math Configuration */
 /* ------------------------------------------------------------------------- */
-/* 1=Fast (stack)
- * 2=Normal (heap)
- * 3=Single Precision C (only common curves/key sizes)
- * 4=Single Precision ASM Cortex-M3+
- * 5=Single Precision ASM Cortex-M0 (Generic Thumb)
- * 6=Single Precision C all small
- * 7=Single Precision C all big
+/* 1=Fast (stack)                      (tfm.c)
+ * 2=Normal (heap)                     (integer.c)
+ * 3-5=Single Precision: only common curves/key sizes:
+ *                   (ECC 256/384/521 and RSA/DH 2048/3072/4096)
+ *   3=Single Precision C              (sp_c32.c)
+ *   4=Single Precision ASM Cortex-M3+ (sp_cortexm.c)
+ *   5=Single Precision ASM Cortex-M0  (sp_armthumb.c)
+ * 6=Wolf multi-precision C small      (sp_int.c)
+ * 7=Wolf multi-precision C big        (sp_int.c)
  */
+
 #if defined(WOLF_CONF_MATH) && WOLF_CONF_MATH == 1
     /* fast (stack) math - tfm.c */
     #define USE_FAST_MATH
     #define TFM_TIMING_RESISTANT
+
+    #if !defined(NO_RSA) || !defined(NO_DH)
+        /* Maximum math bits (Max DH/RSA key bits * 2) */
+        #undef  FP_MAX_BITS
+        #define FP_MAX_BITS     4096
+    #endif
 
     /* Optimizations (TFM_ARM, TFM_ASM or none) */
     //#define TFM_NO_ASM
@@ -234,22 +249,29 @@ extern ${variable.value} ${variable.name};
     #endif
     #if defined(WOLF_CONF_RSA) && WOLF_CONF_RSA == 1
         #define WOLFSSL_HAVE_SP_RSA
+        //#define WOLFSSL_SP_NO_2048
+        //#define WOLFSSL_SP_NO_3072
+        //#define WOLFSSL_SP_4096
     #endif
     #if defined(WOLF_CONF_DH) && WOLF_CONF_DH == 1
         #define WOLFSSL_HAVE_SP_DH
     #endif
     #if defined(WOLF_CONF_ECC) && WOLF_CONF_ECC == 1
         #define WOLFSSL_HAVE_SP_ECC
+        //#define WOLFSSL_SP_NO_256
+        //#define WOLFSSL_SP_384
+        //#define WOLFSSL_SP_521
     #endif
     #if WOLF_CONF_MATH == 6 || WOLF_CONF_MATH == 7
+        #define WOLFSSL_SP_MATH_ALL /* use sp_int.c multi precision math */
+        //#define WOLFSSL_SP_ARM_THUMB /* enable ARM Thumb ASM speedups */
+    #else
         #define WOLFSSL_SP_MATH    /* disable non-standard curves / key sizes */
     #endif
-    #define SP_WORD_SIZE 32
+    #define SP_WORD_SIZE 32 /* force 32-bit mode */
 
     /* Enable to put all math on stack (no heap) */
     //#define WOLFSSL_SP_NO_MALLOC
-    /* Enable for SP cache resistance (not usually enabled for embedded micros) */
-    //#define WOLFSSL_SP_CACHE_RESISTANT
 
     #if WOLF_CONF_MATH == 4 || WOLF_CONF_MATH == 5
         #define WOLFSSL_SP_ASM /* required if using the ASM versions */
@@ -273,6 +295,8 @@ extern ${variable.value} ${variable.name};
 #define HAVE_SUPPORTED_CURVES
 #define HAVE_ENCRYPT_THEN_MAC
 #define HAVE_EXTENDED_MASTER
+#define WOLFSSL_ASN_TEMPLATE
+#define HAVE_SNI
 
 #if defined(WOLF_CONF_TLS13) && WOLF_CONF_TLS13 == 1
     #define WOLFSSL_TLS13
@@ -325,12 +349,6 @@ extern ${variable.value} ${variable.name};
 /* RSA */
 #undef NO_RSA
 #if defined(WOLF_CONF_RSA) && WOLF_CONF_RSA == 1
-    #ifdef USE_FAST_MATH
-        /* Maximum math bits (Max RSA key bits * 2) */
-        #undef  FP_MAX_BITS
-        #define FP_MAX_BITS     4096
-    #endif
-
     /* half as much memory but twice as slow */
     #undef  RSA_LOW_MEM
     //#define RSA_LOW_MEM
@@ -384,8 +402,8 @@ extern ${variable.value} ${variable.name};
     //#define HAVE_COMP_KEY
 
     #ifdef USE_FAST_MATH
-        #ifdef NO_RSA
-            /* Custom fastmath size if not using RSA */
+        #if defined(NO_RSA) && defined(NO_DH)
+            /* Custom fastmath size if not using RSA/DH */
             /* MAX = ROUND32(ECC BITS) * 2 */
             #define FP_MAX_BITS     (256 * 2)
         #else
@@ -426,6 +444,7 @@ extern ${variable.value} ${variable.name};
 #endif
 
 /* Other possible AES modes */
+//#define WOLFSSL_AES_CFB /* Used by TPM parameter encryption */
 //#define WOLFSSL_AES_COUNTER
 //#define HAVE_AESCCM
 //#define WOLFSSL_AES_XTS
@@ -505,12 +524,12 @@ extern ${variable.value} ${variable.name};
 /* Sha3 */
 #undef WOLFSSL_SHA3
 #if defined(WOLF_CONF_SHA3) && WOLF_CONF_SHA3 == 1
-	#define WOLFSSL_SHA3
+    #define WOLFSSL_SHA3
 #endif
 
 /* MD5 */
 #if defined(WOLF_CONF_MD5) && WOLF_CONF_MD5 == 1
-	/* enabled */
+    /* enabled */
 #else
     #define NO_MD5
 #endif
@@ -535,8 +554,8 @@ extern ${variable.value} ${variable.name};
     #if 0
         #define USE_WOLFSSL_MEMORY
         #define WOLFSSL_TRACK_MEMORY
-  		  #define WOLFSSL_DEBUG_MEMORY
-	  	  #define WOLFSSL_DEBUG_MEMORY_PRINT
+        #define WOLFSSL_DEBUG_MEMORY
+        #define WOLFSSL_DEBUG_MEMORY_PRINT
     #endif
 #else
     //#define NO_WOLFSSL_MEMORY
@@ -594,6 +613,8 @@ extern ${variable.value} ${variable.name};
 #define NO_RC4
 #define NO_MD4
 #define NO_DES3
+#define WOLFSSL_NO_SHAKE128
+#define WOLFSSL_NO_SHAKE256
 
 /* In-lining of misc.c functions */
 /* If defined, must include wolfcrypt/src/misc.c in build */

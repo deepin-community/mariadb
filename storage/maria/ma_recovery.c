@@ -133,7 +133,7 @@ static void new_transaction(uint16 sid, TrID long_id, LSN undo_lsn,
 static int new_table(uint16 sid, const char *name, LSN lsn_of_file_id);
 static int new_page(uint32 fileid, pgcache_page_no_t pageid, LSN rec_lsn,
                     struct st_dirty_page *dirty_page);
-static int close_all_tables(void);
+static int close_all_tables(my_bool force_end_newline);
 static my_bool close_one_table(const char *name, TRANSLOG_ADDRESS addr);
 static void print_redo_phase_progress(TRANSLOG_ADDRESS addr);
 static void delete_all_transactions();
@@ -467,7 +467,7 @@ int maria_apply_log(LSN from_lsn, LSN end_redo_lsn, LSN end_undo_lsn,
     we don't use maria_panic() because it would maria_end(), and Recovery does
     not want that (we want to keep some modules initialized for runtime).
   */
-  if (close_all_tables())
+  if (close_all_tables(0))
   {
     ma_message_no_user(0, "closing of tables failed");
     goto err;
@@ -495,6 +495,8 @@ int maria_apply_log(LSN from_lsn, LSN end_redo_lsn, LSN end_undo_lsn,
     /* No dirty pages, all tables are closed, no active transactions, save: */
     if (ma_checkpoint_execute(CHECKPOINT_FULL, FALSE))
       goto err;
+    tprint(tracef, "checkpoint done at " LSN_FMT "\n",
+           LSN_IN_PARTS(last_checkpoint_lsn));
   }
 
   goto end;
@@ -505,7 +507,7 @@ err2:
     delete_all_transactions();
   if (!abort_message_printed)
     error= 1;
-  if (close_all_tables())
+  if (close_all_tables(1))
   {
     ma_message_no_user(0, "closing of tables failed");
   }
@@ -1163,11 +1165,12 @@ end:
 /*
   The record may come from REPAIR, ALTER TABLE ENABLE KEYS, OPTIMIZE.
 */
+
 prototype_redo_exec_hook(REDO_REPAIR_TABLE)
 {
   int error= 1;
   MARIA_HA *info;
-  HA_CHECK param;
+  HA_CHECK *param;
   char *name;
   my_bool quick_repair;
   DBUG_ENTER("exec_REDO_LOGREC_REDO_REPAIR_TABLE");
@@ -1199,35 +1202,39 @@ prototype_redo_exec_hook(REDO_REPAIR_TABLE)
   */
   tprint(tracef, "   repairing...\n");
 
-  maria_chk_init(&param);
-  param.isam_file_name= name= info->s->open_file_name.str;
-  param.testflag= uint8korr(rec->header + FILEID_STORE_SIZE);
-  param.tmpdir= maria_tmpdir;
-  param.max_trid= max_long_trid;
+  if (!(param= my_malloc(PSI_INSTRUMENT_ME, sizeof(*param), MYF(MY_WME))))
+    DBUG_RETURN(0);
+
+  maria_chk_init(param);
+  param->isam_file_name= name= info->s->open_file_name.str;
+  param->testflag= uint8korr(rec->header + FILEID_STORE_SIZE);
+  param->tmpdir= maria_tmpdir;
+  param->max_trid= max_long_trid;
   DBUG_ASSERT(maria_tmpdir);
 
   info->s->state.key_map= uint8korr(rec->header + FILEID_STORE_SIZE + 8);
-  quick_repair= MY_TEST(param.testflag & T_QUICK);
+  quick_repair= MY_TEST(param->testflag & T_QUICK);
 
-  if (param.testflag & T_REP_PARALLEL)
+  if (param->testflag & T_REP_PARALLEL)
   {
-    if (maria_repair_parallel(&param, info, name, quick_repair))
+    if (maria_repair_parallel(param, info, name, quick_repair))
       goto end;
   }
-  else if (param.testflag & T_REP_BY_SORT)
+  else if (param->testflag & T_REP_BY_SORT)
   {
-    if (maria_repair_by_sort(&param, info, name, quick_repair))
+    if (maria_repair_by_sort(param, info, name, quick_repair))
       goto end;
   }
-  else if (maria_repair(&param, info, name, quick_repair))
+  else if (maria_repair(param, info, name, quick_repair))
     goto end;
 
   if (_ma_update_state_lsns(info->s, rec->lsn, trnman_get_min_safe_trid(),
-                            TRUE, !(param.testflag & T_NO_CREATE_RENAME_LSN)))
+                            TRUE, !(param->testflag & T_NO_CREATE_RENAME_LSN)))
     goto end;
   error= 0;
 
 end:
+  my_free(param);
   DBUG_RETURN(error);
 }
 
@@ -2579,6 +2586,8 @@ prototype_undo_exec_hook(UNDO_BULK_INSERT)
   return error;
 }
 
+/* Stack size 18776 in clang. Ok as this is during recover */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
 
 static int run_redo_phase(LSN lsn, LSN lsn_end, enum maria_apply_log_way apply)
 {
@@ -2822,6 +2831,7 @@ err:
   translog_free_record_header(&rec);
   DBUG_RETURN(1);
 }
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 
 /**
@@ -3472,7 +3482,7 @@ static int new_page(uint32 fileid, pgcache_page_no_t pageid, LSN rec_lsn,
 }
 
 
-static int close_all_tables(void)
+static int close_all_tables(my_bool force_end_newline)
 {
   int error= 0;
   uint count= 0;
@@ -3537,7 +3547,7 @@ static int close_all_tables(void)
     }
   }
 end:
-  if (recovery_message_printed == REC_MSG_FLUSH)
+  if (recovery_message_printed == REC_MSG_FLUSH && (force_end_newline || error))
   {
     fputc('\n', stderr);
     fflush(stderr);

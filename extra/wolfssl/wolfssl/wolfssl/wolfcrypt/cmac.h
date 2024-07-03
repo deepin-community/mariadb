@@ -98,18 +98,38 @@ WOLFSSL_API
 int wc_CmacUpdate(Cmac* cmac,
                   const byte* in, word32 inSz);
 WOLFSSL_API
+int wc_CmacFinalNoFree(Cmac* cmac,
+                       byte* out, word32* outSz);
+WOLFSSL_API
 int wc_CmacFinal(Cmac* cmac,
                  byte* out, word32* outSz);
+
+WOLFSSL_API
+int wc_CmacFree(Cmac* cmac);
 
 WOLFSSL_API
 int wc_AesCmacGenerate(byte* out, word32* outSz,
                        const byte* in, word32 inSz,
                        const byte* key, word32 keySz);
+WOLFSSL_API
+int wc_AesCmacGenerate_ex(Cmac *cmac,
+                          byte* out, word32* outSz,
+                          const byte* in, word32 inSz,
+                          const byte* key, word32 keySz,
+                          void* heap,
+                          int devId);
 
 WOLFSSL_API
 int wc_AesCmacVerify(const byte* check, word32 checkSz,
                      const byte* in, word32 inSz,
                      const byte* key, word32 keySz);
+WOLFSSL_API
+int wc_AesCmacVerify_ex(Cmac* cmac,
+                        const byte* check, word32 checkSz,
+                        const byte* in, word32 inSz,
+                        const byte* key, word32 keySz,
+                        void* heap,
+                        int devId);
 
 WOLFSSL_LOCAL
 void ShiftAndXorRb(byte* out, byte* in);

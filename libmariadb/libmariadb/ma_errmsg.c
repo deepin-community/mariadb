@@ -53,7 +53,7 @@ const char *client_errors[]=
 /* 2023 */  "",
 /* 2024 */  "",
 /* 2025 */  "",
-/* 2026 */  "TLS/SSL error: %-.100s",
+/* 2026 */  "TLS/SSL error: %s",
 /* 2027 */  "Received malformed packet",
 /* 2028 */  "",
 /* 2029 */  "",
@@ -118,6 +118,8 @@ const char *mariadb_client_errors[] =
   /* 5021 */ "Binary log error (File: %.*s start_pos=%ld): %s.",
   /* 5022 */ "File '%s' is not a binary log file",
   /* 5023 */ "Semi sync request error: %s",
+  /* 5024 */ "Invalid client flags (%lu) specified. Supported flags: %lu",
+  /* 5025 */ "Statement has no result set",
   ""
 };
 

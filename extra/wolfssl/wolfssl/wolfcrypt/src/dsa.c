@@ -42,6 +42,14 @@
     #include <wolfcrypt/src/misc.c>
 #endif
 
+#if defined(WOLFSSL_LINUXKM) && !defined(WOLFSSL_SP_ASM)
+    /* force off unneeded vector register save/restore. */
+    #undef SAVE_VECTOR_REGISTERS
+    #define SAVE_VECTOR_REGISTERS(...) WC_DO_NOTHING
+    #undef RESTORE_VECTOR_REGISTERS
+    #define RESTORE_VECTOR_REGISTERS() WC_DO_NOTHING
+#endif
+
 #ifdef _MSC_VER
     /* disable for while(0) cases (MSVC bug) */
     #pragma warning(disable:4127)
@@ -260,7 +268,7 @@ int wc_MakeDsaParameters(WC_RNG *rng, int modulus_size, DsaKey *dsa)
      */
     switch (modulus_size) {
 #ifdef WOLFSSL_DSA_768_MODULUS
-    /* This key length is unsecure and only included for bind 9 testing */
+    /* This key length is insecure and only included for bind 9 testing */
         case 768:
 #endif
         case 1024:
@@ -641,7 +649,7 @@ int wc_DsaExportKeyRaw(DsaKey* dsa, byte* x, word32* xSz, byte* y, word32* ySz)
 
 int wc_DsaSign(const byte* digest, byte* out, DsaKey* key, WC_RNG* rng)
 {
-    /* use sha1 by default for backwards compatability */
+    /* use sha1 by default for backwards compatibility */
     return wc_DsaSign_ex(digest, WC_SHA_DIGEST_SIZE, out, key, rng);
 }
 
@@ -756,7 +764,7 @@ int wc_DsaSign_ex(const byte* digest, word32 digestSz, byte* out, DsaKey* key,
                 break;
             }
 
-            /* k is a random numnber and it should be less than q-1
+            /* k is a random number and it should be less than q-1
              * if k greater than repeat
              */
             /* Step 6 */
@@ -976,7 +984,7 @@ int wc_DsaSign_ex(const byte* digest, word32 digestSz, byte* out, DsaKey* key,
 
 int wc_DsaVerify(const byte* digest, const byte* sig, DsaKey* key, int* answer)
 {
-    /* use sha1 by default for backwards compatability */
+    /* use sha1 by default for backwards compatibility */
     return wc_DsaVerify_ex(digest, WC_SHA_DIGEST_SIZE, sig, key, answer);
 }
 
