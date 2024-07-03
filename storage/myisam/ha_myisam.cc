@@ -710,6 +710,16 @@ my_bool mi_killed_in_mariadb(MI_INFO *info)
   return (((TABLE*) (info->external_ref))->in_use->killed != 0);
 }
 
+static void init_compute_vcols(void *table)
+{
+  /*
+    To evaluate vcols we must have current_thd set.
+    This will set current_thd in all threads to the same THD, but it's
+    safe, because vcols are always evaluated under info->s->intern_lock.
+  */
+  set_current_thd(static_cast<TABLE *>(table)->in_use);
+}
+
 static int compute_vcols(MI_INFO *info, uchar *record, int keynum)
 {
   /* This mutex is needed for parallel repair */
@@ -730,7 +740,7 @@ static int compute_vcols(MI_INFO *info, uchar *record, int keynum)
   for (; kp < end; kp++)
   {
     Field *f= table->field[kp->fieldnr - 1];
-    if (f->vcol_info && !f->vcol_info->stored_in_db)
+    if (f->vcol_info && !f->vcol_info->is_stored())
       table->update_virtual_field(f, false);
   }
   mysql_mutex_unlock(&info->s->intern_lock);
@@ -802,6 +812,17 @@ ulong ha_myisam::index_flags(uint inx, uint part, bool all_parts) const
            HA_DO_RANGE_FILTER_PUSHDOWN;
   }
   return flags;
+}
+
+IO_AND_CPU_COST ha_myisam::rnd_pos_time(ha_rows rows)
+{
+  IO_AND_CPU_COST cost= handler::rnd_pos_time(rows);
+  /*
+    Row data is not cached. costs.row_lookup_cost includes the cost of
+    the reading the row from system (probably cached by the OS).
+  */
+  cost.io= 0;
+  return cost;
 }
 
 
@@ -1011,6 +1032,7 @@ void ha_myisam::setup_vcols_for_repair(HA_CHECK *param)
   }
   DBUG_ASSERT(file->s->base.reclength < file->s->vreclength ||
               !table->s->stored_fields);
+  param->init_fix_record= init_compute_vcols;
   param->fix_record= compute_vcols;
   table->use_all_columns();
 }
@@ -1559,40 +1581,37 @@ int ha_myisam::preload_keys(THD* thd, HA_CHECK_OPT *check_opt)
 
   SYNOPSIS
     disable_indexes()
-    mode        mode of operation:
-                HA_KEY_SWITCH_NONUNIQ      disable all non-unique keys
-                HA_KEY_SWITCH_ALL          disable all keys
-                HA_KEY_SWITCH_NONUNIQ_SAVE dis. non-uni. and make persistent
-                HA_KEY_SWITCH_ALL_SAVE     dis. all keys and make persistent
 
-  IMPLEMENTATION
-    HA_KEY_SWITCH_NONUNIQ       is not implemented.
-    HA_KEY_SWITCH_ALL_SAVE      is not implemented.
+  DESCRIPTION
+    See handler::ha_disable_indexes()
 
   RETURN
     0  ok
     HA_ERR_WRONG_COMMAND  mode not implemented.
 */
 
-int ha_myisam::disable_indexes(uint mode)
+int ha_myisam::disable_indexes(key_map map, bool persist)
 {
   int error;
 
-  if (mode == HA_KEY_SWITCH_ALL)
+  if (!persist)
   {
     /* call a storage engine function to switch the key map */
+    DBUG_ASSERT(map.is_clear_all());
     error= mi_disable_indexes(file);
-  }
-  else if (mode == HA_KEY_SWITCH_NONUNIQ_SAVE)
-  {
-    mi_extra(file, HA_EXTRA_NO_KEYS, 0);
-    info(HA_STATUS_CONST);                        // Read new key info
-    error= 0;
   }
   else
   {
-    /* mode not implemented */
-    error= HA_ERR_WRONG_COMMAND;
+    ulonglong ullmap= map.to_ulonglong();
+
+    /* make sure auto-inc key is enabled even if it's > 64 */
+    if (map.length() > MI_KEYMAP_BITS &&
+        table->s->next_number_index < MAX_KEY)
+      mi_set_key_active(ullmap, table->s->next_number_index);
+
+    mi_extra(file, HA_EXTRA_NO_KEYS, &ullmap);
+    info(HA_STATUS_CONST);                        // Read new key info
+    error= 0;
   }
   return error;
 }
@@ -1603,21 +1622,14 @@ int ha_myisam::disable_indexes(uint mode)
 
   SYNOPSIS
     enable_indexes()
-    mode        mode of operation:
-                HA_KEY_SWITCH_NONUNIQ      enable all non-unique keys
-                HA_KEY_SWITCH_ALL          enable all keys
-                HA_KEY_SWITCH_NONUNIQ_SAVE en. non-uni. and make persistent
-                HA_KEY_SWITCH_ALL_SAVE     en. all keys and make persistent
 
   DESCRIPTION
     Enable indexes, which might have been disabled by disable_index() before.
-    The modes without _SAVE work only if both data and indexes are empty,
+    If persist=false, it works only if both data and indexes are empty,
     since the MyISAM repair would enable them persistently.
     To be sure in these cases, call handler::delete_all_rows() before.
 
-  IMPLEMENTATION
-    HA_KEY_SWITCH_NONUNIQ       is not implemented.
-    HA_KEY_SWITCH_ALL_SAVE      is not implemented.
+    See also handler::ha_enable_indexes()
 
   RETURN
     0  ok
@@ -1626,7 +1638,7 @@ int ha_myisam::disable_indexes(uint mode)
     HA_ERR_WRONG_COMMAND  mode not implemented.
 */
 
-int ha_myisam::enable_indexes(uint mode)
+int ha_myisam::enable_indexes(key_map map, bool persist)
 {
   int error;
   DBUG_ENTER("ha_myisam::enable_indexes");
@@ -1640,7 +1652,8 @@ int ha_myisam::enable_indexes(uint mode)
     DBUG_RETURN(0);
   }
 
-  if (mode == HA_KEY_SWITCH_ALL)
+  DBUG_ASSERT(map.is_prefix(table->s->keys));
+  if (!persist)
   {
     error= mi_enable_indexes(file);
     /*
@@ -1649,7 +1662,7 @@ int ha_myisam::enable_indexes(uint mode)
        but mode==HA_KEY_SWITCH_ALL forbids it.
     */
   }
-  else if (mode == HA_KEY_SWITCH_NONUNIQ_SAVE)
+  else
   {
     THD *thd= table->in_use;
     int was_error= thd->is_error();
@@ -1708,11 +1721,6 @@ int ha_myisam::enable_indexes(uint mode)
     thd_proc_info(thd, save_proc_info);
 
     restore_vcos_after_repair();
-  }
-  else
-  {
-    /* mode not implemented */
-    error= HA_ERR_WRONG_COMMAND;
   }
   DBUG_RETURN(error);
 }
@@ -1876,7 +1884,7 @@ int ha_myisam::end_bulk_insert()
         setting the indexes as active and  trying to recreate them. 
      */
    
-      if (((first_error= enable_indexes(HA_KEY_SWITCH_NONUNIQ_SAVE)) != 0) && 
+      if (((first_error= enable_indexes(key_map(table->s->keys), true))) &&
           table->in_use->killed)
       {
         delete_all_rows();
@@ -1960,9 +1968,8 @@ int ha_myisam::index_init(uint idx, bool sorted)
   active_index=idx;
   if (pushed_idx_cond_keyno == idx)
     mi_set_index_cond_func(file, handler_index_cond_check, this);
-  if (pushed_rowid_filter)
-    mi_set_rowid_filter_func(file, handler_rowid_filter_check,
-                             handler_rowid_filter_is_active, this);
+  if (pushed_rowid_filter && handler_rowid_filter_is_active(this))
+    mi_set_rowid_filter_func(file, handler_rowid_filter_check, this);
   return 0; 
 }
 
@@ -1970,11 +1977,10 @@ int ha_myisam::index_init(uint idx, bool sorted)
 int ha_myisam::index_end()
 {
   DBUG_ENTER("ha_myisam::index_end");
-  active_index=MAX_KEY;
-  //pushed_idx_cond_keyno= MAX_KEY;
+  active_index= MAX_KEY;
   mi_set_index_cond_func(file, NULL, 0);
   in_range_check_pushed_down= FALSE;
-  mi_set_rowid_filter_func(file, NULL, NULL, 0);
+  mi_set_rowid_filter_func(file, NULL, 0);
   ds_mrr.dsmrr_close();
 #if !defined(DBUG_OFF) && defined(SQL_SELECT_FIXED_FOR_UPDATE)
   file->update&= ~HA_STATE_AKTIV;               // Forget active row
@@ -2010,9 +2016,8 @@ int ha_myisam::index_read_idx_map(uchar *buf, uint index, const uchar *key,
   end_range= NULL;
   if (index == pushed_idx_cond_keyno)
     mi_set_index_cond_func(file, handler_index_cond_check, this);
-  if (pushed_rowid_filter)
-    mi_set_rowid_filter_func(file, handler_rowid_filter_check,
-                             handler_rowid_filter_is_active, this);
+  if (pushed_rowid_filter && handler_rowid_filter_is_active(this))
+    mi_set_rowid_filter_func(file, handler_rowid_filter_check, this);
   res= mi_rkey(file, buf, index, key, keypart_map, find_flag);
   mi_set_index_cond_func(file, NULL, 0);
   return res;
@@ -2585,6 +2590,22 @@ static int myisam_drop_table(handlerton *hton, const char *path)
   return mi_delete_table(path);
 }
 
+
+void myisam_update_optimizer_costs(OPTIMIZER_COSTS *costs)
+{
+  /*
+    MyISAM row lookup costs are slow as the row data is not cached
+    The following numbers where found by check_costs.pl when using 1M rows
+    and all rows are cached. See optimizer_costs.txt
+  */
+  costs->row_next_find_cost=   0.000063539;
+  costs->row_lookup_cost=      0.001014818;
+  costs->key_next_find_cost=   0.000090585;
+  costs->key_lookup_cost=      0.000550142;
+  costs->key_copy_cost=        0.000015685;
+}
+
+
 static int myisam_init(void *p)
 {
   handlerton *hton;
@@ -2604,6 +2625,7 @@ static int myisam_init(void *p)
   hton->create= myisam_create_handler;
   hton->drop_table= myisam_drop_table;
   hton->panic= myisam_panic;
+  hton->update_optimizer_costs= myisam_update_optimizer_costs;
   hton->flags= HTON_CAN_RECREATE | HTON_SUPPORT_LOG_TABLES;
   hton->tablefile_extensions= ha_myisam_exts;
   mi_killed= mi_killed_in_mariadb;
@@ -2643,7 +2665,8 @@ int ha_myisam::multi_range_read_next(range_id_t *range_info)
 ha_rows ha_myisam::multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq,
                                                void *seq_init_param, 
                                                uint n_ranges, uint *bufsz,
-                                               uint *flags, Cost_estimate *cost)
+                                               uint *flags, ha_rows limit,
+                                               Cost_estimate *cost)
 {
   /*
     This call is here because there is no location where this->table would
@@ -2652,7 +2675,7 @@ ha_rows ha_myisam::multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq,
   */
   ds_mrr.init(this, table);
   return ds_mrr.dsmrr_info_const(keyno, seq, seq_init_param, n_ranges, bufsz,
-                                 flags, cost);
+                                 flags, limit, cost);
 }
 
 ha_rows ha_myisam::multi_range_read_info(uint keyno, uint n_ranges, uint keys,
@@ -2707,11 +2730,22 @@ Item *ha_myisam::idx_cond_push(uint keyno_arg, Item* idx_cond_arg)
 
 bool ha_myisam::rowid_filter_push(Rowid_filter* rowid_filter)
 {
+  /* This will be used in index_init() */
   pushed_rowid_filter= rowid_filter;
-  mi_set_rowid_filter_func(file, handler_rowid_filter_check,
-			   handler_rowid_filter_is_active, this);
   return false;
 }
+
+
+/* Enable / disable rowid filter depending if it's active or not */
+
+void ha_myisam::rowid_filter_changed()
+{
+  if (pushed_rowid_filter && handler_rowid_filter_is_active(this))
+    mi_set_rowid_filter_func(file, handler_rowid_filter_check, this);
+  else
+    mi_set_rowid_filter_func(file, NULL, this);
+}
+
 
 struct st_mysql_storage_engine myisam_storage_engine=
 { MYSQL_HANDLERTON_INTERFACE_VERSION };

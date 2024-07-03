@@ -20,6 +20,9 @@
  */
 
 
+#ifndef WOLFSSL_STRERROR_BUFFER_SIZE
+#define WOLFSSL_STRERROR_BUFFER_SIZE 256
+#endif
 
 #ifdef HAVE_CONFIG_H
     #include <config.h>
@@ -37,6 +40,56 @@
 #include <wolfssl/internal.h>
 #include <wolfssl/error-ssl.h>
 #include <wolfssl/wolfio.h>
+
+#if defined(USE_WOLFSSL_IO) || defined(HAVE_HTTP_CLIENT)
+    #ifndef USE_WINDOWS_API
+        #if defined(WOLFSSL_LWIP) && !defined(WOLFSSL_APACHE_MYNEWT)
+        #elif defined(ARDUINO)
+        #elif defined(FREESCALE_MQX)
+        #elif defined(FREESCALE_KSDK_MQX)
+        #elif (defined(WOLFSSL_MDK_ARM) || defined(WOLFSSL_KEIL_TCP_NET))
+        #elif defined(WOLFSSL_CMSIS_RTOS)
+        #elif defined(WOLFSSL_CMSIS_RTOSv2)
+        #elif defined(WOLFSSL_TIRTOS)
+        #elif defined(FREERTOS_TCP)
+        #elif defined(WOLFSSL_IAR_ARM)
+        #elif defined(HAVE_NETX_BSD)
+        #elif defined(WOLFSSL_VXWORKS)
+        #elif defined(WOLFSSL_NUCLEUS_1_2)
+        #elif defined(WOLFSSL_LINUXKM)
+            /* the requisite linux/net.h is included in wc_port.h, with incompatible warnings masked out. */
+        #elif defined(WOLFSSL_ATMEL)
+        #elif defined(INTIME_RTOS)
+            #include <netdb.h>
+        #elif defined(WOLFSSL_PRCONNECT_PRO)
+            #include <netdb.h>
+            #include <sys/ioctl.h>
+        #elif defined(WOLFSSL_SGX)
+        #elif defined(WOLFSSL_APACHE_MYNEWT) && !defined(WOLFSSL_LWIP)
+        #elif defined(WOLFSSL_DEOS)
+        #elif defined(WOLFSSL_ZEPHYR)
+        #elif defined(MICROCHIP_PIC32)
+        #elif defined(HAVE_NETX)
+        #elif defined(FUSION_RTOS)
+        #elif !defined(WOLFSSL_NO_SOCK)
+            #if defined(HAVE_RTP_SYS)
+            #elif defined(EBSNET)
+            #elif defined(NETOS)
+            #elif !defined(DEVKITPRO) && !defined(WOLFSSL_PICOTCP) \
+                    && !defined(WOLFSSL_CONTIKI) && !defined(WOLFSSL_WICED) \
+                    && !defined(WOLFSSL_GNRC) && !defined(WOLFSSL_RIOT_OS)
+                #include <netdb.h>
+                #ifdef __PPU
+                    #include <netex/errno.h>
+                #else
+                    #include <sys/ioctl.h>
+                #endif
+            #endif
+        #endif
+
+    #endif /* USE_WINDOWS_API */
+#endif /* defined(USE_WOLFSSL_IO) || defined(HAVE_HTTP_CLIENT) */
+
 
 #if defined(HAVE_HTTP_CLIENT)
     #include <stdlib.h>   /* strtol() */
@@ -121,6 +174,12 @@ static WC_INLINE int wolfSSL_LastError(int err)
 
 static int TranslateIoError(int err)
 {
+#ifdef  _WIN32
+    size_t errstr_offset;
+    char errstr[WOLFSSL_STRERROR_BUFFER_SIZE];
+#endif /* _WIN32 */
+
+
     if (err > 0)
         return err;
 
@@ -151,7 +210,20 @@ static int TranslateIoError(int err)
         return WOLFSSL_CBIO_ERR_CONN_CLOSE;
     }
 
+#if defined(_WIN32)
+    strcpy_s(errstr, sizeof(errstr), "\tGeneral error: ");
+    errstr_offset = strlen(errstr);
+    FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL,
+        err,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPSTR)(errstr + errstr_offset),
+        (DWORD)(sizeof(errstr) - errstr_offset),
+        NULL);
+    WOLFSSL_MSG(errstr);
+#else
     WOLFSSL_MSG("\tGeneral error");
+#endif
     return WOLFSSL_CBIO_ERR_GENERAL;
 }
 #endif /* USE_WOLFSSL_IO || HAVE_HTTP_CLIENT */
@@ -396,12 +468,12 @@ static int PeerIsIpv6(const SOCKADDR_S *peer, XSOCKLENT len)
 
 static int isDGramSock(int sfd)
 {
-    char type = 0;
+    int type = 0;
     /* optvalue 'type' is of size int */
-    XSOCKLENT length = (XSOCKLENT)sizeof(char);
+    XSOCKLENT length = (XSOCKLENT)sizeof(type);
 
-    if (getsockopt(sfd, SOL_SOCKET, SO_TYPE, &type, &length) == 0 &&
-            type != SOCK_DGRAM) {
+    if (getsockopt(sfd, SOL_SOCKET, SO_TYPE, (XSOCKOPT_TYPE_OPTVAL_TYPE)&type,
+            &length) == 0 && type != SOCK_DGRAM) {
         return 0;
     }
     else {
@@ -634,7 +706,7 @@ int EmbedSendTo(WOLFSSL* ssl, char *buf, int sz, void *ctx)
         peerSz = dtlsCtx->peer.sz;
 #ifndef WOLFSSL_IPV6
         if (PeerIsIpv6(peer, peerSz)) {
-            WOLFSSL_MSG("ipv6 dtls peer setted but no ipv6 support compiled");
+            WOLFSSL_MSG("ipv6 dtls peer set but no ipv6 support compiled");
             return NOT_COMPILED_IN;
         }
 #endif
@@ -1084,7 +1156,11 @@ int wolfIO_TcpConnect(SOCKET_T* sockfd, const char* ip, word16 port, int to_sec)
     /* use gethostbyname for c99 */
 #if defined(HAVE_GETADDRINFO)
     XMEMSET(&hints, 0, sizeof(hints));
+#ifdef WOLFSSL_IPV6
     hints.ai_family = AF_UNSPEC; /* detect IPv4 or IPv6 */
+#else
+    hints.ai_family = AF_INET;   /* detect only IPv4 */
+#endif
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
@@ -1383,6 +1459,9 @@ int wolfIO_DecodeUrl(const char* url, int urlSz, char* outName, char* outPath,
             word32 bigPort = 0;
             i = 0;
             cur++;
+
+            XMEMSET(port, 0, sizeof(port));
+
             while (i < 6 && cur < urlSz && url[cur] != 0 && url[cur] != '/') {
                 port[i] = url[cur];
                 i++; cur++;
@@ -2463,11 +2542,18 @@ int MicriumSendTo(WOLFSSL* ssl, char *buf, int sz, void *ctx)
 /* Micrium DTLS Generate Cookie callback
  *  return : number of bytes copied into buf, or error
  */
+#if defined(NO_SHA) && !defined(NO_SHA256)
+    #define MICRIUM_COOKIE_DIGEST_SIZE WC_SHA256_DIGEST_SIZE
+#elif !defined(NO_SHA)
+    #define MICRIUM_COOKIE_DIGEST_SIZE WC_SHA_DIGEST_SIZE
+#else
+    #error Must enable either SHA-1 or SHA256 (or both) for Micrium.
+#endif
 int MicriumGenerateCookie(WOLFSSL* ssl, byte *buf, int sz, void *ctx)
 {
     NET_SOCK_ADDR peer;
     NET_SOCK_ADDR_LEN peerSz = sizeof(peer);
-    byte digest[WC_SHA_DIGEST_SIZE];
+    byte digest[MICRIUM_COOKIE_DIGEST_SIZE];
     int  ret = 0;
 
     (void)ctx;
@@ -2479,12 +2565,16 @@ int MicriumGenerateCookie(WOLFSSL* ssl, byte *buf, int sz, void *ctx)
         return GEN_COOKIE_E;
     }
 
+#if defined(NO_SHA) && !defined(NO_SHA256)
+    ret = wc_Sha256Hash((byte*)&peer, peerSz, digest);
+#else
     ret = wc_ShaHash((byte*)&peer, peerSz, digest);
+#endif
     if (ret != 0)
         return ret;
 
-    if (sz > WC_SHA_DIGEST_SIZE)
-        sz = WC_SHA_DIGEST_SIZE;
+    if (sz > MICRIUM_COOKIE_DIGEST_SIZE)
+        sz = MICRIUM_COOKIE_DIGEST_SIZE;
     XMEMCPY(buf, digest, sz);
 
     return sz;
@@ -2778,20 +2868,31 @@ int uIPReceive(WOLFSSL *ssl, char *buf, int sz, void *_ctx)
 /* uIP DTLS Generate Cookie callback
  *  return : number of bytes copied into buf, or error
  */
+#if defined(NO_SHA) && !defined(NO_SHA256)
+    #define UIP_COOKIE_DIGEST_SIZE WC_SHA256_DIGEST_SIZE
+#elif !defined(NO_SHA)
+    #define UIP_COOKIE_DIGEST_SIZE WC_SHA_DIGEST_SIZE
+#else
+    #error Must enable either SHA-1 or SHA256 (or both) for uIP.
+#endif
 int uIPGenerateCookie(WOLFSSL* ssl, byte *buf, int sz, void *_ctx)
 {
     uip_wolfssl_ctx *ctx = (uip_wolfssl_ctx *)_ctx;
     byte token[32];
-    byte digest[WC_SHA_DIGEST_SIZE];
+    byte digest[UIP_COOKIE_DIGEST_SIZE];
     int  ret = 0;
     XMEMSET(token, 0, sizeof(token));
     XMEMCPY(token, &ctx->peer_addr, sizeof(uip_ipaddr_t));
     XMEMCPY(token + sizeof(uip_ipaddr_t), &ctx->peer_port, sizeof(word16));
+#if defined(NO_SHA) && !defined(NO_SHA256)
+    ret = wc_Sha256Hash(token, sizeof(uip_ipaddr_t) + sizeof(word16), digest);
+#else
     ret = wc_ShaHash(token, sizeof(uip_ipaddr_t) + sizeof(word16), digest);
+#endif
     if (ret != 0)
         return ret;
-    if (sz > WC_SHA_DIGEST_SIZE)
-        sz = WC_SHA_DIGEST_SIZE;
+    if (sz > UIP_COOKIE_DIGEST_SIZE)
+        sz = UIP_COOKIE_DIGEST_SIZE;
     XMEMCPY(buf, digest, sz);
     return sz;
 }
@@ -2855,13 +2956,20 @@ int GNRC_ReceiveFrom(WOLFSSL *ssl, char *buf, int sz, void *_ctx)
  *  return : number of bytes copied into buf, or error
  */
 #define GNRC_MAX_TOKEN_SIZE (32)
+#if defined(NO_SHA) && !defined(NO_SHA256)
+    #define GNRC_COOKIE_DIGEST_SIZE WC_SHA256_DIGEST_SIZE
+#elif !defined(NO_SHA)
+    #define GNRC_COOKIE_DIGEST_SIZE WC_SHA_DIGEST_SIZE
+#else
+    #error Must enable either SHA-1 or SHA256 (or both) for GNRC.
+#endif
 int GNRC_GenerateCookie(WOLFSSL* ssl, byte *buf, int sz, void *_ctx)
 {
     sock_tls_t *ctx = (sock_tls_t *)_ctx;
     if (!ctx)
         return WOLFSSL_CBIO_ERR_GENERAL;
     byte token[GNRC_MAX_TOKEN_SIZE];
-    byte digest[WC_SHA_DIGEST_SIZE];
+    byte digest[GNRC_COOKIE_DIGEST_SIZE];
     int  ret = 0;
     size_t token_size = sizeof(sock_udp_ep_t);
     (void)ssl;
@@ -2869,11 +2977,15 @@ int GNRC_GenerateCookie(WOLFSSL* ssl, byte *buf, int sz, void *_ctx)
         token_size = GNRC_MAX_TOKEN_SIZE;
     XMEMSET(token, 0, GNRC_MAX_TOKEN_SIZE);
     XMEMCPY(token, &ctx->peer_addr, token_size);
+#if defined(NO_SHA) && !defined(NO_SHA256)
+    ret = wc_Sha256Hash(token, token_size, digest);
+#else
     ret = wc_ShaHash(token, token_size, digest);
+#endif
     if (ret != 0)
         return ret;
-    if (sz > WC_SHA_DIGEST_SIZE)
-        sz = WC_SHA_DIGEST_SIZE;
+    if (sz > GNRC_COOKIE_DIGEST_SIZE)
+        sz = GNRC_COOKIE_DIGEST_SIZE;
     XMEMCPY(buf, digest, sz);
     return sz;
 }

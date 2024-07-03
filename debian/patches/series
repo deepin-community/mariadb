@@ -4,8 +4,12 @@ env-perl-usr-bin-perl.patch
 fix-spelling-rocksdb.patch
 fix-reproducible-builds-rocksdb.patch
 mroonga-mrn-lib-dirs-path-reproducible-build.patch
-2129-new-script-wsrep-sst-backup-fixes.patch
 2541-fix-stack-overflow-in-pinbox-allocator.patch
-fix-spelling-libmarias3.patch
 fix-spelling-libmariadb.patch
-2777-fix-disks-disk-test.patch
+install-files-into-usr.patch
+1006531-hurd-no-auth-socket.patch
+startup-message.patch
+fix-spelling-mariadb.patch
+hurd-i386-plugin_disks_information_schema_disks.cc.patch
+hurd-i386-storage_connect_ioapi.h.patch
+hide-mysql-command-deprecation-warnings.patch

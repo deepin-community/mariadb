@@ -27,7 +27,6 @@ Created Apr 25, 2012 Vasil Dimov
 #include "dict0dict.h"
 #include "dict0stats.h"
 #include "dict0stats_bg.h"
-#include "dict0defrag_bg.h"
 #include "row0mysql.h"
 #include "srv0start.h"
 #include "fil0fil.h"
@@ -69,6 +68,8 @@ static recalc_pool_t		recalc_pool;
 /** Whether the global data structures have been initialized */
 static bool			stats_initialised;
 
+static THD *dict_stats_thd;
+
 /*****************************************************************//**
 Free the resources occupied by the recalc pool, called once during
 thread de-initialization. */
@@ -77,7 +78,6 @@ static void dict_stats_recalc_pool_deinit()
 	ut_ad(!srv_read_only_mode);
 
 	recalc_pool.clear();
-	defrag_pool.clear();
         /*
           recalc_pool may still have its buffer allocated. It will free it when
           its destructor is called.
@@ -87,9 +87,10 @@ static void dict_stats_recalc_pool_deinit()
           to empty_pool object, which will free it when leaving this function:
         */
 	recalc_pool_t recalc_empty_pool;
-	defrag_pool_t defrag_empty_pool;
 	recalc_pool.swap(recalc_empty_pool);
-	defrag_pool.swap(defrag_empty_pool);
+
+	if (dict_stats_thd)
+		destroy_background_thd(dict_stats_thd);
 }
 
 /*****************************************************************//**
@@ -255,7 +256,6 @@ void dict_stats_init()
   ut_ad(!srv_read_only_mode);
   mysql_mutex_init(recalc_pool_mutex_key, &recalc_pool_mutex, nullptr);
   pthread_cond_init(&recalc_pool_cond, nullptr);
-  dict_defrag_pool_init();
   stats_initialised= true;
 }
 
@@ -272,7 +272,6 @@ void dict_stats_deinit()
 	stats_initialised = false;
 
 	dict_stats_recalc_pool_deinit();
-	dict_defrag_pool_deinit();
 
 	mysql_mutex_destroy(&recalc_pool_mutex);
 	pthread_cond_destroy(&recalc_pool_cond);
@@ -361,52 +360,49 @@ done:
   {
     ut_ad(i->state == recalc::IN_PROGRESS);
     recalc_pool.erase(i);
-    const bool reschedule= !update_now && recalc_pool.empty();
     if (err == DB_SUCCESS_LOCKED_REC)
       recalc_pool.emplace_back(recalc{table_id, recalc::IDLE});
     mysql_mutex_unlock(&recalc_pool_mutex);
-    if (reschedule)
-      dict_stats_schedule(MIN_RECALC_INTERVAL * 1000);
   }
 
   return update_now;
 }
 
-static tpool::timer* dict_stats_timer;
-static std::mutex dict_stats_mutex;
+/** Check if the recalc pool is empty. */
+static bool is_recalc_pool_empty()
+{
+  mysql_mutex_lock(&recalc_pool_mutex);
+  bool empty= recalc_pool.empty();
+  mysql_mutex_unlock(&recalc_pool_mutex);
+  return empty;
+}
 
+static tpool::timer* dict_stats_timer;
 static void dict_stats_func(void*)
 {
-  THD *thd= innobase_create_background_thd("InnoDB statistics");
-  set_current_thd(thd);
-  while (dict_stats_process_entry_from_recalc_pool(thd)) {}
-  dict_defrag_process_entries_from_defrag_pool(thd);
+  if (!dict_stats_thd)
+    dict_stats_thd= innobase_create_background_thd("InnoDB statistics");
+  set_current_thd(dict_stats_thd);
+
+  while (dict_stats_process_entry_from_recalc_pool(dict_stats_thd)) {}
+
+  innobase_reset_background_thd(dict_stats_thd);
   set_current_thd(nullptr);
-  destroy_background_thd(thd);
+  if (!is_recalc_pool_empty())
+    dict_stats_schedule(MIN_RECALC_INTERVAL * 1000);
 }
 
 
 void dict_stats_start()
 {
-  std::lock_guard<std::mutex> lk(dict_stats_mutex);
-  if (!dict_stats_timer)
-    dict_stats_timer= srv_thread_pool->create_timer(dict_stats_func);
+  DBUG_ASSERT(!dict_stats_timer);
+  dict_stats_timer= srv_thread_pool->create_timer(dict_stats_func);
 }
 
 
 static void dict_stats_schedule(int ms)
 {
-  std::unique_lock<std::mutex> lk(dict_stats_mutex, std::defer_lock);
-  /*
-    Use try_lock() to avoid deadlock in dict_stats_shutdown(), which
-    uses dict_stats_mutex too. If there is simultaneous timer reschedule,
-    the first one will win, which is fine.
-  */
-  if (!lk.try_lock())
-  {
-    return;
-  }
-  if (dict_stats_timer)
+  if(dict_stats_timer)
     dict_stats_timer->set_time(ms,0);
 }
 
@@ -418,7 +414,6 @@ void dict_stats_schedule_now()
 /** Shut down the dict_stats_thread. */
 void dict_stats_shutdown()
 {
-  std::lock_guard<std::mutex> lk(dict_stats_mutex);
   delete dict_stats_timer;
   dict_stats_timer= 0;
 }

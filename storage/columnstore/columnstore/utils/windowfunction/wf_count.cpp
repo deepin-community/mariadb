@@ -62,7 +62,7 @@ boost::shared_ptr<WindowFunctionType> WF_count<T>::makeFunction(int id, const st
     case CalpontSystemCatalog::VARCHAR:
     case CalpontSystemCatalog::VARBINARY:
     {
-      func.reset(new WF_count<string>(id, name));
+      func.reset(new WF_count<utils::NullString>(id, name));
       break;
     }
 
@@ -184,4 +184,3 @@ template boost::shared_ptr<WindowFunctionType> WF_count<int64_t>::makeFunction(i
                                                                                WindowFunctionColumn*);
 
 }  // namespace windowfunction
-// vim:ts=4 sw=4:

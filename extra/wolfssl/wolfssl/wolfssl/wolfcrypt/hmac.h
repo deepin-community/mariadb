@@ -31,14 +31,6 @@
 #ifndef NO_HMAC
 
 #if defined(HAVE_FIPS) && \
-        (!defined(HAVE_FIPS_VERSION) || (HAVE_FIPS_VERSION < 2))
-/* for fips @wc_fips */
-    #include <cyassl/ctaocrypt/hmac.h>
-    #define WC_HMAC_BLOCK_SIZE HMAC_BLOCK_SIZE
-#endif
-
-
-#if defined(HAVE_FIPS) && \
         defined(HAVE_FIPS_VERSION) && (HAVE_FIPS_VERSION >= 2)
     #include <wolfssl/wolfcrypt/fips.h>
 #endif
@@ -144,6 +136,9 @@ typedef union {
 #ifdef WOLFSSL_SHA3
     wc_Sha3 sha3;
 #endif
+#ifdef WOLFSSL_SM3
+    wc_Sm3 sm3;
+#endif
 } wc_HmacHash;
 
 /* Hmac digest */
@@ -215,8 +210,16 @@ WOLFSSL_LOCAL int _InitHmac(Hmac* hmac, int type, void* heap);
 
 #ifdef HAVE_HKDF
 
+WOLFSSL_API int wc_HKDF_Extract_ex(int type, const byte* salt, word32 saltSz,
+                                const byte* inKey, word32 inKeySz, byte* out,
+                                void* heap, int devId);
+
 WOLFSSL_API int wc_HKDF_Extract(int type, const byte* salt, word32 saltSz,
                                 const byte* inKey, word32 inKeySz, byte* out);
+
+WOLFSSL_API int wc_HKDF_Expand_ex(int type, const byte* inKey, word32 inKeySz,
+                               const byte* info, word32 infoSz,
+                               byte* out, word32 outSz, void* heap, int devId);
 WOLFSSL_API int wc_HKDF_Expand(int type, const byte* inKey, word32 inKeySz,
                                const byte* info, word32 infoSz,
                                byte* out, word32 outSz);

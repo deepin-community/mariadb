@@ -215,7 +215,7 @@ void rollbackAll(DBRM* dbrm)
   logging::MessageLog ml(lid);
   ml.logInfoMessage(message);
 
-  boost::shared_array<BRM::SIDTIDEntry> activeTxns;
+  std::shared_ptr<BRM::SIDTIDEntry[]> activeTxns;
   BRM::TxnID txnID;
   SessionManager sessionManager;
   int rc = 0;
@@ -551,7 +551,6 @@ int8_t setupCwd()
 
 void ServiceDMLProc::setupChildSignalHandlers()
 {
-#ifndef _MSC_VER
   /* set up some signal handlers */
   struct sigaction ign;
   memset(&ign, 0, sizeof(ign));
@@ -565,7 +564,6 @@ void ServiceDMLProc::setupChildSignalHandlers()
   sigaction(SIGSEGV, &ign, 0);
   sigaction(SIGABRT, &ign, 0);
   sigaction(SIGFPE, &ign, 0);
-#endif
 }
 
 int ServiceDMLProc::Child()
@@ -589,11 +587,9 @@ int ServiceDMLProc::Child()
   }
 
   WriteEngine::WriteEngineWrapper::init(WriteEngine::SUBSYSTEM_ID_DMLPROC);
-#ifdef _MSC_VER
-  // In windows, initializing the wrapper (A dll) does not set the static variables
-  // in the main program
-  idbdatafile::IDBPolicy::configIDBPolicy();
-#endif
+
+  // Initialize the charset library
+  MY_INIT("DMLProc");
 
   //@Bug 1627
   try
@@ -614,6 +610,10 @@ int ServiceDMLProc::Child()
 
     cerr << "DMLProc failed to start due to : " << e.what() << endl;
     NotifyServiceInitializationFailed();
+
+    // Free up resources allocated by MY_INIT() above.
+    my_end(0);
+
     return 1;
   }
 
@@ -639,14 +639,7 @@ int ServiceDMLProc::Child()
 
     // Couldn't check the return code b/c
     // fuser returns 1 for unused port.
-#if defined(__GNUC__) && __GNUC__ >= 5
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-result"
-    (void)::system(cmd.c_str());
-#pragma GCC diagnostic pop
-#else
-    (void)::system(cmd.c_str());
-#endif
+    std::ignore = ::system(cmd.c_str());
   }
   catch (...)
   {
@@ -680,6 +673,9 @@ int ServiceDMLProc::Child()
 
   _exit(dmlserver.start());
 
+  // Free up resources allocated by MY_INIT() above.
+  my_end(0);
+
   return 1;
 }
 
@@ -692,10 +688,6 @@ int main(int argc, char** argv)
   setlocale(LC_NUMERIC, "C");
   // This is unset due to the way we start it
   program_invocation_short_name = const_cast<char*>("DMLProc");
-  // Initialize the charset library
-  MY_INIT(argv[0]);
 
   return ServiceDMLProc(opt).Run();
 }
-
-// vim:ts=4 sw=4:

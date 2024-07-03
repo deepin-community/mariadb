@@ -201,15 +201,11 @@ public:
 };
 
 
-class ACL_USER :public ACL_USER_BASE,
-                public ACL_USER_PARAM
+class ACL_USER :public ACL_USER_BASE, public ACL_USER_PARAM
 {
 public:
-
   ACL_USER() = default;
-  ACL_USER(THD *thd, const LEX_USER &combo,
-           const Account_options &options,
-           const privilege_t privileges);
+  ACL_USER(THD *, const LEX_USER &, const Account_options &, const privilege_t);
 
   ACL_USER *copy(MEM_ROOT *root)
   {
@@ -957,6 +953,7 @@ class User_table_tabular: public User_table
 
   int get_auth(THD *thd, MEM_ROOT *root, ACL_USER *u) const
   {
+    mysql_mutex_assert_owner(&acl_cache->lock);
     u->alloc_auth(root, 1);
     if (have_password())
     {
@@ -1058,7 +1055,7 @@ class User_table_tabular: public User_table
       access|= DELETE_HISTORY_ACL;
 
     if (access & SUPER_ACL)
-      access|= GLOBAL_SUPER_ADDED_SINCE_USER_TABLE_ACLS;
+      access|= ALLOWED_BY_SUPER_BEFORE_101100 | ALLOWED_BY_SUPER_BEFORE_110000;
 
     /*
       The SHOW SLAVE HOSTS statement :
@@ -1073,6 +1070,9 @@ class User_table_tabular: public User_table
 
     if (access & REPL_SLAVE_ACL)
       access|= SLAVE_MONITOR_ACL;
+
+    if ((access & ALL_KNOWN_ACL_100304) == ALL_KNOWN_ACL_100304)
+      access|= SHOW_CREATE_ROUTINE_ACL;
 
     return access & GLOBAL_ACLS;
   }
@@ -1545,12 +1545,21 @@ class User_table_json: public User_table
   {
     privilege_t mask= ALL_KNOWN_ACL_100304;
     ulonglong orig_access= access;
+    if (version_id < 110000)
+    {
+      if (access & SUPER_ACL)
+        access|= ALLOWED_BY_SUPER_BEFORE_110000;
+    }
     if (version_id < 101100)
     {
       if (access & SUPER_ACL)
-        access|= READ_ONLY_ADMIN_ACL;
+        access|= ALLOWED_BY_SUPER_BEFORE_101100;
     }
-    if (version_id >= 100509)
+    if (version_id >= 110300)
+    {
+      mask= ALL_KNOWN_ACL_110300;
+    }
+    else if (version_id >= 100509)
     {
       mask= ALL_KNOWN_ACL_100509;
     }
@@ -1566,26 +1575,6 @@ class User_table_json: public User_table
     else // 100501 or earlier
     {
       /*
-        Address changes in SUPER and REPLICATION SLAVE made in 10.5.2.
-        This also covers a special case: if the user had ALL PRIVILEGES before
-        the upgrade, it gets ALL PRIVILEGES after the upgrade.
-      */
-      if (access & SUPER_ACL)
-      {
-        if (access & REPL_SLAVE_ACL)
-        {
-          /*
-            The user could do both before the upgrade:
-            - set global variables       (because of SUPER_ACL)
-            - execute "SHOW SLAVE HOSTS" (because of REPL_SLAVE_ACL)
-            Grant all new privileges that were splitted from SUPER (in 10.5.2),
-            and REPLICATION MASTER ADMIN, so it still can do "SHOW SLAVE HOSTS".
-          */
-          access|= REPL_MASTER_ADMIN_ACL;
-        }
-        access|= GLOBAL_SUPER_ADDED_SINCE_USER_TABLE_ACLS;
-      }
-      /*
         REPLICATION_CLIENT(BINLOG_MONITOR_ACL) should allow SHOW SLAVE STATUS
         REPLICATION SLAVE should allow SHOW RELAYLOG EVENTS
       */
@@ -1598,6 +1587,11 @@ class User_table_json: public User_table
       print_warning_bad_access(version_id, mask, orig_access);
       return NO_ACL;
     }
+
+    // ALL PRIVILEGES always means ALL PRIVILEGES
+    if ((orig_access & mask) == mask)
+      access= ALL_KNOWN_ACL;
+
     return access & ALL_KNOWN_ACL;
   }
 
@@ -2316,6 +2310,9 @@ static bool validate_password(THD *thd, const LEX_CSTRING &user,
 static int set_user_salt(ACL_USER::AUTH *auth, plugin_ref plugin)
 {
   st_mysql_auth *info= (st_mysql_auth *) plugin_decl(plugin)->info;
+
+  mysql_mutex_assert_owner(&acl_cache->lock);
+
   if (info->interface_version >= 0x0202 && info->preprocess_hash &&
       auth->auth_string.length)
   {
@@ -2350,6 +2347,8 @@ static int set_user_auth(THD *thd, const LEX_CSTRING &user,
   bool unlock_plugin= false;
   plugin_ref plugin= get_auth_plugin(thd, auth->plugin, &unlock_plugin);
   int res= 1;
+
+  mysql_mutex_assert_owner(&acl_cache->lock);
 
   if (!plugin)
   {
@@ -2427,10 +2426,13 @@ static bool set_user_salt_if_needed(ACL_USER *user_copy, int curr_auth,
   if (auth_copy->salt.str)
     return 0; // already done
 
-  if (set_user_salt(auth_copy, plugin))
-    return 1;
-
   mysql_mutex_lock(&acl_cache->lock);
+  if (set_user_salt(auth_copy, plugin))
+  {
+    mysql_mutex_unlock(&acl_cache->lock);
+    return 1;
+  }
+
   ACL_USER *user= find_user_exact(user_copy->host.hostname, user_copy->user.str);
   // make sure the user wasn't altered or dropped meanwhile
   if (user)
@@ -2533,6 +2535,8 @@ bool acl_init(bool dont_read_acl_tables)
     DBUG_RETURN(1); /* purecov: inspected */
   thd->thread_stack= (char*) &thd;
   thd->store_globals();
+  thd->set_query_inner((char*) STRING_WITH_LEN("intern:acl_init"),
+                       default_charset_info);
   /*
     It is safe to call acl_reload() since acl_* arrays and hashes which
     will be freed there are global static objects and thus are initialized
@@ -2789,6 +2793,9 @@ static bool acl_load(THD *thd, const Grant_tables& tables)
 	db.access|=REFERENCES_ACL | INDEX_ACL | ALTER_ACL;
     }
 #endif
+    if (db_table.num_fields() <= 23)
+      if ((db.access | SHOW_CREATE_ROUTINE_ACL | GRANT_ACL) == DB_ACLS)
+        db.access|= SHOW_CREATE_ROUTINE_ACL;
     acl_dbs.push(db);
   }
   end_read_record(&read_record_info);
@@ -2942,6 +2949,7 @@ bool acl_reload(THD *thd)
   }
 
   acl_cache->clear(0);
+  mysql_mutex_record_order(&acl_cache->lock, &LOCK_status);
   mysql_mutex_lock(&acl_cache->lock);
 
   old_acl_hosts= acl_hosts;
@@ -3403,10 +3411,18 @@ end:
                                                 check_role_is_granted_callback,
                                                 NULL) == -1))
       {
-        /* Role is not granted but current user can see the role */
-        my_printf_error(ER_INVALID_ROLE, "User %`s@%`s has not been granted role %`s",
-                        MYF(0), thd->security_ctx->priv_user,
-                        thd->security_ctx->priv_host, rolename);
+        /* This happens for SET ROLE case and when `--skip-name-resolve` option
+           is used. In that situation host can be NULL and current user is always
+           target user, so printing `priv_user@priv_host` is not incorrect.
+         */
+        if (!host)
+          my_printf_error(ER_INVALID_ROLE, "User %`s@%`s has not been granted role %`s",
+                          MYF(0), thd->security_ctx->priv_user,
+                          thd->security_ctx->priv_host, rolename);
+        else
+          /* Role is not granted but current user can see the role */
+          my_printf_error(ER_INVALID_ROLE, "User %`s@%`s has not been granted role %`s",
+                          MYF(0), user, host, rolename);
       }
       else
       {
@@ -3477,6 +3493,7 @@ ACL_USER::ACL_USER(THD *thd, const LEX_USER &combo,
                    const Account_options &options,
                    const privilege_t privileges)
 {
+  mysql_mutex_assert_owner(&acl_cache->lock);
   user= safe_lexcstrdup_root(&acl_memroot, combo.user);
   update_hostname(&host, safe_strdup_root(&acl_memroot, combo.host.str));
   hostname_length= combo.host.length;
@@ -3493,6 +3510,8 @@ static int acl_user_update(THD *thd, ACL_USER *acl_user, uint nauth,
                            const privilege_t privileges)
 {
   ACL_USER_PARAM::AUTH *work_copy= NULL;
+  mysql_mutex_assert_owner(&acl_cache->lock);
+
   if (nauth)
   {
     if (!(work_copy= (ACL_USER_PARAM::AUTH*)
@@ -5032,6 +5051,9 @@ static int replace_db_table(TABLE *table, const char *db,
   }
   rights=get_access(table,3);
   rights=fix_rights_for_db(rights);
+  if (table->s->fields <= 23)
+    if ((rights | SHOW_CREATE_ROUTINE_ACL | GRANT_ACL) == DB_ACLS)
+      rights|= SHOW_CREATE_ROUTINE_ACL;
 
   if (old_row_exists)
   {
@@ -5201,6 +5223,7 @@ update_role_mapping(LEX_CSTRING *user, LEX_CSTRING *host, LEX_CSTRING *role,
     return 0;
   }
 
+  mysql_mutex_assert_owner(&acl_cache->lock);
   /* allocate a new entry that will go in the hash */
   ROLE_GRANT_PAIR *hash_entry= new (&acl_memroot) ROLE_GRANT_PAIR;
   if (hash_entry->init(&acl_memroot, user->str, host->str,
@@ -5265,6 +5288,7 @@ replace_proxies_priv_table(THD *thd, TABLE *table, const LEX_USER *user,
 
   DBUG_ENTER("replace_proxies_priv_table");
 
+  mysql_mutex_assert_owner(&acl_cache->lock);
   if (!table)
   {
     my_error(ER_NO_SUCH_TABLE, MYF(0), MYSQL_SCHEMA_NAME.str,
@@ -7609,7 +7633,7 @@ static bool can_grant_role(THD *thd, ACL_ROLE *role)
 {
   Security_context *sctx= thd->security_ctx;
 
-  if (!sctx->user) // replication
+  if (!sctx->is_user_defined()) // galera
     return true;
 
   ACL_USER *grantee= find_user_exact(sctx->priv_host, sctx->priv_user);
@@ -7871,31 +7895,30 @@ bool mysql_grant_role(THD *thd, List <LEX_USER> &list, bool revoke)
 }
 
 
-bool mysql_grant(THD *thd, const char *db, List <LEX_USER> &list,
+static
+bool mysql_grant(THD *thd, LEX_CSTRING db, List <LEX_USER> &list,
                  privilege_t rights, bool revoke_grant, bool is_proxy)
 {
   List_iterator <LEX_USER> str_list (list);
   LEX_USER *Str, *tmp_Str, *proxied_user= NULL;
-  char tmp_db[SAFE_NAME_LEN+1];
+  IdentBuffer<SAFE_NAME_LEN + MY_CS_MBMAXLEN> tmp_db;
   bool create_new_users=0;
   int result;
   DBUG_ENTER("mysql_grant");
 
-  if (lower_case_table_names && db)
+  if (lower_case_table_names && db.str)
   {
-    char *end= strnmov(tmp_db,db, sizeof(tmp_db));
-    if (end >= tmp_db + sizeof(tmp_db))
+    if (tmp_db.copy_casedn(db).length() > SAFE_NAME_LEN)
     {
-      my_error(ER_WRONG_DB_NAME ,MYF(0), db);
+      my_error(ER_WRONG_DB_NAME ,MYF(0), db.str);
       DBUG_RETURN(TRUE);
     }
-    my_casedn_str(files_charset_info, tmp_db);
-    db=tmp_db;
+    db= tmp_db.to_lex_cstring();
   }
 
   if (is_proxy)
   {
-    DBUG_ASSERT(!db);
+    DBUG_ASSERT(!db.str);
     proxied_user= str_list++;
   }
 
@@ -7931,20 +7954,20 @@ bool mysql_grant(THD *thd, const char *db, List <LEX_USER> &list,
 
     if (copy_and_check_auth(Str, tmp_Str, thd) ||
         replace_user_table(thd, tables.user_table(), Str,
-                           (!db ? rights : NO_ACL),
+                           (!db.str ? rights : NO_ACL),
                            revoke_grant, create_new_users,
                            MY_TEST(!is_public(Str) &&
                                    (thd->variables.sql_mode &
                                     MODE_NO_AUTO_CREATE_USER))))
       result= true;
-    else if (db)
+    else if (db.str)
     {
       privilege_t db_rights(rights & DB_ACLS);
       if (db_rights  == rights)
       {
-	if (replace_db_table(tables.db_table().table(), db, *Str, db_rights,
-			     revoke_grant))
-	  result= true;
+        if (replace_db_table(tables.db_table().table(), db.str,
+                             *Str, db_rights, revoke_grant))
+          result= true;
       }
       else
       {
@@ -7960,8 +7983,9 @@ bool mysql_grant(THD *thd, const char *db, List <LEX_USER> &list,
     }
     if (Str->is_role())
       propagate_role_grants(find_acl_role(Str->user.str, true),
-                            db ? PRIVS_TO_MERGE::DB : PRIVS_TO_MERGE::GLOBAL,
-                            db);
+                            db.str ? PRIVS_TO_MERGE::DB :
+                                     PRIVS_TO_MERGE::GLOBAL,
+                            db.str);
   }
   mysql_mutex_unlock(&acl_cache->lock);
 
@@ -8013,6 +8037,9 @@ bool grant_init()
     DBUG_RETURN(1);				/* purecov: deadcode */
   thd->thread_stack= (char*) &thd;
   thd->store_globals();
+  thd->set_query_inner((char*) STRING_WITH_LEN("intern:grant_init"),
+                       default_charset_info);
+
   return_val=  grant_reload(thd);
   delete thd;
   DBUG_RETURN(return_val);
@@ -8372,11 +8399,6 @@ bool check_grant(THD *thd, privilege_t want_access, TABLE_LIST *tables,
       orig_want_access= ((t_ref->lock_type >= TL_FIRST_WRITE) ?
                          INSERT_ACL : SELECT_ACL);
     }
-
-    if (tl->with || !tl->db.str ||
-        (tl->select_lex &&
-         (tl->with= tl->select_lex->find_table_def_in_with_clauses(tl))))
-      continue;
 
     const ACL_internal_table_access *access=
       get_cached_table_access(&t_ref->grant.m_internal,
@@ -9003,7 +9025,8 @@ err:
    1            error
 */
 
-bool check_routine_level_acl(THD *thd, const char *db, const char *name,
+bool check_routine_level_acl(THD *thd, privilege_t acl,
+                             const char *db, const char *name,
                              const Sp_handler *sph)
 {
   bool no_routine_acl= 1;
@@ -9014,7 +9037,7 @@ bool check_routine_level_acl(THD *thd, const char *db, const char *name,
                                        sctx->ip, db,
                                        sctx->priv_user,
                                        name, sph, 0)))
-    no_routine_acl= !(grant_proc->privs & SHOW_PROC_ACLS);
+    no_routine_acl= !(grant_proc->privs & acl);
 
   if (no_routine_acl && sctx->priv_role[0]) /* current set role check */
   {
@@ -9022,7 +9045,7 @@ bool check_routine_level_acl(THD *thd, const char *db, const char *name,
                                          NULL, db,
                                          sctx->priv_role,
                                          name, sph, 0)))
-      no_routine_acl= !(grant_proc->privs & SHOW_PROC_ACLS);
+      no_routine_acl= !(grant_proc->privs & SHOW_PROC_WITHOUT_DEFINITION_ACLS);
   }
   mysql_rwlock_unlock(&LOCK_grant);
   return no_routine_acl;
@@ -9256,7 +9279,7 @@ static const char *command_array[]=
   "CREATE USER", "EVENT", "TRIGGER", "CREATE TABLESPACE", "DELETE HISTORY",
   "SET USER", "FEDERATED ADMIN", "CONNECTION ADMIN", "READ_ONLY ADMIN",
   "REPLICATION SLAVE ADMIN", "REPLICATION MASTER ADMIN", "BINLOG ADMIN",
-  "BINLOG REPLAY", "SLAVE MONITOR"
+  "BINLOG REPLAY", "SLAVE MONITOR", "SHOW CREATE ROUTINE"
 };
 
 static uint command_lengths[]=
@@ -9269,7 +9292,7 @@ static uint command_lengths[]=
   11, 5, 7, 17, 14,
   8, 15, 16, 15,
   23, 24, 12,
-  13, 13
+  13, 13, 19
 };
 
 
@@ -12159,8 +12182,8 @@ static my_bool count_column_grants(void *grant_table,
   This must be performed under the mutex in order to make sure the
   iteration does not fail.
 */
-static int show_column_grants(THD *thd, SHOW_VAR *var, char *buff,
-                              enum enum_var_type scope)
+static int show_column_grants(THD *thd, SHOW_VAR *var, void *buff,
+                              system_status_var *, enum enum_var_type scope)
 {
   var->type= SHOW_ULONG;
   var->value= buff;
@@ -12176,8 +12199,8 @@ static int show_column_grants(THD *thd, SHOW_VAR *var, char *buff,
   return 0;
 }
 
-static int show_database_grants(THD *thd, SHOW_VAR *var, char *buff,
-                                enum enum_var_type scope)
+static int show_database_grants(THD *thd, SHOW_VAR *var, void *buff,
+                                system_status_var *, enum enum_var_type scope)
 {
   var->type= SHOW_UINT;
   var->value= buff;
@@ -12192,6 +12215,9 @@ bool check_grant(THD *, privilege_t, TABLE_LIST *, bool, uint, bool)
 { return 0; }
 inline privilege_t public_access()
 { return NO_ACL; }
+privilege_t get_column_grant(THD *, GRANT_INFO *,
+                             const char *, const char *, const char *)
+{ return ALL_KNOWN_ACL; }
 #endif /*NO_EMBEDDED_ACCESS_CHECKS */
 
 
@@ -12288,7 +12314,7 @@ bool Sql_cmd_grant_proxy::execute(THD *thd)
 
   WSREP_TO_ISOLATION_BEGIN(WSREP_MYSQL_DB, NULL, NULL);
   /* Conditionally writes to binlog */
-  if (mysql_grant(thd, NULL/*db*/, lex->users_list, m_grant_option,
+  if (mysql_grant(thd, null_clex_str/*db*/, lex->users_list, m_grant_option,
                   is_revoke(), true/*proxy*/))
     return true;
 
@@ -12389,7 +12415,7 @@ bool Sql_cmd_grant_table::execute_table_mask(THD *thd)
 
   WSREP_TO_ISOLATION_BEGIN(WSREP_MYSQL_DB, NULL, NULL);
   /* Conditionally writes to binlog */
-  if (mysql_grant(thd, m_db.str, lex->users_list, m_object_privilege,
+  if (mysql_grant(thd, m_db, lex->users_list, m_object_privilege,
                   is_revoke(), false/*not proxy*/))
     return true;
 
@@ -12985,7 +13011,8 @@ void fill_effective_table_privileges(THD *thd, GRANT_INFO *grant,
  Dummy wrappers when we don't have any access checks
 ****************************************************************************/
 
-bool check_routine_level_acl(THD *thd, const char *db, const char *name,
+bool check_routine_level_acl(THD *thd, privilege_t acl,
+                             const char *db, const char *name,
                              const Sp_handler *sph)
 {
   return FALSE;
@@ -13317,12 +13344,7 @@ static bool send_server_handshake_packet(MPVIO_EXT *mpvio,
     data_len= SCRAMBLE_LENGTH;
   }
 
-  /* When server version is specified in config file, don't include
-     the replication hack prefix. */
-  if (using_custom_server_version)
-    end= strnmov(end, server_version, SERVER_VERSION_LENGTH) + 1;
-  else
-    end= strxnmov(end, SERVER_VERSION_LENGTH, RPL_VERSION_HACK, server_version, NullS) + 1;
+  end= strnmov(end, server_version, SERVER_VERSION_LENGTH) + 1;
 
   int4store((uchar*) end, mpvio->auth_info.thd->thread_id);
   end+= 4;
@@ -13337,8 +13359,27 @@ static bool send_server_handshake_packet(MPVIO_EXT *mpvio,
   *end++= 0;
 
   int2store(end, thd->client_capabilities);
+
+  CHARSET_INFO *handshake_cs= default_charset_info;
+  if (handshake_cs->number > 0xFF)
+  {
+    /*
+      A workaround for a 2-byte collation ID: translate it into
+      the ID of the primary collation of this character set.
+    */
+    CHARSET_INFO *cs= get_charset_by_csname(handshake_cs->cs_name.str,
+                                            MY_CS_PRIMARY, MYF(MY_WME));
+    /*
+      cs should not normally be NULL, however it may be possible
+      with a dynamic character set incorrectly defined in Index.xml.
+      For safety let's fallback to latin1 in case cs is NULL.
+    */
+    handshake_cs= cs ? cs : &my_charset_latin1;
+  }
+
   /* write server characteristics: up to 16 bytes allowed */
-  end[2]= (char) default_charset_info->number;
+  end[2]= (char) handshake_cs->number;
+
   int2store(end+3, mpvio->auth_info.thd->server_status);
   int2store(end+5, thd->client_capabilities >> 16);
   end[7]= data_len;
@@ -13568,8 +13609,37 @@ static bool find_mpvio_user(MPVIO_EXT *mpvio)
   DBUG_RETURN(0);
 }
 
+
+/**
+  Determine if the client is MySQL Connector/NET.
+
+  Checks whether the given connection attributes blob corresponds to
+  MySQL Connector/NET by examining the "_client_name" attribute, which is
+  expected to be the first attribute in the blob.
+
+  @param connection_attrs - The connection attributes blob.
+  @param length - The length of the blob.
+
+  @return true if the client is MySQL Connector/NET, false otherwise.
+*/
+static inline bool is_connector_net_client(const char *connection_attrs,
+                                           size_t length)
+{
+  constexpr LEX_CSTRING prefix=
+    {STRING_WITH_LEN("\x0c_client_name\x13mysql-connector-net")};
+
+  if (length < prefix.length)
+    return false;
+
+  /* Optimization to avoid following memcmp in common cases.*/
+  if (connection_attrs[prefix.length - 1] != prefix.str[prefix.length - 1])
+    return false;
+
+  return !memcmp(connection_attrs, prefix.str, prefix.length);
+}
+
 static bool
-read_client_connect_attrs(char **ptr, char *end, CHARSET_INFO *from_cs)
+read_client_connect_attrs(char **ptr, char *end, THD* thd)
 {
   ulonglong length;
   char *ptr_save= *ptr;
@@ -13592,10 +13662,14 @@ read_client_connect_attrs(char **ptr, char *end, CHARSET_INFO *from_cs)
   if (length > 65535)
     return true;
 
-  if (PSI_CALL_set_thread_connect_attrs(*ptr, (uint)length, from_cs) &&
+  if (PSI_CALL_set_thread_connect_attrs(*ptr, (uint)length, thd->charset()) &&
       current_thd->variables.log_warnings)
     sql_print_warning("Connection attributes of length %llu were truncated",
                       length);
+
+  /* Connector/Net crashes, when "show collations" returns NULL IDs*/
+  if (is_connector_net_client(*ptr, length))
+    thd->variables.old_behavior |= OLD_MODE_NO_NULL_COLLATION_IDS;
   return false;
 }
 
@@ -13729,7 +13803,7 @@ static bool parse_com_change_user_packet(MPVIO_EXT *mpvio, uint packet_length)
   }
 
   if ((thd->client_capabilities & CLIENT_CONNECT_ATTRS) &&
-      read_client_connect_attrs(&next_field, end, thd->charset()))
+      read_client_connect_attrs(&next_field, end, thd))
   {
     my_message(ER_UNKNOWN_COM_ERROR, ER_THD(thd, ER_UNKNOWN_COM_ERROR),
                MYF(0));
@@ -13749,6 +13823,34 @@ static bool parse_com_change_user_packet(MPVIO_EXT *mpvio, uint packet_length)
 
   DBUG_RETURN (0);
 }
+
+
+#ifndef EMBEDDED_LIBRARY
+/**
+  Check that a client uses secure connection type in case the option
+  require_secure_transport is on.
+
+  @param thd                     thread handle
+
+  @return true in case the option require_secure_transport is on and the client
+          uses euther named pipe or unix socket or ssl, else return false
+*/
+
+static bool check_require_secured_transport(THD *thd)
+{
+  Vio *vio= thd->net.vio;
+  if (opt_require_secure_transport)
+  {
+    enum enum_vio_type type= vio_type(vio);
+
+    return
+      (type != VIO_TYPE_SSL) &&
+      (type != VIO_TYPE_NAMEDPIPE) &&
+      (type != VIO_TYPE_SOCKET);
+  }
+  return 0;
+}
+#endif
 
 
 /* the packet format is described in send_client_reply_packet() */
@@ -13819,6 +13921,22 @@ static ulong parse_client_handshake_packet(MPVIO_EXT *mpvio,
 			   pkt_len));
       return packet_error;
     }
+  }
+  /*
+    Check whether the option require_secure_transport is on and in case
+    it is true that the secured connection type is used, that is either
+    unix socket or named pipe or ssl is in use.
+  */
+  else if (check_require_secured_transport(thd))
+  {
+    Host_errors errors;
+
+    errors.m_ssl= 1;
+    inc_host_errors(mpvio->auth_info.thd->security_ctx->ip, &errors);
+    status_var_increment(thd->status_var.access_denied_errors);
+    my_error(ER_SECURE_TRANSPORT_REQUIRED, MYF(0));
+
+    return packet_error;
   }
 
   if (client_capabilities & CLIENT_PROTOCOL_41)
@@ -13979,7 +14097,7 @@ static ulong parse_client_handshake_packet(MPVIO_EXT *mpvio,
 
   if ((thd->client_capabilities & CLIENT_CONNECT_ATTRS) &&
       read_client_connect_attrs(&next_field, ((char *)net->read_pos) + pkt_len,
-                                mpvio->auth_info.thd->charset()))
+                                mpvio->auth_info.thd))
     return packet_error;
 
   /*
@@ -14193,8 +14311,8 @@ static void server_mpvio_info(MYSQL_PLUGIN_VIO *vio,
 
 static bool acl_check_ssl(THD *thd, const ACL_USER *acl_user)
 {
-  Vio *vio= thd->net.vio;
 #ifdef HAVE_OPENSSL
+  Vio *vio= thd->net.vio;
   SSL *ssl= (SSL *) vio->ssl_arg;
   X509 *cert;
 #endif
@@ -14206,26 +14324,8 @@ static bool acl_check_ssl(THD *thd, const ACL_USER *acl_user)
     if X509 certificate attributes are OK
   */
   switch (acl_user->ssl_type) {
-  case SSL_TYPE_NOT_SPECIFIED:                  // Impossible
-  case SSL_TYPE_NONE:                           // SSL is not required
-    if (opt_require_secure_transport)
-    {
-      enum enum_vio_type type= vio_type(vio);
-#ifdef HAVE_OPENSSL
-      return type != VIO_TYPE_SSL &&
-#ifndef _WIN32
-             type != VIO_TYPE_SOCKET;
-#else
-             type != VIO_TYPE_NAMEDPIPE;
-#endif
-#else
-#ifndef _WIN32
-      return type != VIO_TYPE_SOCKET;
-#else
-      return type != VIO_TYPE_NAMEDPIPE;
-#endif
-#endif
-    }
+  case SSL_TYPE_NOT_SPECIFIED:  // Impossible
+  case SSL_TYPE_NONE:           // SSL is not required FOR THIS SPECIFIC USER
     return 0;
 #ifdef HAVE_OPENSSL
   case SSL_TYPE_ANY:                            // Any kind of SSL is ok
@@ -14318,6 +14418,29 @@ static bool acl_check_ssl(THD *thd, const ACL_USER *acl_user)
   return 1;
 }
 
+static void make_ssl_info(THD *thd, LEX_CSTRING salt, char *info)
+{
+#ifdef HAVE_OPENSSL
+  uchar digest[256/8];
+  if (!salt.length)
+    return;
+
+  /*
+    mark that it's after-auth mysql->info version 1.
+    meaning, it contains sha2(salt, scramble, sha2_cert_fingerprint)
+    encoded in 64 lowercase letters 'a'..'p', one letter per 4 bits (0..15)
+  */
+  *info++= 1; // Version 1
+
+  DBUG_ASSERT(thd->scramble[SCRAMBLE_LENGTH] == 0);
+
+  LEX_CUSTRING fp= ssl_acceptor_fingerprint();
+  my_sha256_multi(digest, salt.str, salt.length, thd->scramble,
+                  (size_t)SCRAMBLE_LENGTH, fp.str, fp.length, NULL);
+  octet2hex(info, digest, sizeof(digest));
+
+#endif
+}
 
 static int do_auth_once(THD *thd, const LEX_CSTRING *auth_plugin_name,
                         MPVIO_EXT *mpvio)
@@ -14435,6 +14558,7 @@ bool acl_authenticate(THD *thd, uint com_change_user_pkt_len)
 {
   int res= CR_OK;
   MPVIO_EXT mpvio;
+  char ssl_info[256/4 + 2]= {0}; // '\1', SHA256 (1 char per 4 bits), '\0'
   enum  enum_server_command command= com_change_user_pkt_len ? COM_CHANGE_USER
                                                              : COM_CONNECT;
   DBUG_ENTER("acl_authenticate");
@@ -14772,10 +14896,10 @@ bool acl_authenticate(THD *thd, uint com_change_user_pkt_len)
     sctx->external_user= my_strdup(key_memory_MPVIO_EXT_auth_info,
                                    mpvio.auth_info.external_user, MYF(0));
 
-  if (res == CR_OK_HANDSHAKE_COMPLETE)
-    thd->get_stmt_da()->disable_status();
-  else
-    my_ok(thd);
+  if (initialized && !com_change_user_pkt_len)
+    make_ssl_info(thd, acl_user->auth[mpvio.curr_auth-1].salt, ssl_info);
+
+  my_ok(thd, 0, 0, ssl_info[0] == '\1' ? ssl_info : NULL);
 
   PSI_CALL_set_thread_account
     (thd->main_security_ctx.user, static_cast<uint>(strlen(thd->main_security_ctx.user)),

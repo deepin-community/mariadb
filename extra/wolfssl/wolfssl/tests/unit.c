@@ -27,6 +27,7 @@
 #endif
 
 #include <wolfssl/wolfcrypt/settings.h>
+#include <wolfssl/wolfcrypt/types.h>
 
 #include <stdio.h>
 #include <tests/unit.h>
@@ -270,75 +271,3 @@ exit:
 
     return ret;
 }
-
-
-
-void wait_tcp_ready(func_args* args)
-{
-#ifdef SINGLE_THREADED
-    (void)args;
-#elif defined(_POSIX_THREADS) && !defined(__MINGW32__)
-    PTHREAD_CHECK_RET(pthread_mutex_lock(&args->signal->mutex));
-
-    if (!args->signal->ready)
-        PTHREAD_CHECK_RET(pthread_cond_wait(&args->signal->cond,
-                                            &args->signal->mutex));
-    args->signal->ready = 0; /* reset */
-
-    PTHREAD_CHECK_RET(pthread_mutex_unlock(&args->signal->mutex));
-#else
-    (void)args;
-#endif
-}
-
-
-void start_thread(THREAD_FUNC fun, func_args* args, THREAD_TYPE* thread)
-{
-#ifdef SINGLE_THREADED
-    (void)fun;
-    (void)args;
-    (void)thread;
-#elif defined(_POSIX_THREADS) && !defined(__MINGW32__)
-    PTHREAD_CHECK_RET(pthread_create(thread, 0, fun, args));
-    return;
-#elif defined (WOLFSSL_TIRTOS)
-    /* Initialize the defaults and set the parameters. */
-    Task_Params taskParams;
-    Task_Params_init(&taskParams);
-    taskParams.arg0 = (UArg)args;
-    taskParams.stackSize = 65535;
-    *thread = Task_create((Task_FuncPtr)fun, &taskParams, NULL);
-    if (*thread == NULL) {
-        fprintf(stderr, "Failed to create new Task\n");
-    }
-    Task_yield();
-#else
-    *thread = (THREAD_TYPE)_beginthreadex(0, 0, fun, args, 0, 0);
-#endif
-}
-
-
-void join_thread(THREAD_TYPE thread)
-{
-#ifdef SINGLE_THREADED
-    (void)thread;
-#elif defined(_POSIX_THREADS) && !defined(__MINGW32__)
-    PTHREAD_CHECK_RET(pthread_join(thread, 0));
-#elif defined (WOLFSSL_TIRTOS)
-    while(1) {
-        if (Task_getMode(thread) == Task_Mode_TERMINATED) {
-            Task_sleep(5);
-            break;
-        }
-        Task_yield();
-    }
-#else
-    int res = WaitForSingleObject((HANDLE)thread, INFINITE);
-    assert(res == WAIT_OBJECT_0);
-    res = CloseHandle((HANDLE)thread);
-    assert(res);
-    (void)res; /* Suppress un-used variable warning */
-#endif
-}
-
-

@@ -74,7 +74,7 @@ string Func_coalesce::getStrVal(rowgroup::Row& row, FunctionParm& parm, bool& is
 
   for (uint32_t i = 0; i < parm.size(); i++)
   {
-    val = parm[i]->data()->getStrVal(row, isNull);
+    val = parm[i]->data()->getStrVal(row, isNull).safeString("");
 
     if (isNull)
     {
@@ -244,4 +244,3 @@ execplan::IDB_Decimal Func_coalesce::getDecimalVal(rowgroup::Row& row, FunctionP
 }
 
 }  // namespace funcexp
-// vim:ts=4 sw=4:

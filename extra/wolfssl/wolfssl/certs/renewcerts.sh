@@ -516,7 +516,7 @@ run_renewcerts(){
     echo "Updating server-ecc.pem"
     echo ""
     #pipe the following arguments to openssl req...
-    echo -e "US\\nWashington\\nSeattle\\nEliptic\\nECC\\nwww.wolfssl.com\\ninfo@wolfssl.com\\n.\\n.\\n" | openssl req -new -key ecc-key.pem -config ./wolfssl.cnf -nodes -out server-ecc.csr
+    echo -e "US\\nWashington\\nSeattle\\nElliptic\\nECC\\nwww.wolfssl.com\\ninfo@wolfssl.com\\n.\\n.\\n" | openssl req -new -key ecc-key.pem -config ./wolfssl.cnf -nodes -out server-ecc.csr
     check_result $? "Step 1"
 
     openssl x509 -req -in server-ecc.csr -days 1000 -extfile wolfssl.cnf -extensions server_ecc -CA ca-ecc-cert.pem -CAkey ca-ecc-key.pem -set_serial 03 -out server-ecc.pem
@@ -688,6 +688,28 @@ run_renewcerts(){
     echo "---------------------------------------------------------------------"
 
     ############################################################
+    ########## update Raw Public Key certificates ##############
+    ############################################################
+    echo "Updating  certificates"
+    echo "Updating client-cert-rpk.der"
+    cp client-keyPub.der ./rpk/client-cert-rpk.der
+    check_result $? "Step 1"
+
+    echo "Updating client-ecc-cert-rpk.der"
+    cp ecc-client-keyPub.der ./rpk/ecc-client-cert-rpk.der
+    check_result $? "Step 2"
+
+    echo "Updating server-cert-rpk.der"
+    openssl rsa -inform pem -in server-key.pem -outform der -out ./rpk/server-cert-rpk.der -pubout
+    check_result $? "Step 3"
+
+    echo "Updating server-ecc-cert-rpk.der"
+    openssl ec -inform pem -in ecc-key.pem -outform der -out ./rpk/server-ecc-cert-rpk.der -pubout
+    check_result $? "Step 4"
+
+    echo "End of section"
+    echo "---------------------------------------------------------------------"
+    ############################################################
     ###### update the ecc-rsa-server.p12 file ##################
     ############################################################
     echo "Updating ecc-rsa-server.p12 (password is \"\")"
@@ -816,6 +838,7 @@ run_renewcerts(){
     cd ./crl || { echo "Failed to switch to dir ./crl"; exit 1; }
     echo "changed directory: cd/crl"
     echo ""
+    # has dependency on rsapss generation (rsapss should be ran first)
     ./gencrls.sh
     check_result $? "gencrls.sh"
     echo "ran ./gencrls.sh"
@@ -831,6 +854,10 @@ run_renewcerts(){
     echo ""
     openssl crl2pkcs7 -nocrl -certfile ./client-cert.pem -out test-degenerate.p7b -outform DER
     check_result $? ""
+
+    openssl smime -sign -in ./ca-cert.pem -out test-stream-sign.p7b -signer ./ca-cert.pem -nodetach -nocerts -binary -outform DER -stream -inkey ./ca-key.pem
+    check_result $? ""
+
     echo "End of section"
     echo "---------------------------------------------------------------------"
 

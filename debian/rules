@@ -71,7 +71,6 @@ MAKEFLAGS += VERBOSE=1
 override_dh_auto_clean:
 	@echo "RULES.$@"
 	dh_testdir
-	dh_testroot
 	# Delete obsolete/unstable components and embedded source code copies
 	# to ensure they are not used in Debian and in general to keep MariaDB binaries
 	# secure and using only system libraries that can be updated quickly and easily
@@ -82,7 +81,11 @@ override_dh_auto_clean:
 	# Delete precompiled binaries in upstream sources to ensure they are not used in Debian
 	rm -rf storage/connect/JavaWrappers.jar	storage/columnstore/columnstore/utils/jemalloc/libjemalloc.so.2
 
-	debconf-updatepo # Update po-files when clean runs before each build
+	# Update po-files when clean runs before each build
+	debconf-updatepo
+
+	# Clean up files created by custom sections in build that 'dh clean' does not see automatically
+	rm -rf debian/mariadb-server.*.socket debian/substvars
 
 override_dh_auto_configure:
 	@echo "RULES.$@"
@@ -111,7 +114,6 @@ endif
 	    -DCOMPILATION_COMMENT="$(DEB_VENDOR) $(RELEASE)" \
 	    -DMYSQL_SERVER_SUFFIX="-$(DEB_VERSION_REVISION)" \
 	    -DSYSTEM_TYPE="debian-$(DEB_HOST_GNU_SYSTEM)" \
-	    -DCMAKE_SYSTEM_PROCESSOR=$(DEB_HOST_ARCH) \
 	    -DBUILD_CONFIG=mysql_release \
 	    -DCONC_DEFAULT_CHARSET=utf8mb4 \
 	    -DPLUGIN_AWS_KEY_MANAGEMENT=NO \
@@ -120,6 +122,8 @@ endif
 	    -DIGNORE_AIO_CHECK=ON \
 	    -DWITH_URING=ON \
 	    -DWITH_INNODB_SNAPPY=ON \
+	    -DHAVE_SYSTEM_LIBFMT_EXITCODE=0 \
+			-DWITH_EMBEDDED_SERVER=OFF \
 	    -DDEB=$(DEB_VENDOR)
 
 # This is needed, otherwise 'make test' will run before binaries have been built
@@ -157,23 +161,18 @@ override_dh_auto_install:
 	dh_testdir
 	dh_testroot
 
-ifneq (,$(filter linux,$(DEB_HOST_ARCH_OS)))
-	# Copy systemd files to a location available for dh_installinit
-	cp $(BUILDDIR)/support-files/mariadb.service debian/mariadb-server.mariadb.service
-	cp $(BUILDDIR)/support-files/mariadb.socket debian/mariadb-server.mariadb.socket
-	cp $(BUILDDIR)/support-files/mariadb-extra.socket debian/mariadb-server.mariadb-extra.socket
-	cp $(BUILDDIR)/support-files/mariadb@.service debian/mariadb-server.mariadb@.service
-	cp $(BUILDDIR)/support-files/mariadb@.socket debian/mariadb-server.mariadb@.socket
-	cp $(BUILDDIR)/support-files/mariadb-extra@.socket debian/mariadb-server.mariadb-extra@.socket
-endif
-
 	# Run 'make install' without output since it is uninteresting and
 	# silencing it helps to make overall build log shorter and more readable
 	@echo "Running $(MAKE) install DESTDIR=$(TMP) ..."
 	cd $(BUILDDIR) && $(MAKE) install DESTDIR=$(TMP) > /dev/null
 
 	# If mariadb-test package is removed, also remove most of it's files
-	grep --quiet "Package: mariadb-test" debian/control || rm -rf $(TMP)/usr/share/mysql/mysql-test
+	grep --quiet "Package: mariadb-test" debian/control || rm -rf $(TMP)/usr/share/mariadb/mariadb-test
+
+	# Delete lone compiled binary that that does not belong in the
+	# mariadb-test-data package and which seems hard to move
+	# https://jira.mariadb.org/browse/MDEV-21654
+	rm -rf $(TMP)/usr/share/mariadb/mariadb-test/suite/plugins/pam/pam_mariadb_mtr.so
 
 	# Delete private files from libraries so they don't get shipped in the -dev packages
 	rm -r $(TMP)/usr/include/mariadb/server/private
@@ -207,22 +206,20 @@ endif
 	# Move test plugins that are only needed by the client to the libmariadb path
 	mv -v $(TMP)/usr/lib/mysql/plugin/qa_auth_client.so $(TMP)/usr/lib/$(DEB_HOST_MULTIARCH)/libmariadb3/plugin/
 
-# Install mariadb.socket without enabling it, keep using mariadb.service by default
-# @TODO: Temporarily disable extra and socket systemd file installation until
-# a '--build=all' compatible mechanism is found
-override_dh_systemd_enable:
-	dh_systemd_enable --name=mariadb
-	dh_systemd_enable --no-enable --name=mariadb@ # mariadb@.service
-#	dh_systemd_enable --no-enable --name=mariadb mariadb.socket
-#	dh_systemd_enable --no-enable --name=mariadb-extra mariadb-extra.socket
-#	dh_systemd_enable --no-enable --name=mariadb@ mariadb.socket
-#	dh_systemd_enable --no-enable --name=mariadb-extra@ mariadb-extra.socket
+# Define name used for service, and install mariadb.service on Linux only
+override_dh_installsystemd:
+ifneq (,$(filter linux,$(DEB_HOST_ARCH_OS)))
+	dh_installsystemd -pmariadb-server mariadb.service
+endif
 
-# Start mariadbd at sequence number 19 before 20 where apache, proftpd etc gets
-# started which might depend on a running database server.
+# Change dh_missing from fail to list on non-Linux
+override_dh_missing:
+ifneq (,$(filter linux,$(DEB_HOST_ARCH_OS)))
+	dh_missing --list-missing
+endif
+
 override_dh_installinit-arch:
-	dh_installinit --name=mariadb --no-start -- defaults 19 21
-	dh_systemd_start --restart-after-upgrade
+	dh_installinit --name=mariadb
 
 # Use custom server version string variable
 override_dh_gencontrol:
@@ -233,6 +230,6 @@ override_dh_gencontrol:
 # white list file only starting from Debian Stretch and Ubuntu Xenial.
 # To find more, grep build logs for 'but is not installed to anywhere'.
 %:
-	dh $@ --fail-missing
+	dh $@
 
 # vim: ts=8

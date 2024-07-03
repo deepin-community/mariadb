@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1995, 2018, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2013, 2022, MariaDB Corporation.
+Copyright (c) 2013, 2023, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -46,7 +46,6 @@ Created 11/5/1995 Heikki Tuuri
 #include "buf0dblwr.h"
 #include "lock0lock.h"
 #include "btr0sea.h"
-#include "ibuf0ibuf.h"
 #include "trx0undo.h"
 #include "trx0purge.h"
 #include "log0log.h"
@@ -77,6 +76,8 @@ struct set_numa_interleave_t
 		if (srv_numa_interleave) {
 
 			struct bitmask *numa_mems_allowed = numa_get_mems_allowed();
+			MEM_MAKE_DEFINED(numa_mems_allowed,
+					 sizeof *numa_mems_allowed);
 			ib::info() << "Setting NUMA memory policy to"
 				" MPOL_INTERLEAVE";
 			if (set_mempolicy(MPOL_INTERLEAVE,
@@ -404,7 +405,7 @@ static bool buf_page_decrypt_after_read(buf_page_t *bpage,
 
 	if (id.space() == SRV_TMP_SPACE_ID
 	    && innodb_encrypt_temporary_tables) {
-		slot = buf_pool.io_buf_reserve();
+		slot = buf_pool.io_buf_reserve(false);
 		slot->allocate();
 		bool ok = buf_tmp_page_decrypt(slot->crypt_buf, dst_frame);
 		slot->release();
@@ -426,7 +427,7 @@ decompress:
 			return false;
 		}
 
-		slot = buf_pool.io_buf_reserve();
+		slot = buf_pool.io_buf_reserve(false);
 		slot->allocate();
 
 decompress_with_slot:
@@ -449,7 +450,7 @@ decrypt_failed:
 			return false;
 		}
 
-		slot = buf_pool.io_buf_reserve();
+		slot = buf_pool.io_buf_reserve(false);
 		slot->allocate();
 
 		/* decrypt using crypt_buf to dst_frame */
@@ -582,7 +583,7 @@ bool buf_page_is_corrupted(bool check_lsn, const byte *read_buf,
 		DBUG_EXECUTE_IF(
 			"page_intermittent_checksum_mismatch", {
 			static int page_counter;
-			if (page_counter++ == 3) {
+			if (page_counter++ == 6) {
 				crc32++;
 			}
 		});
@@ -717,7 +718,8 @@ bool buf_page_is_corrupted(bool check_lsn, const byte *read_buf,
 			DBUG_EXECUTE_IF(
 				"page_intermittent_checksum_mismatch", {
 				static int page_counter;
-				if (page_counter++ == 3) return true;
+				if (page_counter++ == 6)
+					return true;
 			});
 
 			if ((checksum_field1 != crc32
@@ -741,6 +743,205 @@ bool buf_page_is_corrupted(bool check_lsn, const byte *read_buf,
 }
 
 #ifndef UNIV_INNOCHECKSUM
+
+#ifdef __linux__
+#include <poll.h>
+#include <sys/eventfd.h>
+#include <fstream>
+
+/** Memory Pressure
+
+based off https://www.kernel.org/doc/html/latest/accounting/psi.html#pressure-interface
+and https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#memory */
+class mem_pressure
+{
+  /* triggers + eventfd */
+  struct pollfd m_fds[3];
+  nfds_t m_num_fds;
+  int m_event_fd= -1;
+  Atomic_relaxed<bool> m_abort= false;
+
+  std::thread m_thd;
+  /* mem pressure garbage collection restricted to interval */
+  static constexpr ulonglong max_interval_us= 60*1000000;
+
+public:
+  mem_pressure() : m_num_fds(0) {}
+
+  bool setup()
+  {
+    static_assert(array_elements(m_fds) == (array_elements(m_triggers) + 1),
+                  "insufficient fds");
+    std::string memcgroup{"/sys/fs/cgroup"};
+    std::string cgroup;
+    {
+      std::ifstream selfcgroup("/proc/self/cgroup");
+      std::getline(selfcgroup, cgroup, '\n');
+    }
+
+    cgroup.erase(0, 3); // Remove "0::"
+    memcgroup+= cgroup + "/memory.pressure";
+
+    m_num_fds= 0;
+    for (auto trig= std::begin(m_triggers); trig!= std::end(m_triggers); ++trig)
+    {
+      if ((m_fds[m_num_fds].fd=
+             open(memcgroup.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC)) < 0)
+      {
+        /* User can't do anything about it, no point giving warning */
+        shutdown();
+        return false;
+      }
+      my_register_filename(m_fds[m_num_fds].fd, memcgroup.c_str(), FILE_BY_OPEN, 0, MYF(0));
+      ssize_t slen= strlen(*trig);
+      if (write(m_fds[m_num_fds].fd, *trig, slen) < slen)
+      {
+        /* we may fail this one, but continue to the next */
+        my_close(m_fds[m_num_fds].fd, MYF(MY_WME));
+        continue;
+      }
+      m_fds[m_num_fds].events= POLLPRI;
+      m_num_fds++;
+    }
+    if (m_num_fds < 1)
+      return false;
+
+    if ((m_event_fd= eventfd(0, EFD_CLOEXEC|EFD_NONBLOCK)) == -1)
+    {
+      /* User can't do anything about it, no point giving warning */
+      shutdown();
+      return false;
+    }
+    my_register_filename(m_event_fd, "mem_pressure_eventfd", FILE_BY_DUP, 0, MYF(0));
+    m_fds[m_num_fds].fd= m_event_fd;
+    m_fds[m_num_fds].events= POLLIN;
+    m_num_fds++;
+    m_thd= std::thread(pressure_routine, this);
+    sql_print_information("InnoDB: Initialized memory pressure event listener");
+    return true;
+  }
+
+  void shutdown()
+  {
+    /* m_event_fd is in this list */
+    while (m_num_fds)
+    {
+      m_num_fds--;
+      my_close(m_fds[m_num_fds].fd, MYF(MY_WME));
+      m_fds[m_num_fds].fd= -1;
+    }
+  }
+
+  static void pressure_routine(mem_pressure *m);
+
+#ifdef UNIV_DEBUG
+  void trigger_collection()
+  {
+    uint64_t u= 1;
+    if (m_event_fd >=0 && write(m_event_fd, &u, sizeof(uint64_t)) != sizeof(uint64_t))
+      sql_print_information("InnoDB: (Debug) Failed to trigger memory pressure");
+    else /* assumed failed to meet intialization criteria, so trigger directy */
+      buf_pool.garbage_collect();
+  }
+#endif
+
+  void quit()
+  {
+    uint64_t u= 1;
+    m_abort= true;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-result"
+    /* return result ignored, cannot do anything with it */
+    write(m_event_fd, &u, sizeof(uint64_t));
+#pragma GCC diagnostic pop
+  }
+
+  void join()
+  {
+    if (m_thd.joinable())
+    {
+      quit();
+      m_thd.join();
+    }
+  }
+
+  static const char* const m_triggers[2];
+};
+
+
+/*
+  ref: https://docs.kernel.org/accounting/psi.html
+  maximum window size (second number) 10 seconds.
+  window size in multiples of 2 second interval required (for Unprivileged)
+  Time is in usec.
+*/
+const char* const mem_pressure::m_triggers[]=
+  {"some 5000000 10000000", /* 5s out of 10s */
+   "full 10000 2000000"}; /* 10ms out of 2s */
+
+static mem_pressure mem_pressure_obj;
+
+void mem_pressure::pressure_routine(mem_pressure *m)
+{
+  DBUG_ASSERT(m == &mem_pressure_obj);
+  if (my_thread_init())
+  {
+    m->shutdown();
+    return;
+  }
+
+  ulonglong last= microsecond_interval_timer() - max_interval_us;
+  while (!m->m_abort)
+  {
+    if (poll(&m->m_fds[0], m->m_num_fds, -1) < 0)
+    {
+      if (errno == EINTR)
+        continue;
+      else
+        break;
+    }
+    if (!m->m_abort)
+      break;
+
+    for (pollfd &p : st_::span<pollfd>(m->m_fds, m->m_num_fds))
+    {
+      if (p.revents & POLLPRI)
+      {
+        ulonglong now= microsecond_interval_timer();
+        if ((now - last) > max_interval_us)
+        {
+          last= now;
+          buf_pool.garbage_collect();
+        }
+      }
+
+#ifdef UNIV_DEBUG
+      if (p.revents & POLLIN)
+      {
+        uint64_t u;
+        /* we haven't aborted, so this must be a debug trigger */
+        if (read(p.fd, &u, sizeof(u)) >=0)
+          buf_pool.garbage_collect();
+      }
+#endif
+    }
+  }
+  m->shutdown();
+
+  my_thread_end();
+}
+
+/** Initialize mem pressure. */
+ATTRIBUTE_COLD void buf_mem_pressure_detect_init()
+{
+  mem_pressure_obj.setup();
+}
+
+ATTRIBUTE_COLD void buf_mem_pressure_shutdown()
+{
+  mem_pressure_obj.join();
+}
+#endif /* __linux__ */
 
 #if defined(DBUG_OFF) && defined(HAVE_MADVISE) &&  defined(MADV_DODUMP)
 /** Enable buffers to be dumped to core files
@@ -863,6 +1064,7 @@ inline bool buf_pool_t::chunk_t::create(size_t bytes)
   if (srv_numa_interleave)
   {
     struct bitmask *numa_mems_allowed= numa_get_mems_allowed();
+    MEM_MAKE_DEFINED(numa_mems_allowed, sizeof *numa_mems_allowed);
     if (mbind(mem, mem_size(), MPOL_INTERLEAVE,
               numa_mems_allowed->maskp, numa_mems_allowed->size,
               MPOL_MF_MOVE))
@@ -1099,6 +1301,11 @@ bool buf_pool_t::create()
   chunk_t::map_ref= chunk_t::map_reg;
   buf_LRU_old_ratio_update(100 * 3 / 8, false);
   btr_search_sys_create();
+
+#ifdef __linux__
+  if (srv_operation == SRV_OPERATION_NORMAL)
+    buf_mem_pressure_detect_init();
+#endif
   ut_ad(is_initialised());
   return false;
 }
@@ -1300,14 +1507,17 @@ void buf_pool_t::io_buf_t::close()
   n_slots= 0;
 }
 
-buf_tmp_buffer_t *buf_pool_t::io_buf_t::reserve()
+buf_tmp_buffer_t *buf_pool_t::io_buf_t::reserve(bool wait_for_reads)
 {
   for (;;)
   {
     for (buf_tmp_buffer_t *s= slots, *e= slots + n_slots; s != e; s++)
       if (s->acquire())
         return s;
+    buf_dblwr.flush_buffered_writes();
     os_aio_wait_until_no_pending_writes(true);
+    if (!wait_for_reads)
+      continue;
     for (buf_tmp_buffer_t *s= slots, *e= slots + n_slots; s != e; s++)
       if (s->acquire())
         return s;
@@ -1384,17 +1594,14 @@ inline bool buf_pool_t::withdraw_blocks()
 
 		/* reserve free_list length */
 		if (UT_LIST_GET_LEN(withdraw) < withdraw_target) {
-			buf_flush_LRU(
-				std::max<ulint>(withdraw_target
-						- UT_LIST_GET_LEN(withdraw),
-						srv_LRU_scan_depth),
-				true);
-			mysql_mutex_unlock(&buf_pool.mutex);
-			buf_dblwr.flush_buffered_writes();
-			mysql_mutex_lock(&buf_pool.flush_list_mutex);
-			buf_flush_wait_LRU_batch_end();
-			mysql_mutex_unlock(&buf_pool.flush_list_mutex);
-			mysql_mutex_lock(&buf_pool.mutex);
+			try_LRU_scan = false;
+			mysql_mutex_unlock(&mutex);
+			mysql_mutex_lock(&flush_list_mutex);
+			page_cleaner_wakeup(true);
+			my_cond_wait(&done_flush_list,
+				     &flush_list_mutex.m_mutex);
+			mysql_mutex_unlock(&flush_list_mutex);
+			mysql_mutex_lock(&mutex);
 		}
 
 		/* relocate blocks/buddies in withdrawn area */
@@ -1536,6 +1743,7 @@ struct find_interesting_trx
 inline void buf_pool_t::resize()
 {
   ut_ad(this == &buf_pool);
+  ut_ad(srv_shutdown_state < SRV_SHUTDOWN_CLEANUP);
 
 	bool		warning = false;
 
@@ -1852,9 +2060,6 @@ calc_buf_pool_size:
 			" and dictionary.";
 	}
 
-	/* normalize ibuf.max_size */
-	ibuf_max_size_update(srv_change_buffer_max_size);
-
 	if (srv_buf_pool_old_size != srv_buf_pool_size) {
 
 	        buf_resize_status("Completed resizing buffer pool from %zu to %zu bytes."
@@ -1877,6 +2082,100 @@ calc_buf_pool_size:
 
 	return;
 }
+
+#ifdef __linux__
+inline void buf_pool_t::garbage_collect()
+{
+  mysql_mutex_lock(&mutex);
+  size_t freed= 0;
+
+#ifdef BTR_CUR_HASH_ADAPT
+  /* buf_LRU_free_page() will temporarily release and reacquire
+  buf_pool.mutex for invoking btr_search_drop_page_hash_index(). Thus,
+  we must protect ourselves with the hazard pointer. */
+rescan:
+#else
+  lru_hp.set(nullptr);
+#endif
+  for (buf_page_t *bpage= UT_LIST_GET_LAST(LRU), *prev; bpage; bpage= prev)
+  {
+    prev= UT_LIST_GET_PREV(LRU, bpage);
+#ifdef BTR_CUR_HASH_ADAPT
+    lru_hp.set(prev);
+#endif
+    auto state= bpage->state();
+    ut_ad(state >= buf_page_t::FREED);
+    ut_ad(bpage->in_LRU_list);
+
+    /* We try to free any pages that can be freed without writing out
+    anything. */
+    switch (bpage->oldest_modification()) {
+    case 0:
+    try_to_evict:
+      if (buf_LRU_free_page(bpage, true))
+      {
+      evicted:
+        freed++;
+#ifdef BTR_CUR_HASH_ADAPT
+        bpage= prev;
+        prev= lru_hp.get();
+        if (!prev && bpage)
+          goto rescan;
+#endif
+      }
+      continue;
+    case 1:
+      break;
+    default:
+      if (state >= buf_page_t::UNFIXED)
+        continue;
+    }
+
+    if (state < buf_page_t::READ_FIX && bpage->lock.u_lock_try(true))
+    {
+      ut_ad(!bpage->is_io_fixed());
+      lsn_t oldest_modification= bpage->oldest_modification();
+      switch (oldest_modification) {
+      case 1:
+        mysql_mutex_lock(&flush_list_mutex);
+        oldest_modification= bpage->oldest_modification();
+        if (oldest_modification)
+        {
+          ut_ad(oldest_modification == 1);
+          delete_from_flush_list(bpage);
+        }
+        mysql_mutex_unlock(&flush_list_mutex);
+        /* fall through */
+      case 0:
+        bpage->lock.u_unlock(true);
+        goto try_to_evict;
+      default:
+        if (bpage->state() < buf_page_t::UNFIXED &&
+            oldest_modification <= log_sys.get_flushed_lsn())
+        {
+          release_freed_page(bpage);
+          goto evicted;
+        }
+        else
+          bpage->lock.u_unlock(true);
+      }
+    }
+  }
+
+#if defined MADV_FREE
+  /* FIXME: Issue fewer calls for larger contiguous blocks of
+  memory. For now, we assume that this is acceptable, because this
+  code should be executed rarely. */
+  for (buf_page_t *bpage= UT_LIST_GET_FIRST(free); bpage;
+       bpage= UT_LIST_GET_NEXT(list, bpage))
+    madvise(bpage->frame, srv_page_size, MADV_FREE);
+#endif
+  mysql_mutex_unlock(&mutex);
+  sql_print_information("InnoDB: Memory pressure event freed %zu pages",
+                        freed);
+  return;
+}
+#endif /* __linux__ */
 
 /** Thread pool task invoked by innodb_buffer_pool_size changes. */
 static void buf_resize_callback(void *)
@@ -1906,12 +2205,23 @@ static tpool::waitable_task buf_resize_task(buf_resize_callback,
 
 void buf_resize_start()
 {
-	srv_thread_pool->submit_task(&buf_resize_task);
+#if !defined(DBUG_OFF) && defined(__linux__)
+  DBUG_EXECUTE_IF("trigger_garbage_collection",
+  {
+    mem_pressure_obj.trigger_collection();
+  }
+  );
+#endif
+
+  srv_thread_pool->submit_task(&buf_resize_task);
 }
 
 void buf_resize_shutdown()
 {
-	buf_resize_task.wait();
+#ifdef __linux__
+  buf_mem_pressure_shutdown();
+#endif
+  buf_resize_task.wait();
 }
 
 
@@ -1928,7 +2238,6 @@ static void buf_relocate(buf_page_t *bpage, buf_page_t *dpage)
   mysql_mutex_assert_owner(&buf_pool.mutex);
   ut_ad(buf_pool.page_hash.lock_get(chain).is_write_locked());
   ut_ad(bpage == buf_pool.page_hash.get(id, chain));
-  ut_ad(!buf_pool.watch_is_sentinel(*bpage));
   ut_d(const auto state= bpage->state());
   ut_ad(state >= buf_page_t::FREED);
   ut_ad(state <= buf_page_t::READ_FIX);
@@ -1970,127 +2279,6 @@ static void buf_relocate(buf_page_t *bpage, buf_page_t *dpage)
   ut_d(CheckInLRUList::validate());
 
   buf_pool.page_hash.replace(chain, bpage, dpage);
-}
-
-buf_page_t *buf_pool_t::watch_set(const page_id_t id,
-                                  buf_pool_t::hash_chain &chain)
-{
-  ut_ad(&chain == &page_hash.cell_get(id.fold()));
-  page_hash.lock_get(chain).lock();
-
-  buf_page_t *bpage= page_hash.get(id, chain);
-
-  if (bpage)
-  {
-got_block:
-    bpage->fix();
-    if (watch_is_sentinel(*bpage))
-      bpage= nullptr;
-    page_hash.lock_get(chain).unlock();
-    return bpage;
-  }
-
-  page_hash.lock_get(chain).unlock();
-  /* Allocate a watch[] and then try to insert it into the page_hash. */
-  mysql_mutex_lock(&mutex);
-
-  /* The maximum number of purge tasks should never exceed
-  the UT_ARR_SIZE(watch) - 1, and there is no way for a purge task to hold a
-  watch when setting another watch. */
-  for (buf_page_t *w= &watch[UT_ARR_SIZE(watch)]; w-- >= watch; )
-  {
-    ut_ad(w->access_time == 0);
-    ut_ad(!w->oldest_modification());
-    ut_ad(!w->zip.data);
-    ut_ad(!w->in_zip_hash);
-    static_assert(buf_page_t::NOT_USED == 0, "efficiency");
-    if (ut_d(auto s=) w->state())
-    {
-      /* This watch may be in use for some other page. */
-      ut_ad(s >= buf_page_t::UNFIXED);
-      continue;
-    }
-    /* w is pointing to watch[], which is protected by mutex.
-    Normally, buf_page_t::id for objects that are reachable by
-    page_hash.get(id, chain) are protected by hash_lock. */
-    w->set_state(buf_page_t::UNFIXED + 1);
-    w->id_= id;
-
-    page_hash.lock_get(chain).lock();
-    bpage= page_hash.get(id, chain);
-    if (UNIV_LIKELY_NULL(bpage))
-    {
-      w->set_state(buf_page_t::NOT_USED);
-      mysql_mutex_unlock(&mutex);
-      goto got_block;
-    }
-
-    ut_ad(w->state() == buf_page_t::UNFIXED + 1);
-    buf_pool.page_hash.append(chain, w);
-    mysql_mutex_unlock(&mutex);
-    page_hash.lock_get(chain).unlock();
-    return nullptr;
-  }
-
-  ut_error;
-}
-
-/** Stop watching whether a page has been read in.
-watch_set(id) must have returned nullptr before.
-@param id         page identifier
-@param chain      unlocked hash table chain */
-TRANSACTIONAL_TARGET
-void buf_pool_t::watch_unset(const page_id_t id, buf_pool_t::hash_chain &chain)
-{
-  mysql_mutex_assert_not_owner(&mutex);
-  buf_page_t *w;
-  {
-    transactional_lock_guard<page_hash_latch> g{page_hash.lock_get(chain)};
-    /* The page must exist because watch_set() did fix(). */
-    w= page_hash.get(id, chain);
-    ut_ad(w->in_page_hash);
-    if (!watch_is_sentinel(*w))
-    {
-    no_watch:
-      w->unfix();
-      w= nullptr;
-    }
-    else
-    {
-      const auto state= w->state();
-      ut_ad(~buf_page_t::LRU_MASK & state);
-      ut_ad(state >= buf_page_t::UNFIXED + 1);
-      if (state != buf_page_t::UNFIXED + 1)
-        goto no_watch;
-    }
-  }
-
-  if (!w)
-    return;
-
-  const auto old= w;
-  /* The following is based on buf_pool_t::watch_remove(). */
-  mysql_mutex_lock(&mutex);
-  w= page_hash.get(id, chain);
-
-  {
-    transactional_lock_guard<page_hash_latch> g
-      {buf_pool.page_hash.lock_get(chain)};
-    auto f= w->unfix();
-    ut_ad(f < buf_page_t::READ_FIX || w != old);
-
-    if (f == buf_page_t::UNFIXED && w == old)
-    {
-      page_hash.remove(chain, w);
-      // Now that w is detached from page_hash, release it to watch[].
-      ut_ad(w->id_ == id);
-      ut_ad(!w->frame);
-      ut_ad(!w->zip.data);
-      w->set_state(buf_page_t::NOT_USED);
-    }
-  }
-
-  mysql_mutex_unlock(&mutex);
 }
 
 /** Mark the page status as FREED for the given tablespace and page number.
@@ -2136,8 +2324,6 @@ void buf_page_free(fil_space_t *space, uint32_t page, mtr_t *mtr)
   }
 
   block->page.lock.x_lock();
-  if (block->page.is_ibuf_exist())
-    ibuf_merge_or_delete_for_page(nullptr, page_id, block->page.zip_size());
 #ifdef BTR_CUR_HASH_ADAPT
   if (block->index)
     btr_search_drop_page_hash_index(block, false);
@@ -2177,7 +2363,7 @@ lookup:
       if (hash_lock.is_locked())
         xabort();
       bpage= buf_pool.page_hash.get(page_id, chain);
-      if (!bpage || buf_pool.watch_is_sentinel(*bpage))
+      if (!bpage)
       {
         xend();
         goto must_read_page;
@@ -2202,7 +2388,7 @@ lookup:
     {
       hash_lock.lock_shared();
       bpage= buf_pool.page_hash.get(page_id, chain);
-      if (!bpage || buf_pool.watch_is_sentinel(*bpage))
+      if (!bpage)
       {
         hash_lock.unlock_shared();
         goto must_read_page;
@@ -2220,14 +2406,21 @@ lookup:
 
       if (discard_attempted || !bpage->frame)
       {
-        /* Even when we are holding a hash_lock, it should be
-        acceptable to wait for a page S-latch here, because
-        buf_page_t::read_complete() will not wait for buf_pool.mutex,
-        and because S-latch would not conflict with a U-latch
-        that would be protecting buf_page_t::write_complete(). */
-        bpage->lock.s_lock();
+        const bool got_s_latch= bpage->lock.s_lock_try();
         hash_lock.unlock_shared();
-        break;
+        if (UNIV_LIKELY(got_s_latch))
+          break;
+        /* We may fail to acquire bpage->lock because
+        buf_page_t::read_complete() may be invoking
+        buf_pool_t::corrupted_evict() on this block, which it would
+        hold an exclusive latch on.
+
+        Let us aqcuire and release buf_pool.mutex to ensure that any
+        buf_pool_t::corrupted_evict() will proceed before we reacquire
+        the hash_lock that it could be waiting for. */
+        mysql_mutex_lock(&buf_pool.mutex);
+        mysql_mutex_unlock(&buf_pool.mutex);
+        goto lookup;
       }
 
       hash_lock.unlock_shared();
@@ -2246,7 +2439,6 @@ lookup:
     ut_ad(s < buf_page_t::READ_FIX || s >= buf_page_t::WRITE_FIX);
   }
 
-  bpage->set_accessed();
   buf_page_make_young_if_needed(bpage);
 
 #ifdef UNIV_DEBUG
@@ -2255,7 +2447,7 @@ lookup:
   return bpage;
 
 must_read_page:
-  switch (dberr_t err= buf_read_page(page_id, zip_size)) {
+  switch (dberr_t err= buf_read_page(page_id, zip_size, chain)) {
   case DB_SUCCESS:
   case DB_SUCCESS_LOCKED_REC:
     mariadb_increment_pages_read();
@@ -2378,29 +2570,32 @@ err_exit:
 @param[in]	rw_latch		RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
 @param[in]	guess			guessed block or NULL
 @param[in]	mode			BUF_GET, BUF_GET_IF_IN_POOL,
-BUF_PEEK_IF_IN_POOL, or BUF_GET_IF_IN_POOL_OR_WATCH
+or BUF_PEEK_IF_IN_POOL
 @param[in]	mtr			mini-transaction
 @param[out]	err			DB_SUCCESS or error code
-@param[in]	allow_ibuf_merge	Allow change buffer merge to happen
-while reading the page from file
-then it makes sure that it does merging of change buffer changes while
-reading the page from file.
 @return pointer to the block or NULL */
 TRANSACTIONAL_TARGET
 buf_block_t*
-buf_page_get_low(
+buf_page_get_gen(
 	const page_id_t		page_id,
 	ulint			zip_size,
 	ulint			rw_latch,
 	buf_block_t*		guess,
 	ulint			mode,
 	mtr_t*			mtr,
-	dberr_t*		err,
-	bool			allow_ibuf_merge)
+	dberr_t*		err)
 {
-	unsigned	access_time;
 	ulint		retries = 0;
 
+	/* BUF_GET_RECOVER is only used by recv_sys_t::recover(),
+	which must be invoked during early server startup when crash
+	recovery may be in progress. The only case when it may be
+	invoked outside recovery is when dict_create() has initialized
+	a new database and is invoking dict_boot(). In this case, the
+	LSN will be small. */
+	ut_ad(mode == BUF_GET_RECOVER
+	      ? recv_recovery_is_on() || log_sys.get_lsn() < 50000
+	      : !recv_recovery_is_on() || recv_sys.after_apply);
 	ut_ad(!mtr || mtr->is_active());
 	ut_ad(mtr || mode == BUF_PEEK_IF_IN_POOL);
 	ut_ad((rw_latch == RW_S_LATCH)
@@ -2415,7 +2610,6 @@ buf_page_get_low(
 #ifdef UNIV_DEBUG
 	switch (mode) {
 	default:
-		ut_ad(!allow_ibuf_merge);
 		ut_ad(mode == BUF_PEEK_IF_IN_POOL);
 		break;
 	case BUF_GET_POSSIBLY_FREED:
@@ -2423,17 +2617,14 @@ buf_page_get_low(
 		/* The caller may pass a dummy page size,
 		because it does not really matter. */
 		break;
+	case BUF_GET_RECOVER:
 	case BUF_GET:
-	case BUF_GET_IF_IN_POOL_OR_WATCH:
 		ut_ad(!mtr->is_freeing_tree());
 		fil_space_t* s = fil_space_get(page_id.space());
 		ut_ad(s);
 		ut_ad(s->zip_size() == zip_size);
 	}
 #endif /* UNIV_DEBUG */
-
-	ut_ad(!mtr || !ibuf_inside(mtr)
-	      || ibuf_page_low(page_id, zip_size, FALSE, NULL));
 
 	++buf_pool.stat.n_page_gets;
         mariadb_increment_pages_accessed();
@@ -2468,8 +2659,7 @@ loop:
 	hash_lock.lock_shared();
 	block = reinterpret_cast<buf_block_t*>(
 		buf_pool.page_hash.get(page_id, chain));
-	if (UNIV_LIKELY(block
-			&& !buf_pool.watch_is_sentinel(block->page))) {
+	if (UNIV_LIKELY(block != nullptr)) {
 		state = block->page.fix();
 		hash_lock.unlock_shared();
 		goto got_block;
@@ -2480,17 +2670,6 @@ loop:
 	switch (mode) {
 	case BUF_GET_IF_IN_POOL:
 	case BUF_PEEK_IF_IN_POOL:
-		return nullptr;
-	case BUF_GET_IF_IN_POOL_OR_WATCH:
-		/* Buffer-fixing inside watch_set() will prevent eviction */
-		block = reinterpret_cast<buf_block_t*>
-			(buf_pool.watch_set(page_id, chain));
-
-		if (block) {
-			state = block->page.state();
-			goto got_block_fixed;
-		}
-
 		return nullptr;
 	}
 
@@ -2505,11 +2684,11 @@ loop:
 	corrupted, or if an encrypted page with a valid
 	checksum cannot be decypted. */
 
-	switch (dberr_t local_err = buf_read_page(page_id, zip_size)) {
+	switch (dberr_t local_err = buf_read_page(page_id, zip_size, chain)) {
 	case DB_SUCCESS:
 	case DB_SUCCESS_LOCKED_REC:
                 mariadb_increment_pages_read();
-		buf_read_ahead_random(page_id, zip_size, ibuf_inside(mtr));
+		buf_read_ahead_random(page_id, zip_size);
 		break;
 	default:
 		if (mode != BUF_GET_POSSIBLY_FREED
@@ -2531,15 +2710,15 @@ loop:
 got_block:
 	ut_ad(!block->page.in_zip_hash);
 	state++;
-got_block_fixed:
 	ut_ad(state > buf_page_t::FREED);
 
 	if (state > buf_page_t::READ_FIX && state < buf_page_t::WRITE_FIX) {
 		if (mode == BUF_PEEK_IF_IN_POOL) {
 ignore_block:
+			block->unfix();
+ignore_unfixed:
 			ut_ad(mode == BUF_GET_POSSIBLY_FREED
 			      || mode == BUF_PEEK_IF_IN_POOL);
-			block->unfix();
 			if (err) {
 				*err = DB_CORRUPTION;
 			}
@@ -2553,16 +2732,32 @@ ignore_block:
 		in buf_page_t::read_complete() or
 		buf_pool_t::corrupted_evict(), or
 		after buf_zip_decompress() in this function. */
-		block->page.lock.s_lock();
+		if (rw_latch != RW_NO_LATCH) {
+			block->page.lock.s_lock();
+		} else if (!block->page.lock.s_lock_try()) {
+			/* For RW_NO_LATCH, we should not try to acquire S or X
+			latch directly as we could be violating the latching
+			order resulting in deadlock. Instead we try latching the
+			page and retry in case of a failure. */
+			goto wait_for_read;
+		}
 		state = block->page.state();
 		ut_ad(state < buf_page_t::READ_FIX
 		      || state >= buf_page_t::WRITE_FIX);
 		const page_id_t id{block->page.id()};
 		block->page.lock.s_unlock();
 
-		if (UNIV_UNLIKELY(id != page_id)) {
+		if (UNIV_UNLIKELY(state < buf_page_t::UNFIXED)) {
+			if (UNIV_UNLIKELY(id == page_id)) {
+				/* The page read was completed, and
+				another thread marked the page as free
+				while we were waiting. */
+				goto ignore_block;
+			}
+
 			ut_ad(id == page_id_t{~0ULL});
 			block->page.unfix();
+
 			if (++retries < BUF_PAGE_READ_MAX_RETRIES) {
 				goto loop;
 			}
@@ -2573,6 +2768,7 @@ ignore_block:
 
 			return nullptr;
 		}
+		ut_ad(id == page_id);
 	} else if (mode != BUF_PEEK_IF_IN_POOL) {
 	} else if (!mtr) {
 		ut_ad(!block->page.oldest_modification());
@@ -2599,16 +2795,17 @@ free_unfixed_block:
 	if (UNIV_UNLIKELY(!block->page.frame)) {
 		if (!block->page.lock.x_lock_try()) {
 wait_for_unzip:
+wait_for_read:
 			/* The page is being read or written, or
 			another thread is executing buf_zip_decompress()
-			in buf_page_get_low() on it. */
+			in buf_page_get_gen() on it. */
 			block->page.unfix();
 			std::this_thread::sleep_for(
 				std::chrono::microseconds(100));
 			goto loop;
 		}
 
-		buf_block_t *new_block = buf_LRU_get_free_block(false);
+		buf_block_t *new_block = buf_LRU_get_free_block(have_no_mutex);
 		buf_block_init_low(new_block);
 
 wait_for_unfix:
@@ -2624,15 +2821,11 @@ wait_for_unfix:
 		ut_ad(&block->page == buf_pool.page_hash.get(page_id, chain));
 
 		/* Wait for any other threads to release their buffer-fix
-		on the compressed-only block descriptor.
-		FIXME: Never fix() before acquiring the lock.
-		Only in buf_page_get_gen(), buf_page_get_low(), buf_page_free()
-		we are violating that principle. */
+		on the compressed-only block descriptor. */
 		state = block->page.state();
 
 		switch (state) {
 		case buf_page_t::UNFIXED + 1:
-		case buf_page_t::IBUF_EXIST + 1:
 		case buf_page_t::REINIT + 1:
 			break;
 		default:
@@ -2654,7 +2847,7 @@ wait_for_unfix:
 			goto wait_for_unfix;
 		}
 
-		/* Ensure that another buf_page_get_low() will wait for
+		/* Ensure that another buf_page_get_gen() will wait for
 		new_block->page.lock.x_unlock(). */
 		block->page.set_state(buf_page_t::READ_FIX);
 
@@ -2686,13 +2879,6 @@ wait_for_unfix:
 
 		buf_pool.n_pend_unzip++;
 
-		access_time = block->page.is_accessed();
-
-		if (!access_time && !recv_no_ibuf_operations
-		    && ibuf_page_exists(block->page.id(), block->zip_size())) {
-			state = buf_page_t::IBUF_EXIST + 1;
-		}
-
 		/* Decompress the page while not holding
 		buf_pool.mutex. */
 		const auto ok = buf_zip_decompress(block, false);
@@ -2711,63 +2897,6 @@ wait_for_unfix:
 		}
 	}
 
-#if defined UNIV_DEBUG || defined UNIV_IBUF_DEBUG
-re_evict:
-	if (mode != BUF_GET_IF_IN_POOL
-	    && mode != BUF_GET_IF_IN_POOL_OR_WATCH) {
-	} else if (!ibuf_debug || recv_recovery_is_on()) {
-	} else if (fil_space_t* space = fil_space_t::get(page_id.space())) {
-		for (ulint i = 0; i < mtr->get_savepoint(); i++) {
-			if (buf_block_t* b = mtr->block_at_savepoint(i)) {
-				if (b->page.oldest_modification() > 2
-				    && b->page.lock.have_any()) {
-					/* We are holding a dirty page latch
-					that would hang buf_flush_sync(). */
-					space->release();
-					goto re_evict_fail;
-				}
-			}
-		}
-
-		/* Try to evict the block from the buffer pool, to use the
-		insert buffer (change buffer) as much as possible. */
-
-		mysql_mutex_lock(&buf_pool.mutex);
-
-		block->unfix();
-
-		/* Blocks cannot be relocated or enter or exit the
-		buf_pool while we are holding the buf_pool.mutex. */
-		const bool evicted = buf_LRU_free_page(&block->page, true);
-		space->release();
-
-		if (!evicted) {
-			block->fix();
-		}
-
-		mysql_mutex_unlock(&buf_pool.mutex);
-
-		if (evicted) {
-			if (mode == BUF_GET_IF_IN_POOL_OR_WATCH) {
-				buf_pool.watch_set(page_id, chain);
-			}
-			return(NULL);
-		}
-
-		buf_flush_sync();
-
-		state = block->page.state();
-
-		if (state == buf_page_t::UNFIXED + 1
-		    && !block->page.oldest_modification()) {
-			goto re_evict;
-		}
-
-		/* Failed to evict the page; change it directly */
-	}
-re_evict_fail:
-#endif /* UNIV_DEBUG || UNIV_IBUF_DEBUG */
-
 	if (UNIV_UNLIKELY(state < buf_page_t::UNFIXED)) {
 		goto ignore_block;
 	}
@@ -2779,287 +2908,121 @@ re_evict_fail:
 #endif /* UNIV_DEBUG */
 	ut_ad(block->page.frame);
 
-	if (state >= buf_page_t::UNFIXED
-	    && allow_ibuf_merge
-	    && fil_page_get_type(block->page.frame) == FIL_PAGE_INDEX
-	    && page_is_leaf(block->page.frame)) {
-		block->page.lock.x_lock();
-		ut_ad(block->page.id() == page_id
-		      || (state >= buf_page_t::READ_FIX
-			  && state < buf_page_t::WRITE_FIX));
+	/* The state = block->page.state() may be stale at this point,
+	and in fact, at any point of time if we consider its
+	buffer-fix component. If the block is being read into the
+	buffer pool, it is possible that buf_page_t::read_complete()
+	will invoke buf_pool_t::corrupted_evict() and therefore
+	invalidate it (invoke buf_page_t::set_corrupt_id() and set the
+	state to FREED). Therefore, after acquiring the page latch we
+	must recheck the state. */
 
-#ifdef BTR_CUR_HASH_ADAPT
-		btr_search_drop_page_hash_index(block, true);
-#endif /* BTR_CUR_HASH_ADAPT */
-
-		dberr_t e;
-
-		if (UNIV_UNLIKELY(block->page.id() != page_id)) {
-page_id_mismatch:
-			state = block->page.state();
-			e = DB_CORRUPTION;
-ibuf_merge_corrupted:
-			if (err) {
-				*err = e;
-			}
-
-			if (block->page.id().is_corrupted()) {
-				buf_pool.corrupted_evict(&block->page, state);
-			}
-			return nullptr;
-		}
-
-		state = block->page.state();
-		ut_ad(state < buf_page_t::READ_FIX);
-
-		if (state >= buf_page_t::IBUF_EXIST
-		    && state < buf_page_t::REINIT) {
-			block->page.clear_ibuf_exist();
-			e = ibuf_merge_or_delete_for_page(block, page_id,
-							  block->zip_size());
-			if (UNIV_UNLIKELY(e != DB_SUCCESS)) {
-				goto ibuf_merge_corrupted;
-			}
-		}
-
-		if (rw_latch == RW_X_LATCH) {
-			goto get_latch_valid;
-		} else {
-			block->page.lock.x_unlock();
-			goto get_latch;
-		}
-	} else {
-get_latch:
-		switch (rw_latch) {
-		case RW_NO_LATCH:
-			mtr->memo_push(block, MTR_MEMO_BUF_FIX);
+	switch (rw_latch) {
+	case RW_NO_LATCH:
+		mtr->memo_push(block, MTR_MEMO_BUF_FIX);
+		return block;
+	case RW_S_LATCH:
+		block->page.lock.s_lock();
+		break;
+	case RW_SX_LATCH:
+		block->page.lock.u_lock();
+		ut_ad(!block->page.is_io_fixed());
+		break;
+	default:
+		ut_ad(rw_latch == RW_X_LATCH);
+		if (block->page.lock.x_lock_upgraded()) {
+			ut_ad(block->page.id() == page_id);
+			block->unfix();
+			mtr->page_lock_upgrade(*block);
 			return block;
-		case RW_S_LATCH:
-			block->page.lock.s_lock();
-			ut_ad(!block->page.is_read_fixed());
-			if (UNIV_UNLIKELY(block->page.id() != page_id)) {
-				block->page.lock.s_unlock();
-				block->page.lock.x_lock();
-				goto page_id_mismatch;
-			}
-get_latch_valid:
-			mtr->memo_push(block, mtr_memo_type_t(rw_latch));
-#ifdef BTR_CUR_HASH_ADAPT
-			btr_search_drop_page_hash_index(block, true);
-#endif /* BTR_CUR_HASH_ADAPT */
-			break;
-		case RW_SX_LATCH:
-			block->page.lock.u_lock();
-			ut_ad(!block->page.is_io_fixed());
-			if (UNIV_UNLIKELY(block->page.id() != page_id)) {
-				block->page.lock.u_x_upgrade();
-				goto page_id_mismatch;
-			}
-			goto get_latch_valid;
-		default:
-			ut_ad(rw_latch == RW_X_LATCH);
-			if (block->page.lock.x_lock_upgraded()) {
-				ut_ad(block->page.id() == page_id);
-				block->unfix();
-				mtr->page_lock_upgrade(*block);
-				return block;
-			}
-			if (UNIV_UNLIKELY(block->page.id() != page_id)) {
-				goto page_id_mismatch;
-			}
-			goto get_latch_valid;
-		}
-
-		ut_ad(page_id_t(page_get_space_id(block->page.frame),
-				page_get_page_no(block->page.frame))
-		      == page_id);
-
-		if (mode == BUF_GET_POSSIBLY_FREED
-		    || mode == BUF_PEEK_IF_IN_POOL) {
-			return block;
-		}
-
-		const bool not_first_access{block->page.set_accessed()};
-		buf_page_make_young_if_needed(&block->page);
-		if (!not_first_access) {
-			buf_read_ahead_linear(page_id, block->zip_size(),
-					      ibuf_inside(mtr));
 		}
 	}
+
+	mtr->memo_push(block, mtr_memo_type_t(rw_latch));
+	state = block->page.state();
+
+	if (UNIV_UNLIKELY(state < buf_page_t::UNFIXED)) {
+		mtr->release_last_page();
+		goto ignore_unfixed;
+	}
+
+	ut_ad(state < buf_page_t::READ_FIX || state > buf_page_t::WRITE_FIX);
+
+#ifdef BTR_CUR_HASH_ADAPT
+	btr_search_drop_page_hash_index(block, true);
+#endif /* BTR_CUR_HASH_ADAPT */
+
+	ut_ad(page_id_t(page_get_space_id(block->page.frame),
+			page_get_page_no(block->page.frame)) == page_id);
 
 	return block;
 }
 
-/** Get access to a database page. Buffered redo log may be applied.
-@param[in]	page_id			page id
-@param[in]	zip_size		ROW_FORMAT=COMPRESSED page size, or 0
-@param[in]	rw_latch		RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
-@param[in]	guess			guessed block or NULL
-@param[in]	mode			BUF_GET, BUF_GET_IF_IN_POOL,
-BUF_PEEK_IF_IN_POOL, or BUF_GET_IF_IN_POOL_OR_WATCH
-@param[in,out]	mtr			mini-transaction, or NULL
-@param[out]	err			DB_SUCCESS or error code
-@param[in]	allow_ibuf_merge	Allow change buffer merge while
-reading the pages from file.
-@return pointer to the block or NULL */
-buf_block_t*
-buf_page_get_gen(
-	const page_id_t		page_id,
-	ulint			zip_size,
-	ulint			rw_latch,
-	buf_block_t*		guess,
-	ulint			mode,
-	mtr_t*			mtr,
-	dberr_t*		err,
-	bool			allow_ibuf_merge)
+TRANSACTIONAL_TARGET
+buf_block_t *buf_page_optimistic_fix(buf_block_t *block, page_id_t id)
 {
-  buf_block_t *block= recv_sys.recover(page_id);
-  if (UNIV_LIKELY(!block))
-    return buf_page_get_low(page_id, zip_size, rw_latch,
-                            guess, mode, mtr, err, allow_ibuf_merge);
-  else if (UNIV_UNLIKELY(block == reinterpret_cast<buf_block_t*>(-1)))
-  {
-  corrupted:
-    if (err)
-      *err= DB_CORRUPTION;
+  buf_pool_t::hash_chain &chain= buf_pool.page_hash.cell_get(id.fold());
+  transactional_shared_lock_guard<page_hash_latch> g
+    {buf_pool.page_hash.lock_get(chain)};
+  if (UNIV_UNLIKELY(!buf_pool.is_uncompressed(block) ||
+                    id != block->page.id() || !block->page.frame))
     return nullptr;
-  }
-  /* Recovery is a special case; we fix() before acquiring lock. */
-  auto s= block->page.fix();
-  ut_ad(s >= buf_page_t::FREED);
-  /* The block may be write-fixed at this point because we are not
-  holding a lock, but it must not be read-fixed. */
-  ut_ad(s < buf_page_t::READ_FIX || s >= buf_page_t::WRITE_FIX);
-  if (err)
-    *err= DB_SUCCESS;
-  const bool must_merge= allow_ibuf_merge &&
-    ibuf_page_exists(page_id, block->zip_size());
-  if (s < buf_page_t::UNFIXED)
-  {
-  got_freed_page:
-    ut_ad(mode == BUF_GET_POSSIBLY_FREED || mode == BUF_PEEK_IF_IN_POOL);
-    mysql_mutex_lock(&buf_pool.mutex);
-    block->page.unfix();
-    buf_LRU_free_page(&block->page, true);
-    mysql_mutex_unlock(&buf_pool.mutex);
-    goto corrupted;
-  }
-  else if (must_merge &&
-           fil_page_get_type(block->page.frame) == FIL_PAGE_INDEX &&
-           page_is_leaf(block->page.frame))
-  {
-    block->page.lock.x_lock();
-    s= block->page.state();
-    ut_ad(s > buf_page_t::FREED);
-    ut_ad(s < buf_page_t::READ_FIX);
-    if (s < buf_page_t::UNFIXED)
-    {
-      block->page.lock.x_unlock();
-      goto got_freed_page;
-    }
-    else
-    {
-      if (block->page.is_ibuf_exist())
-        block->page.clear_ibuf_exist();
-      if (dberr_t e=
-          ibuf_merge_or_delete_for_page(block, page_id, block->zip_size()))
-      {
-        if (err)
-          *err= e;
-        buf_pool.corrupted_evict(&block->page, s);
-        return nullptr;
-      }
-    }
-
-    if (rw_latch == RW_X_LATCH)
-    {
-      mtr->memo_push(block, MTR_MEMO_PAGE_X_FIX);
-      return block;
-    }
-    block->page.lock.x_unlock();
-  }
-  mtr->page_lock(block, rw_latch);
+  const auto state= block->page.state();
+  if (UNIV_UNLIKELY(state < buf_page_t::UNFIXED ||
+                    state >= buf_page_t::READ_FIX))
+    return nullptr;
+  block->page.fix();
   return block;
 }
 
-/********************************************************************//**
-This is the general function used to get optimistic access to a database
-page.
-@return TRUE if success */
-TRANSACTIONAL_TARGET
-bool buf_page_optimistic_get(ulint rw_latch, buf_block_t *block,
-                             uint64_t modify_clock, mtr_t *mtr)
+buf_block_t *buf_page_optimistic_get(buf_block_t *block,
+                                     rw_lock_type_t rw_latch,
+                                     uint64_t modify_clock, mtr_t *mtr)
 {
-  ut_ad(block);
-  ut_ad(mtr);
   ut_ad(mtr->is_active());
   ut_ad(rw_latch == RW_S_LATCH || rw_latch == RW_X_LATCH);
+  ut_ad(block->page.buf_fix_count());
 
-  if (have_transactional_memory);
-  else if (UNIV_UNLIKELY(!block->page.frame))
-    return false;
-  else
+  if (rw_latch == RW_S_LATCH)
   {
-    const auto state= block->page.state();
-    if (UNIV_UNLIKELY(state < buf_page_t::UNFIXED ||
-                      state >= buf_page_t::READ_FIX))
-      return false;
-  }
-
-  bool success;
-  const page_id_t id{block->page.id()};
-  buf_pool_t::hash_chain &chain= buf_pool.page_hash.cell_get(id.fold());
-  bool have_u_not_x= false;
-
-  {
-    transactional_shared_lock_guard<page_hash_latch> g
-      {buf_pool.page_hash.lock_get(chain)};
-    if (UNIV_UNLIKELY(id != block->page.id() || !block->page.frame))
-      return false;
-    const auto state= block->page.state();
-    if (UNIV_UNLIKELY(state < buf_page_t::UNFIXED ||
-                      state >= buf_page_t::READ_FIX))
-      return false;
-
-    if (rw_latch == RW_S_LATCH)
-      success= block->page.lock.s_lock_try();
-    else
+    if (!block->page.lock.s_lock_try())
     {
-      have_u_not_x= block->page.lock.have_u_not_x();
-      success= have_u_not_x || block->page.lock.x_lock_try();
+    fail:
+      block->page.unfix();
+      return nullptr;
     }
-  }
-
-  if (!success)
-    return false;
-
-  if (have_u_not_x)
-  {
-    block->page.lock.u_x_upgrade();
-    mtr->page_lock_upgrade(*block);
-    ut_ad(id == block->page.id());
-    ut_ad(modify_clock == block->modify_clock);
-  }
-  else
-  {
-    ut_ad(rw_latch == RW_S_LATCH || !block->page.is_io_fixed());
-    ut_ad(id == block->page.id());
-    ut_ad(!ibuf_inside(mtr) || ibuf_page(id, block->zip_size(), nullptr));
 
     if (modify_clock != block->modify_clock || block->page.is_freed())
     {
-      if (rw_latch == RW_S_LATCH)
-        block->page.lock.s_unlock();
-      else
-        block->page.lock.x_unlock();
-      return false;
+      block->page.lock.s_unlock();
+      goto fail;
     }
 
-    block->page.fix();
     ut_ad(!block->page.is_read_fixed());
-    block->page.set_accessed();
     buf_page_make_young_if_needed(&block->page);
-    mtr->memo_push(block, mtr_memo_type_t(rw_latch));
+    mtr->memo_push(block, MTR_MEMO_PAGE_S_FIX);
+  }
+  else if (block->page.lock.have_u_not_x())
+  {
+    block->page.lock.u_x_upgrade();
+    block->page.unfix();
+    mtr->page_lock_upgrade(*block);
+    ut_ad(modify_clock == block->modify_clock);
+  }
+  else if (!block->page.lock.x_lock_try())
+    goto fail;
+  else
+  {
+    ut_ad(!block->page.is_io_fixed());
+
+    if (modify_clock != block->modify_clock || block->page.is_freed())
+    {
+      block->page.lock.x_unlock();
+      goto fail;
+    }
+
+    buf_page_make_young_if_needed(&block->page);
+    mtr->memo_push(block, MTR_MEMO_PAGE_X_FIX);
   }
 
   ut_d(if (!(++buf_dbg_counter % 5771)) buf_pool.validate());
@@ -3069,7 +3032,7 @@ bool buf_page_optimistic_get(ulint rw_latch, buf_block_t *block,
   ut_ad(~buf_page_t::LRU_MASK & state);
   ut_ad(block->page.frame);
 
-  return true;
+  return block;
 }
 
 /** Try to S-latch a page.
@@ -3139,12 +3102,11 @@ retry:
 
   buf_page_t *bpage= buf_pool.page_hash.get(page_id, chain);
 
-  if (bpage && !buf_pool.watch_is_sentinel(*bpage))
+  if (bpage)
   {
 #ifdef BTR_CUR_HASH_ADAPT
     const dict_index_t *drop_hash_entry= nullptr;
 #endif
-    bool ibuf_exist= false;
 
     if (!mtr->have_x_latch(reinterpret_cast<const buf_block_t&>(*bpage)))
     {
@@ -3170,10 +3132,7 @@ retry:
       if (state < buf_page_t::UNFIXED)
         bpage->set_reinit(buf_page_t::FREED);
       else
-      {
         bpage->set_reinit(state & buf_page_t::LRU_MASK);
-        ibuf_exist= (state & buf_page_t::LRU_MASK) == buf_page_t::IBUF_EXIST;
-      }
 
       if (UNIV_LIKELY(bpage->frame != nullptr))
       {
@@ -3199,10 +3158,7 @@ retry:
         if (state < buf_page_t::UNFIXED)
           bpage->set_reinit(buf_page_t::FREED);
         else
-        {
           bpage->set_reinit(state & buf_page_t::LRU_MASK);
-          ibuf_exist= (state & buf_page_t::LRU_MASK) == buf_page_t::IBUF_EXIST;
-        }
 
         mysql_mutex_lock(&buf_pool.flush_list_mutex);
         buf_relocate(bpage, &free_block->page);
@@ -3241,9 +3197,6 @@ retry:
       btr_search_drop_page_hash_index(reinterpret_cast<buf_block_t*>(bpage),
                                       false);
 #endif /* BTR_CUR_HASH_ADAPT */
-
-    if (ibuf_exist && !recv_recovery_is_on())
-      ibuf_merge_or_delete_for_page(nullptr, page_id, zip_size);
 
     return reinterpret_cast<buf_block_t*>(bpage);
   }
@@ -3284,13 +3237,6 @@ retry:
   mtr->memo_push(reinterpret_cast<buf_block_t*>(bpage), MTR_MEMO_PAGE_X_FIX);
 
   bpage->set_accessed();
-
-  /* Delete possible entries for the page from the insert buffer:
-  such can exist if the page belonged to an index which was dropped */
-  if (page_id < page_id_t{SRV_SPACE_ID_UPPER_BOUND, 0} &&
-      !srv_is_undo_tablespace(page_id.space()) &&
-      !recv_recovery_is_on())
-    ibuf_merge_or_delete_for_page(nullptr, page_id, zip_size);
 
   static_assert(FIL_PAGE_PREV + 4 == FIL_PAGE_NEXT, "adjacent");
   memset_aligned<8>(bpage->frame + FIL_PAGE_PREV, 0xff, 8);
@@ -3355,32 +3301,15 @@ ATTRIBUTE_COLD void buf_page_monitor(const buf_page_t &bpage, bool read)
 	const byte* frame = bpage.zip.data ? bpage.zip.data : bpage.frame;
 
 	switch (fil_page_get_type(frame)) {
-		ulint	level;
 	case FIL_PAGE_TYPE_INSTANT:
 	case FIL_PAGE_INDEX:
 	case FIL_PAGE_RTREE:
-		level = btr_page_get_level(frame);
-
-		/* Check if it is an index page for insert buffer */
-		if (fil_page_get_type(frame) == FIL_PAGE_INDEX
-		    && btr_page_get_index_id(frame)
-		    == (index_id_t)(DICT_IBUF_ID_MIN + IBUF_SPACE_ID)) {
-			if (level == 0) {
-				counter = MONITOR_RW_COUNTER(
-					read, MONITOR_INDEX_IBUF_LEAF_PAGE);
-			} else {
-				counter = MONITOR_RW_COUNTER(
-					read,
-					MONITOR_INDEX_IBUF_NON_LEAF_PAGE);
-			}
+		if (page_is_leaf(frame)) {
+			counter = MONITOR_RW_COUNTER(
+				read, MONITOR_INDEX_LEAF_PAGE);
 		} else {
-			if (level == 0) {
-				counter = MONITOR_RW_COUNTER(
-					read, MONITOR_INDEX_LEAF_PAGE);
-			} else {
-				counter = MONITOR_RW_COUNTER(
-					read, MONITOR_INDEX_NON_LEAF_PAGE);
-			}
+			counter = MONITOR_RW_COUNTER(
+				read, MONITOR_INDEX_NON_LEAF_PAGE);
 		}
 		break;
 
@@ -3390,14 +3319,6 @@ ATTRIBUTE_COLD void buf_page_monitor(const buf_page_t &bpage, bool read)
 
 	case FIL_PAGE_INODE:
 		counter = MONITOR_RW_COUNTER(read, MONITOR_INODE_PAGE);
-		break;
-
-	case FIL_PAGE_IBUF_FREE_LIST:
-		counter = MONITOR_RW_COUNTER(read, MONITOR_IBUF_FREELIST_PAGE);
-		break;
-
-	case FIL_PAGE_IBUF_BITMAP:
-		counter = MONITOR_RW_COUNTER(read, MONITOR_IBUF_BITMAP_PAGE);
 		break;
 
 	case FIL_PAGE_TYPE_SYS:
@@ -3612,26 +3533,19 @@ database_corrupted:
                  << FORCE_RECOVERY_MSG;
     }
 
-    if (!srv_force_recovery)
-      goto release_page;
-  }
-
-  if (err == DB_PAGE_CORRUPTED || err == DB_DECRYPTION_FAILED)
-  {
+    if (err == DB_PAGE_CORRUPTED || err == DB_DECRYPTION_FAILED ||
+        !srv_force_recovery)
+    {
 release_page:
-    buf_pool.corrupted_evict(this, buf_page_t::READ_FIX);
-    return err;
+      buf_pool.corrupted_evict(this, buf_page_t::READ_FIX);
+      return err;
+    }
   }
 
-  const bool recovery= recv_recovery_is_on();
+  const bool recovery= frame && recv_recovery_is_on();
 
   if (recovery && !recv_recover_page(node.space, this))
     return DB_PAGE_CORRUPTED;
-
-  const bool ibuf_may_exist= frame && !recv_no_ibuf_operations &&
-    (!expected_id.space() || !is_predefined_tablespace(expected_id.space())) &&
-    fil_page_get_type(read_frame) == FIL_PAGE_INDEX &&
-    page_is_leaf(read_frame);
 
   if (UNIV_UNLIKELY(MONITOR_IS_ON(MONITOR_MODULE_BUF_PAGE)))
     buf_page_monitor(*this, true);
@@ -3639,14 +3553,10 @@ release_page:
 
   if (!recovery)
   {
-    ut_d(auto f=) zip.fix.fetch_sub(ibuf_may_exist
-                                    ? READ_FIX - IBUF_EXIST
-                                    : READ_FIX - UNFIXED);
+    ut_d(auto f=) zip.fix.fetch_sub(READ_FIX - UNFIXED);
     ut_ad(f >= READ_FIX);
     ut_ad(f < WRITE_FIX);
   }
-  else if (ibuf_may_exist)
-    set_ibuf_exist();
 
   lock.x_unlock(true);
 

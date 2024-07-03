@@ -79,7 +79,7 @@ inline bool buf_page_peek_if_too_old(const buf_page_t *bpage)
 @return own: the allocated block, in state BUF_BLOCK_MEMORY */
 inline buf_block_t *buf_block_alloc()
 {
-  return buf_LRU_get_free_block(false);
+  return buf_LRU_get_free_block(have_no_mutex);
 }
 
 /********************************************************************//**
@@ -115,18 +115,4 @@ buf_block_modify_clock_inc(
 	assert_block_ahi_valid(block);
 
 	block->modify_clock++;
-}
-
-/********************************************************************//**
-Returns the value of the modify clock. The caller must have an s-lock
-or x-lock on the block.
-@return value */
-UNIV_INLINE
-ib_uint64_t
-buf_block_get_modify_clock(
-/*=======================*/
-	buf_block_t*	block)	/*!< in: block */
-{
-	ut_ad(block->page.lock.have_any());
-	return(block->modify_clock);
 }

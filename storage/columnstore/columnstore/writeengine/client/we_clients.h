@@ -19,8 +19,7 @@
 //
 /** @file */
 
-#ifndef WECLIENTS_H__
-#define WECLIENTS_H__
+#pragma once
 
 #include <iostream>
 #include <vector>
@@ -37,11 +36,7 @@
 #include "rwlock_local.h"
 #include "resourcemanager.h"
 
-#if defined(_MSC_VER) && defined(xxxWECLIENTS_DLLEXPORT)
-#define EXPORT __declspec(dllexport)
-#else
 #define EXPORT
-#endif
 
 namespace WriteEngine
 {
@@ -181,5 +176,3 @@ class WEClients
 
 #undef EXPORT
 
-#endif
-// vim:ts=4 sw=4:

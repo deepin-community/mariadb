@@ -291,33 +291,6 @@ EXPLAIN EXTENDED SELECT (SELECT 1 FROM t2 WHERE d = c) AS RESULT FROM t1 GROUP B
 DROP TABLE t1,t2;
 
 --echo #
---echo # BUG#45928 "Differing query results depending on MRR and
---echo # engine_condition_pushdown settings"
---echo #
-
-CREATE TABLE `t1` (
-  `pk` int(11) NOT NULL AUTO_INCREMENT,
-  `time_nokey` time NOT NULL,
-  `varchar_key` varchar(1) NOT NULL,
-  `varchar_nokey` varchar(1) NOT NULL,
-  PRIMARY KEY (`pk`),
-  KEY `varchar_key` (`varchar_key`)
-) AUTO_INCREMENT=12 DEFAULT CHARSET=latin1;
-INSERT INTO `t1` VALUES (10,'00:00:00','i','i'),(11,'00:00:00','','');
-
-set @old_optimizer_switch          = @@session.optimizer_switch;
-
-SET SESSION OPTIMIZER_SWITCH = 'materialization=off,semijoin=off,loosescan=off,firstmatch=off,mrr=on,engine_condition_pushdown=on';
-
- SELECT `time_nokey` G1  FROM t1  WHERE ( `varchar_nokey`  , `varchar_key`  )  IN ( 
-SELECT `varchar_nokey`  , `varchar_nokey`  )  AND `varchar_key`  >= 'c' HAVING G1  ORDER 
-BY `pk`   ;
-
-set @@session.optimizer_switch          = @old_optimizer_switch;
-
-DROP TABLE t1;
-
---echo #
 --echo # During work with BUG#45863 I had problems with a query that was
 --echo # optimized differently in regular and prepared mode.
 --echo # Because there was a bug in one of the selected strategies, I became
@@ -481,7 +454,7 @@ INSERT INTO t2 VALUES (9,1);
 --echo # Enable Index condition pushdown
 --replace_column 1 #
 set @old_icp=@@optimizer_switch;
-SET SESSION optimizer_switch="engine_condition_pushdown=on";
+SET SESSION optimizer_switch="index_condition_pushdown=on";
 
 --echo
 SELECT pk
@@ -944,7 +917,7 @@ drop table t1, t2;
 
 CREATE TABLE t1 (c1 varchar(1) DEFAULT NULL);
 CREATE TABLE t2 (c1 varchar(1) DEFAULT NULL);
-INSERT INTO t2 VALUES ('k'), ('d');
+INSERT INTO t2 VALUES ('k'), ('d'),('x');
 CREATE TABLE t3 (c1 varchar(1) DEFAULT NULL);
 INSERT INTO t3 VALUES ('a'), ('b'), ('c');
 CREATE TABLE t4 (c1 varchar(1) primary key);
@@ -2284,9 +2257,13 @@ INSERT INTO t4 VALUES
 SET @save_join_cache_level=@@join_cache_level;
 SET join_cache_level=0;
 
+explain select 1
+from t2 join t1 on
+('i','w') not in (select t1.v1,t4.v2 from t4,t1,t3 where t3.v2 = t1.v1) LIMIT ROWS EXAMINED 10;
+
 select 1
 from t2 join t1 on
-('i','w') not in (select t1.v1,t4.v2 from t4,t1,t3 where t3.v2 = t1.v1) LIMIT ROWS EXAMINED 500;
+('i','w') not in (select t1.v1,t4.v2 from t4,t1,t3 where t3.v2 = t1.v1) LIMIT ROWS EXAMINED 10;
 SET join_cache_level= @save_join_cache_level;
 
 DROP TABLE t1,t2,t3,t4;
@@ -2633,6 +2610,57 @@ SELECT
          )
   );
 
+--echo #
+--echo # MDEV-29362: Constant subquery used as left part of IN subquery
+--echo #
+
+CREATE TABLE t1 (a int) ENGINE=MyISAM;
+INSERT INTO t1 VALUES (15), (1), (2);
+CREATE TABLE t2 (b int) ENGINE=MyISAM;
+INSERT INTO t2 VALUES (15), (1);
+CREATE TABLE t3 (c int) ENGINE=MyISAM;
+INSERT INTO t3 VALUES (15), (1);
+
+let $q1=
+SELECT a FROM t1 GROUP BY a
+  HAVING a = ( (SELECT b FROM t2 where b=1) IN (SELECT c FROM t3)  ) + 1;
+let $q2=
+SELECT a FROM t1 GROUP BY a
+  HAVING a IN ( (SELECT b FROM t2 where b=1) IN (SELECT c FROM t3)  );
+
+SET optimizer_switch='condition_pushdown_from_having=off';
+
+eval $q1;
+eval $q2;
+
+SET optimizer_switch='condition_pushdown_from_having=on';
+
+eval $q1;
+eval $q2;
+
+eval EXPLAIN FORMAT=JSON $q1;
+
+eval PREPARE stmt FROM "$q1";
+EXECUTE stmt;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+DROP TABLE t1,t2,t3;
+
+--echo #
+--echo # MDEV-33747: Optimization of (SELECT) IN (SELECT ...) executes subquery at prepare stage
+--echo #
+create table t1 (a int, b int);
+insert into t1 select seq, seq from seq_1_to_200;
+create table t2 as select * from t1;
+create table t3 as select * from t1;
+analyze table t1,t2,t3;
+select @@expensive_subquery_limit < 200 as DEFAULTS_ARE_SUITABLE;
+flush status;
+explain select * from t1 where a<3 or (select max(a) from t2) in (select b from t3);
+--echo # Must show 0. If this shows 200, this means subquery was executed and you have a bug:
+show status like 'Handler_read_rnd_next%';
+drop table t1,t2,t3;
 
 --echo # End of 10.4 tests
 

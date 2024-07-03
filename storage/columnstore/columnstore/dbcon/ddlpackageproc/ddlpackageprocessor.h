@@ -23,8 +23,7 @@
  ***********************************************************************/
 /** @file */
 
-#ifndef DDLPACKAGEPROCESSOR_H
-#define DDLPACKAGEPROCESSOR_H
+#pragma once
 #include <unistd.h>
 #include <string>
 #include <stdexcept>
@@ -48,11 +47,7 @@
 #include "../../writeengine/client/we_clients.h"
 #include "liboamcpp.h"
 
-#if defined(_MSC_VER) && defined(DDLPKGPROC_DLLEXPORT)
-#define EXPORT __declspec(dllexport)
-#else
 #define EXPORT
-#endif
 
 //#define IDB_DDL_DEBUG
 namespace ddlpackageprocessor
@@ -891,5 +886,3 @@ bool from_string(T& t, const std::string& s, std::ios_base& (*f)(std::ios_base&)
 
 #undef EXPORT
 
-#endif  // DDLPACKAGEPROCESSOR_H
-// vim:ts=4 sw=4:

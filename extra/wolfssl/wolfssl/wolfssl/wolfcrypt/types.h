@@ -131,7 +131,7 @@ decouple library dependencies with standard string, memory and so on.
     #if defined(WOLF_C89) || defined(WOLF_NO_TRAILING_ENUM_COMMAS)
         #define WOLF_ENUM_DUMMY_LAST_ELEMENT(prefix) _wolf_ ## prefix ## _enum_dummy_last_element
     #else
-        #define WOLF_ENUM_DUMMY_LAST_ELEMENT(prefix)
+        #define WOLF_ENUM_DUMMY_LAST_ELEMENT(prefix) /* null expansion */
     #endif
 
     /* helpers for stringifying the expanded value of a macro argument rather
@@ -259,7 +259,9 @@ decouple library dependencies with standard string, memory and so on.
     #endif
 
 #elif defined(WC_16BIT_CPU)
+    #ifndef MICROCHIP_PIC24
         #undef WORD64_AVAILABLE
+    #endif
         typedef word16 wolfssl_word;
         #define MP_16BIT  /* for mp_int, mp_word needs to be twice as big as \
                            * mp_digit, no 64 bit type so make mp_digit 16 bit */
@@ -316,6 +318,16 @@ typedef struct w64wrapper {
         #endif
     #endif /* WC_MAYBE_UNUSED */
 
+    #ifndef WC_DO_NOTHING
+        #define WC_DO_NOTHING do {} while (0)
+        #ifdef _MSC_VER
+            /* disable buggy MSC warning around while(0),
+             *"warning C4127: conditional expression is constant"
+             */
+            #pragma warning(disable: 4127)
+        #endif
+    #endif
+
     /* use inlining if compiler allows */
     #ifndef WC_INLINE
     #ifndef NO_INLINE
@@ -346,7 +358,7 @@ typedef struct w64wrapper {
                 #define WC_INLINE inline
             #endif
         #else
-            #define WC_INLINE
+            #define WC_INLINE WC_MAYBE_UNUSED
         #endif
     #else
         #define WC_INLINE WC_MAYBE_UNUSED
@@ -416,6 +428,8 @@ typedef struct w64wrapper {
 
     #define XSTR_SIZEOF(x) (sizeof(x) - 1) /* -1 to not count the null char */
 
+    #define XELEM_CNT(x) (sizeof((x))/sizeof(*(x)))
+
     /* idea to add global alloc override by Moises Guimaraes  */
     /* default to libc stuff */
     /* XREALLOC is used once in normal math lib, not in fast math lib */
@@ -476,7 +490,7 @@ typedef struct w64wrapper {
     #elif defined(WOLFSSL_TELIT_M2MB)
         /* Telit M2MB SDK requires use m2mb_os API's, not std malloc/free */
         /* Use of malloc/free will cause CPU reboot */
-        #define XMALLOC(s, h, t)     ((void)h, (void)t, m2mb_os_malloc((s)))
+        #define XMALLOC(s, h, t)     ((void)(h), (void)(t), m2mb_os_malloc((s)))
         #ifdef WOLFSSL_XFREE_NO_NULLNESS_CHECK
             #define XFREE(p, h, t)       m2mb_os_free(xp)
         #else
@@ -493,24 +507,25 @@ typedef struct w64wrapper {
                     fprintf(stderr, "wolfSSL_malloc failed");
                     return NULL;
                 };
-                #define XMALLOC(s, h, t)     malloc_check((s))
-                #define XFREE(p, h, t)
-                #define XREALLOC(p, n, h, t) (NULL)
+                #define XMALLOC(s, h, t)     ((void)(h), (void)(t), malloc_check((s)))
+                #define XFREE(p, h, t)       (void)(h); (void)(t)
+                #define XREALLOC(p, n, h, t) ((void)(h), (void)(t), NULL)
             #else
-                #define XMALLOC(s, h, t)     (NULL)
-                #define XFREE(p, h, t)
-                #define XREALLOC(p, n, h, t) (NULL)
+                #define XMALLOC(s, h, t)     ((void)(s), (void)(h), (void)(t), NULL)
+                #define XFREE(p, h, t)       (void)(p); (void)(h); (void)(t)
+                #define XREALLOC(p, n, h, t) ((void)(p), (void)(n), (void)(h), (void)(t), NULL)
             #endif
         #else
-        /* just use plain C stdlib stuff if desired */
-        #include <stdlib.h>
-        #define XMALLOC(s, h, t)     malloc((size_t)(s))
-        #ifdef WOLFSSL_XFREE_NO_NULLNESS_CHECK
-            #define XFREE(p, h, t)       free(xp)
-        #else
-            #define XFREE(p, h, t)       {void* xp = (p); if (xp) free(xp);}
-        #endif
-        #define XREALLOC(p, n, h, t) realloc((p), (size_t)(n))
+            /* just use plain C stdlib stuff if desired */
+            #include <stdlib.h>
+            #define XMALLOC(s, h, t)     ((void)(h), (void)(t), malloc((size_t)(s)))
+            #ifdef WOLFSSL_XFREE_NO_NULLNESS_CHECK
+                #define XFREE(p, h, t)       ((void)(h), (void)(t), free(p))
+            #else
+                #define XFREE(p, h, t)       {void* xp = (p); (void)(h); if (xp) free(xp);}
+            #endif
+            #define XREALLOC(p, n, h, t) \
+                ((void)(h), (void)(t), realloc((p), (size_t)(n)))
         #endif
 
     #elif defined(WOLFSSL_LINUXKM)
@@ -543,93 +558,120 @@ typedef struct w64wrapper {
                 #endif
                 #define XREALLOC(p, n, h, t) wolfSSL_Realloc((p), (n), (h), (t))
             #endif /* WOLFSSL_DEBUG_MEMORY */
+        #elif  defined(WOLFSSL_EMBOS) && !defined(XMALLOC_USER) \
+                && !defined(NO_WOLFSSL_MEMORY) \
+                && !defined(WOLFSSL_STATIC_MEMORY)
+            /* settings.h solve this case already. Avoid redefinition. */
         #elif (!defined(FREERTOS) && !defined(FREERTOS_TCP)) || defined(WOLFSSL_TRACK_MEMORY)
             #ifdef WOLFSSL_DEBUG_MEMORY
                 #define XMALLOC(s, h, t)     ((void)(h), (void)(t), wolfSSL_Malloc((s), __func__, __LINE__))
                 #ifdef WOLFSSL_XFREE_NO_NULLNESS_CHECK
-                    #define XFREE(p, h, t)       wolfSSL_Free(xp, __func__, __LINE__)
+                    #define XFREE(p, h, t)       ((void)(h), (void)(t), wolfSSL_Free(xp, __func__, __LINE__))
                 #else
-                    #define XFREE(p, h, t)       {void* xp = (p); if (xp) wolfSSL_Free(xp, __func__, __LINE__);}
+                    #define XFREE(p, h, t)       {void* xp = (p); (void)(h); (void)(t); if (xp) wolfSSL_Free(xp, __func__, __LINE__);}
                 #endif
-                #define XREALLOC(p, n, h, t) wolfSSL_Realloc((p), (n), __func__, __LINE__)
+                #define XREALLOC(p, n, h, t) ((void)(h), (void)(t), wolfSSL_Realloc((p), (n), __func__, __LINE__))
             #else
                 #define XMALLOC(s, h, t)     ((void)(h), (void)(t), wolfSSL_Malloc((s)))
                 #ifdef WOLFSSL_XFREE_NO_NULLNESS_CHECK
-                    #define XFREE(p, h, t)       wolfSSL_Free(p)
+                    #define XFREE(p, h, t)       ((void)(h), (void)(t), wolfSSL_Free(p))
                 #else
-                    #define XFREE(p, h, t)       {void* xp = (p); if (xp) wolfSSL_Free(xp);}
+                    #define XFREE(p, h, t)       {void* xp = (p); (void)(h); (void)(t); if (xp) wolfSSL_Free(xp);}
                 #endif
-                #define XREALLOC(p, n, h, t) wolfSSL_Realloc((p), (n))
+                #define XREALLOC(p, n, h, t) ((void)(h), (void)(t), wolfSSL_Realloc((p), (n)))
             #endif /* WOLFSSL_DEBUG_MEMORY */
         #endif /* WOLFSSL_STATIC_MEMORY */
     #endif
 
     /* declare/free variable handling for async and smallstack */
+    #ifndef WC_ALLOC_DO_ON_FAILURE
+        #define WC_ALLOC_DO_ON_FAILURE() WC_DO_NOTHING
+    #endif
+
+    #define WC_DECLARE_HEAP_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
+        VAR_TYPE* VAR_NAME[VAR_ITEMS]; \
+        int idx##VAR_NAME = 0, inner_idx_##VAR_NAME
+    #define WC_HEAP_ARRAY_ARG(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE) \
+        VAR_TYPE* VAR_NAME[VAR_ITEMS]
+    #define WC_ALLOC_HEAP_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
+        for (idx##VAR_NAME=0; idx##VAR_NAME<(VAR_ITEMS); idx##VAR_NAME++) { \
+            (VAR_NAME)[idx##VAR_NAME] = (VAR_TYPE*)XMALLOC(VAR_SIZE, (HEAP), DYNAMIC_TYPE_TMP_BUFFER); \
+            if ((VAR_NAME)[idx##VAR_NAME] == NULL) { \
+                for (inner_idx_##VAR_NAME = 0; inner_idx_##VAR_NAME < idx##VAR_NAME; inner_idx_##VAR_NAME++) { \
+                    XFREE((VAR_NAME)[inner_idx_##VAR_NAME], (HEAP), DYNAMIC_TYPE_TMP_BUFFER); \
+                    (VAR_NAME)[inner_idx_##VAR_NAME] = NULL; \
+                } \
+                for (inner_idx_##VAR_NAME = idx##VAR_NAME + 1; inner_idx_##VAR_NAME < (VAR_ITEMS); inner_idx_##VAR_NAME++) { \
+                    (VAR_NAME)[inner_idx_##VAR_NAME] = NULL; \
+                } \
+                idx##VAR_NAME = 0; \
+                WC_ALLOC_DO_ON_FAILURE(); \
+                break; \
+            } \
+        }
+    #define WC_CALLOC_HEAP_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
+            do { \
+                WC_ALLOC_HEAP_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP); \
+                if (idx##VAR_NAME != 0) { \
+                    for (idx##VAR_NAME=0; idx##VAR_NAME<(VAR_ITEMS); idx##VAR_NAME++) { \
+                        XMEMSET((VAR_NAME)[idx##VAR_NAME], 0, VAR_SIZE); \
+                    } \
+                } \
+            } while (0)
+    #define WC_HEAP_ARRAY_OK(VAR_NAME) (idx##VAR_NAME != 0)
+    #define WC_FREE_HEAP_ARRAY(VAR_NAME, VAR_ITEMS, HEAP)               \
+        if (WC_HEAP_ARRAY_OK(VAR_NAME)) {                               \
+            for (idx##VAR_NAME=0; idx##VAR_NAME<(VAR_ITEMS); idx##VAR_NAME++) { \
+                XFREE((VAR_NAME)[idx##VAR_NAME], (HEAP), DYNAMIC_TYPE_TMP_BUFFER); \
+            }                                                           \
+            idx##VAR_NAME = 0;                                          \
+        }
+
     #if defined(WOLFSSL_ASYNC_CRYPT) || defined(WOLFSSL_SMALL_STACK)
         #define WC_DECLARE_VAR_IS_HEAP_ALLOC
         #define WC_DECLARE_VAR(VAR_NAME, VAR_TYPE, VAR_SIZE, HEAP) \
-            VAR_TYPE* VAR_NAME = (VAR_TYPE*)XMALLOC(sizeof(VAR_TYPE) * (VAR_SIZE), (HEAP), DYNAMIC_TYPE_WOLF_BIGINT)
-        #define WC_DECLARE_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
-            VAR_TYPE* VAR_NAME[VAR_ITEMS]; \
-            int idx##VAR_NAME, inner_idx_##VAR_NAME
-        #define WC_INIT_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
-            for (idx##VAR_NAME=0; idx##VAR_NAME<(VAR_ITEMS); idx##VAR_NAME++) { \
-                (VAR_NAME)[idx##VAR_NAME] = (VAR_TYPE*)XMALLOC(VAR_SIZE, (HEAP), DYNAMIC_TYPE_WOLF_BIGINT); \
-                if ((VAR_NAME)[idx##VAR_NAME] == NULL) { \
-                    for (inner_idx_##VAR_NAME = 0; inner_idx_##VAR_NAME < idx##VAR_NAME; inner_idx_##VAR_NAME++) { \
-                        XFREE((VAR_NAME)[inner_idx_##VAR_NAME], (HEAP), DYNAMIC_TYPE_WOLF_BIGINT); \
-                        (VAR_NAME)[inner_idx_##VAR_NAME] = NULL; \
-                    } \
-                    for (inner_idx_##VAR_NAME = idx##VAR_NAME + 1; inner_idx_##VAR_NAME < (VAR_ITEMS); inner_idx_##VAR_NAME++) { \
-                        (VAR_NAME)[inner_idx_##VAR_NAME] = NULL; \
-                    } \
-                    break; \
-                } \
-            }
+            VAR_TYPE* VAR_NAME = NULL
+        #define WC_ALLOC_VAR(VAR_NAME, VAR_TYPE, VAR_SIZE, HEAP)        \
+            do {                                                        \
+                (VAR_NAME) = (VAR_TYPE*)XMALLOC(sizeof(VAR_TYPE) * (VAR_SIZE), (HEAP), DYNAMIC_TYPE_WOLF_BIGINT); \
+                if ((VAR_NAME) == NULL) {                               \
+                    WC_ALLOC_DO_ON_FAILURE();                           \
+                }                                                       \
+            } while (0)
+        #define WC_CALLOC_VAR(VAR_NAME, VAR_TYPE, VAR_SIZE, HEAP)        \
+            do { \
+                WC_ALLOC_VAR(VAR_NAME, VAR_TYPE, VAR_SIZE, HEAP); \
+                XMEMSET(VAR_NAME, 0, sizeof(VAR_TYPE) * (VAR_SIZE)); \
+            } while (0)
         #define WC_FREE_VAR(VAR_NAME, HEAP) \
             XFREE(VAR_NAME, (HEAP), DYNAMIC_TYPE_WOLF_BIGINT)
+        #define WC_DECLARE_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
+            WC_DECLARE_HEAP_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP)
+        #define WC_ARRAY_ARG(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE) \
+            WC_HEAP_ARRAY_ARG(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE)
+        #define WC_ALLOC_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
+            WC_ALLOC_HEAP_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP)
+        #define WC_CALLOC_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
+            WC_CALLOC_HEAP_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP)
+        #define WC_ARRAY_OK(VAR_NAME) WC_HEAP_ARRAY_OK(VAR_NAME)
         #define WC_FREE_ARRAY(VAR_NAME, VAR_ITEMS, HEAP) \
-            for (idx##VAR_NAME=0; idx##VAR_NAME<(VAR_ITEMS); idx##VAR_NAME++) { \
-                XFREE((VAR_NAME)[idx##VAR_NAME], (HEAP), DYNAMIC_TYPE_WOLF_BIGINT); \
-            }
-
-        #define WC_DECLARE_ARRAY_DYNAMIC_DEC(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
-            WC_DECLARE_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP)
-        #define WC_DECLARE_ARRAY_DYNAMIC_EXE(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
-            WC_INIT_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP)
-        #define WC_FREE_ARRAY_DYNAMIC(VAR_NAME, VAR_ITEMS, HEAP) \
-            WC_FREE_ARRAY(VAR_NAME, VAR_ITEMS, HEAP)
+            WC_FREE_HEAP_ARRAY(VAR_NAME, VAR_ITEMS, HEAP)
     #else
         #undef WC_DECLARE_VAR_IS_HEAP_ALLOC
         #define WC_DECLARE_VAR(VAR_NAME, VAR_TYPE, VAR_SIZE, HEAP) \
             VAR_TYPE VAR_NAME[VAR_SIZE]
+        #define WC_ALLOC_VAR(VAR_NAME, VAR_TYPE, VAR_SIZE, HEAP) WC_DO_NOTHING
+        #define WC_CALLOC_VAR(VAR_NAME, VAR_TYPE, VAR_SIZE, HEAP)        \
+            XMEMSET(VAR_NAME, 0, sizeof(var))
+        #define WC_FREE_VAR(VAR_NAME, HEAP) WC_DO_NOTHING /* nothing to free, its stack */
         #define WC_DECLARE_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
-            VAR_TYPE VAR_NAME[VAR_ITEMS][VAR_SIZE]
-        #define WC_INIT_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) do {} while(0)
-        #define WC_FREE_VAR(VAR_NAME, HEAP) do {} while(0) /* nothing to free, its stack */
-        #define WC_FREE_ARRAY(VAR_NAME, VAR_ITEMS, HEAP) do {} while(0) /* nothing to free, its stack */
-
-        #define WC_DECLARE_ARRAY_DYNAMIC_DEC(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
-            VAR_TYPE* VAR_NAME[VAR_ITEMS]; \
-            int idx##VAR_NAME, inner_idx_##VAR_NAME
-        #define WC_DECLARE_ARRAY_DYNAMIC_EXE(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) \
-            for (idx##VAR_NAME=0; idx##VAR_NAME<(VAR_ITEMS); idx##VAR_NAME++) { \
-                (VAR_NAME)[idx##VAR_NAME] = (VAR_TYPE*)XMALLOC(VAR_SIZE, (HEAP), DYNAMIC_TYPE_TMP_BUFFER); \
-                if ((VAR_NAME)[idx##VAR_NAME] == NULL) { \
-                    for (inner_idx_##VAR_NAME = 0; inner_idx_##VAR_NAME < idx##VAR_NAME; inner_idx_##VAR_NAME++) { \
-                        XFREE((VAR_NAME)[inner_idx_##VAR_NAME], HEAP, DYNAMIC_TYPE_TMP_BUFFER); \
-                        (VAR_NAME)[inner_idx_##VAR_NAME] = NULL; \
-                    } \
-                    for (inner_idx_##VAR_NAME = idx##VAR_NAME + 1; inner_idx_##VAR_NAME < (VAR_ITEMS); inner_idx_##VAR_NAME++) { \
-                        (VAR_NAME)[inner_idx_##VAR_NAME] = NULL; \
-                    } \
-                    break; \
-                } \
-            }
-        #define WC_FREE_ARRAY_DYNAMIC(VAR_NAME, VAR_ITEMS, HEAP) \
-            for (idx##VAR_NAME=0; idx##VAR_NAME<(VAR_ITEMS); idx##VAR_NAME++) { \
-                XFREE((VAR_NAME)[idx##VAR_NAME], (HEAP), DYNAMIC_TYPE_TMP_BUFFER); \
-            }
+            VAR_TYPE VAR_NAME[VAR_ITEMS][(VAR_SIZE) / sizeof(VAR_TYPE)] /* // NOLINT(bugprone-sizeof-expression) */
+        #define WC_ARRAY_ARG(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE) \
+            VAR_TYPE VAR_NAME[VAR_ITEMS][(VAR_SIZE) / sizeof(VAR_TYPE)] /* // NOLINT(bugprone-sizeof-expression) */
+        #define WC_ALLOC_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) WC_DO_NOTHING
+        #define WC_CALLOC_ARRAY(VAR_NAME, VAR_TYPE, VAR_ITEMS, VAR_SIZE, HEAP) XMEMSET(VAR_NAME, 0, sizeof(VAR_NAME))
+        #define WC_ARRAY_OK(VAR_NAME) 1
+        #define WC_FREE_ARRAY(VAR_NAME, VAR_ITEMS, HEAP) WC_DO_NOTHING /* nothing to free, its stack */
     #endif
 
     #if defined(HAVE_FIPS) || defined(HAVE_SELFTEST)
@@ -638,9 +680,9 @@ typedef struct w64wrapper {
         #define DECLARE_ARRAY               WC_DECLARE_ARRAY
         #define FREE_VAR                    WC_FREE_VAR
         #define FREE_ARRAY                  WC_FREE_ARRAY
-        #define DECLARE_ARRAY_DYNAMIC_DEC   WC_DECLARE_ARRAY_DYNAMIC_DEC
-        #define DECLARE_ARRAY_DYNAMIC_EXE   WC_DECLARE_ARRAY_DYNAMIC_EXE
-        #define FREE_ARRAY_DYNAMIC          WC_FREE_ARRAY_DYNAMIC
+        #define DECLARE_ARRAY_DYNAMIC_DEC   WC_DECLARE_HEAP_ARRAY
+        #define DECLARE_ARRAY_DYNAMIC_EXE   WC_ALLOC_HEAP_ARRAY
+        #define FREE_ARRAY_DYNAMIC          WC_FREE_HEAP_ARRAY
     #endif /* HAVE_FIPS */
 
     #if !defined(USE_WOLF_STRTOK) && \
@@ -687,11 +729,11 @@ typedef struct w64wrapper {
         #endif
 
         #ifndef XSTRCASECMP
-        #if defined(MICROCHIP_PIC32) && (__XC32_VERSION >= 1000)
-            /* XC32 supports str[n]casecmp in version >= 1.0. */
+        #if defined(MICROCHIP_PIC32) && (__XC32_VERSION >= 1000) && (__XC32_VERSION < 4000)
+            /* XC32 supports str[n]casecmp in version >= 1.0 through 4.0. */
             #define XSTRCASECMP(s1,s2) strcasecmp((s1),(s2))
         #elif defined(MICROCHIP_PIC32) || defined(WOLFSSL_TIRTOS) || \
-                defined(WOLFSSL_ZEPHYR)
+                defined(WOLFSSL_ZEPHYR) || defined(MICROCHIP_PIC24)
             /* XC32 version < 1.0 does not support strcasecmp. */
             #define USE_WOLF_STRCASECMP
             #define XSTRCASECMP(s1,s2) wc_strcasecmp(s1,s2)
@@ -721,7 +763,7 @@ typedef struct w64wrapper {
             /* XC32 supports str[n]casecmp in version >= 1.0. */
             #define XSTRNCASECMP(s1,s2,n) strncasecmp((s1),(s2),(n))
         #elif defined(MICROCHIP_PIC32) || defined(WOLFSSL_TIRTOS) || \
-                defined(WOLFSSL_ZEPHYR)
+                defined(WOLFSSL_ZEPHYR) || defined(MICROCHIP_PIC24)
             /* XC32 version < 1.0 does not support strncasecmp. */
             #define USE_WOLF_STRNCASECMP
             #define XSTRNCASECMP(s1,s2) wc_strncasecmp(s1,s2)
@@ -748,15 +790,8 @@ typedef struct w64wrapper {
 
         /* snprintf is used in asn.c for GetTimeString, PKCS7 test, and when
            debugging is turned on */
+        #ifndef XSNPRINTF
         #ifndef USE_WINDOWS_API
-            #ifndef XSNPRINTF
-            #if defined(NO_FILESYSTEM) && !defined(NO_STDIO_FILESYSTEM) && \
-                (defined(OPENSSL_EXTRA) || defined(OPENSSL_EXTRA_X509_SMALL) || \
-                 defined(WOLFSSL_CERT_EXT) || defined(HAVE_PKCS7))
-                /* case where stdio is not included else where but is needed
-                   for snprintf */
-                #include <stdio.h>
-            #endif
             #if defined(WOLFSSL_ESPIDF) && \
                 (!defined(NO_ASN_TIME) && defined(HAVE_PKCS7))
                     #include<stdarg.h>
@@ -786,10 +821,11 @@ typedef struct w64wrapper {
                     }
                 #define XSNPRINTF _xsnprintf_
             #elif defined(WOLF_C89)
+                #include <stdio.h>
                 #define XSPRINTF sprintf
             #else
+                #include <stdio.h>
                 #define XSNPRINTF snprintf
-            #endif
             #endif
         #else
             #if defined(_MSC_VER) || defined(__CYGWIN__) || defined(__MINGW32__)
@@ -826,6 +862,7 @@ typedef struct w64wrapper {
                 #define XSNPRINTF snprintf
             #endif /* _MSC_VER */
         #endif /* USE_WINDOWS_API */
+        #endif /* !XSNPRINTF */
 
         #if defined(WOLFSSL_CERT_EXT) || defined(OPENSSL_EXTRA) || \
             defined(HAVE_ALPN) || defined(WOLFSSL_SNIFFER)
@@ -874,8 +911,12 @@ typedef struct w64wrapper {
 
     #if !defined(NO_FILESYSTEM) && !defined(NO_STDIO_FILESYSTEM)
         #ifndef XGETENV
-            #include <stdlib.h>
-            #define XGETENV getenv
+            #ifdef NO_GETENV
+                #define XGETENV(x) (NULL)
+            #else
+                #include <stdlib.h>
+                #define XGETENV getenv
+            #endif
         #endif
     #endif /* !NO_FILESYSTEM && !NO_STDIO_FILESYSTEM */
 
@@ -890,7 +931,11 @@ typedef struct w64wrapper {
         #endif
         #if defined(OPENSSL_ALL) || defined(OPENSSL_EXTRA) || defined(OPENSSL_EXTRA_X509_SMALL)
         #define XISALNUM(c)     isalnum((c))
-        #define XISASCII(c)     isascii((c))
+        #ifdef NO_STDLIB_ISASCII
+            #define XISASCII(c) (((c) >= 0 && (c) <= 127) ? 1 : 0)
+        #else
+            #define XISASCII(c) isascii((c))
+        #endif
         #define XISSPACE(c)     isspace((c))
         #endif
         /* needed by wolfSSL_check_domain_name() */
@@ -1005,13 +1050,18 @@ typedef struct w64wrapper {
         DYNAMIC_TYPE_SESSION      = 96,
         DYNAMIC_TYPE_DILITHIUM    = 97,
         DYNAMIC_TYPE_SPHINCS      = 98,
-        DYNAMIC_TYPE_SNIFFER_SERVER     = 1000,
-        DYNAMIC_TYPE_SNIFFER_SESSION    = 1001,
-        DYNAMIC_TYPE_SNIFFER_PB         = 1002,
-        DYNAMIC_TYPE_SNIFFER_PB_BUFFER  = 1003,
-        DYNAMIC_TYPE_SNIFFER_TICKET_ID  = 1004,
-        DYNAMIC_TYPE_SNIFFER_NAMED_KEY  = 1005,
-        DYNAMIC_TYPE_SNIFFER_KEY        = 1006
+        DYNAMIC_TYPE_SM4_BUFFER   = 99,
+        DYNAMIC_TYPE_DEBUG_TAG    = 100,
+        DYNAMIC_TYPE_LMS          = 101,
+        DYNAMIC_TYPE_SNIFFER_SERVER      = 1000,
+        DYNAMIC_TYPE_SNIFFER_SESSION     = 1001,
+        DYNAMIC_TYPE_SNIFFER_PB          = 1002,
+        DYNAMIC_TYPE_SNIFFER_PB_BUFFER   = 1003,
+        DYNAMIC_TYPE_SNIFFER_TICKET_ID   = 1004,
+        DYNAMIC_TYPE_SNIFFER_NAMED_KEY   = 1005,
+        DYNAMIC_TYPE_SNIFFER_KEY         = 1006,
+        DYNAMIC_TYPE_SNIFFER_KEYLOG_NODE = 1007,
+        DYNAMIC_TYPE_AES_EAX = 1008,
     };
 
     /* max error buffer string size */
@@ -1063,7 +1113,7 @@ typedef struct w64wrapper {
         WC_HASH_TYPE_SHA3_512 = 13,
         WC_HASH_TYPE_BLAKE2B = 14,
         WC_HASH_TYPE_BLAKE2S = 19,
-        WC_HASH_TYPE_MAX = WC_HASH_TYPE_BLAKE2S
+        WC_HASH_TYPE_MAX = WC_HASH_TYPE_BLAKE2S,
         #ifndef WOLFSSL_NOSHA512_224
             #define WOLFSSL_NOSHA512_224
         #endif
@@ -1100,11 +1150,18 @@ typedef struct w64wrapper {
         #endif
         #ifdef WOLFSSL_SHAKE128
             WC_HASH_TYPE_SHAKE128 = 18,
+            #undef _WC_HASH_TYPE_MAX
+            #define _WC_HASH_TYPE_MAX WC_HASH_TYPE_SHAKE128
         #endif
         #ifdef WOLFSSL_SHAKE256
             WC_HASH_TYPE_SHAKE256 = 19,
             #undef _WC_HASH_TYPE_MAX
             #define _WC_HASH_TYPE_MAX WC_HASH_TYPE_SHAKE256
+        #endif
+        #ifdef WOLFSSL_SM3
+            WC_HASH_TYPE_SM3     = 20,
+            #undef _WC_HASH_TYPE_MAX
+            #define _WC_HASH_TYPE_MAX WC_HASH_TYPE_SM3
         #endif
         WC_HASH_TYPE_MAX = _WC_HASH_TYPE_MAX
         #undef _WC_HASH_TYPE_MAX
@@ -1150,9 +1207,55 @@ typedef struct w64wrapper {
         WC_PK_TYPE_ED25519_KEYGEN = 15,
         WC_PK_TYPE_CURVE25519_KEYGEN = 16,
         WC_PK_TYPE_RSA_GET_SIZE = 17,
-        WC_PK_TYPE_MAX = WC_PK_TYPE_RSA_GET_SIZE
+        #define _WC_PK_TYPE_MAX WC_PK_TYPE_RSA_GET_SIZE
+    #if defined(HAVE_PQC) && defined(WOLFSSL_HAVE_KYBER)
+        WC_PK_TYPE_PQC_KEM_KEYGEN = 18,
+        WC_PK_TYPE_PQC_KEM_ENCAPS = 19,
+        WC_PK_TYPE_PQC_KEM_DECAPS = 20,
+        #undef _WC_PK_TYPE_MAX
+        #define _WC_PK_TYPE_MAX WC_PK_TYPE_PQC_KEM_DECAPS
+    #endif
+    #if defined(HAVE_PQC) && (defined(HAVE_DILITHIUM) || defined(HAVE_FALCON))
+        WC_PK_TYPE_PQC_SIG_KEYGEN = 21,
+        WC_PK_TYPE_PQC_SIG_SIGN = 22,
+        WC_PK_TYPE_PQC_SIG_VERIFY = 23,
+        WC_PK_TYPE_PQC_SIG_CHECK_PRIV_KEY = 24,
+        #undef _WC_PK_TYPE_MAX
+        #define _WC_PK_TYPE_MAX WC_PK_TYPE_PQC_SIG_CHECK_PRIV_KEY
+    #endif
+        WC_PK_TYPE_MAX = _WC_PK_TYPE_MAX
     };
 
+    #if defined(HAVE_PQC)
+    /* Post quantum KEM algorithms */
+    enum wc_PqcKemType {
+        WC_PQC_KEM_TYPE_NONE = 0,
+        #define _WC_PQC_KEM_TYPE_MAX WC_PQC_KEM_TYPE_NONE
+    #if defined(WOLFSSL_HAVE_KYBER)
+        WC_PQC_KEM_TYPE_KYBER = 1,
+        #undef _WC_PQC_KEM_TYPE_MAX
+        #define _WC_PQC_KEM_TYPE_MAX WC_PQC_KEM_TYPE_KYBER
+    #endif
+        WC_PQC_KEM_TYPE_MAX = _WC_PQC_KEM_TYPE_MAX
+    };
+
+    /* Post quantum signature algorithms */
+    enum wc_PqcSignatureType {
+        WC_PQC_SIG_TYPE_NONE = 0,
+        #define _WC_PQC_SIG_TYPE_MAX WC_PQC_SIG_TYPE_NONE
+    #if defined(HAVE_DILITHIUM)
+        WC_PQC_SIG_TYPE_DILITHIUM = 1,
+        #undef _WC_PQC_SIG_TYPE_MAX
+        #define _WC_PQC_SIG_TYPE_MAX WC_PQC_SIG_TYPE_DILITHIUM
+    #endif
+    #if defined(HAVE_FALCON)
+        WC_PQC_SIG_TYPE_FALCON = 2,
+        #undef _WC_PQC_SIG_TYPE_MAX
+        #define _WC_PQC_SIG_TYPE_MAX WC_PQC_SIG_TYPE_FALCON
+    #endif
+        WC_PQC_SIG_TYPE_MAX = _WC_PQC_SIG_TYPE_MAX
+    };
+    #endif
 
     /* settings detection for compile vs runtime math incompatibilities */
     enum {
@@ -1197,9 +1300,9 @@ typedef struct w64wrapper {
     #elif defined(XASM_LINK)
         /* keep user-supplied definition */
     #elif defined(WOLFSSL_NO_ASM)
-        #define XASM_LINK(f)
+        #define XASM_LINK(f) /* null expansion */
     #elif defined(_MSC_VER)
-        #define XASM_LINK(f)
+        #define XASM_LINK(f) /* null expansion */
     #elif defined(__APPLE__)
         #define XASM_LINK(f) asm("_" f)
     #elif defined(__GNUC__)
@@ -1218,87 +1321,57 @@ typedef struct w64wrapper {
           #ifndef WOLFSSL_USE_ALIGN
               #define WOLFSSL_USE_ALIGN
           #endif
-    #endif /* WOLFSSL_AESNI || WOLFSSL_ARMASM || USE_INTEL_SPEEDUP || WOLFSSL_AFALG_XILINX */
+    #endif /* WOLFSSL_AESNI || WOLFSSL_ARMASM || USE_INTEL_SPEEDUP || \
+            * WOLFSSL_AFALG_XILINX */
 
+    /* Helpers for memory alignment */
+    #ifndef XALIGNED
+        #if defined(__GNUC__) || defined(__llvm__) || \
+              defined(__IAR_SYSTEMS_ICC__)
+            #define XALIGNED(x) __attribute__ ( (aligned (x)))
+        #elif defined(__KEIL__)
+            #define XALIGNED(x) __align(x)
+        #elif defined(_MSC_VER)
+            /* disable align warning, we want alignment ! */
+            #pragma warning(disable: 4324)
+            #define XALIGNED(x) __declspec (align (x))
+        #else
+            #define XALIGNED(x) /* null expansion */
+        #endif
+    #endif
+
+    /* Only use alignment in wolfSSL/wolfCrypt if WOLFSSL_USE_ALIGN is set */
     #ifdef WOLFSSL_USE_ALIGN
-        #if !defined(ALIGN16)
-            #if defined(__IAR_SYSTEMS_ICC__) || defined(__GNUC__) || \
-                defined(__llvm__)
-                #define ALIGN16 __attribute__ ( (aligned (16)))
-            #elif defined(_MSC_VER)
-                /* disable align warning, we want alignment ! */
-                #pragma warning(disable: 4324)
-                #define ALIGN16 __declspec (align (16))
-            #else
-                #define ALIGN16
-            #endif
-        #endif /* !ALIGN16 */
-
-        #if !defined (ALIGN32)
-            #if defined(__IAR_SYSTEMS_ICC__) || defined(__GNUC__) || \
-                defined(__llvm__)
-                #define ALIGN32 __attribute__ ( (aligned (32)))
-            #elif defined(_MSC_VER)
-                /* disable align warning, we want alignment ! */
-                #pragma warning(disable: 4324)
-                #define ALIGN32 __declspec (align (32))
-            #else
-                #define ALIGN32
-            #endif
-        #endif /* !ALIGN32 */
-
-        #if !defined(ALIGN64)
-            #if defined(__IAR_SYSTEMS_ICC__) || defined(__GNUC__) || \
-                defined(__llvm__)
-                #define ALIGN64 __attribute__ ( (aligned (64)))
-            #elif defined(_MSC_VER)
-                /* disable align warning, we want alignment ! */
-                #pragma warning(disable: 4324)
-                #define ALIGN64 __declspec (align (64))
-            #else
-                #define ALIGN64
-            #endif
-        #endif /* !ALIGN64 */
-
-        #if defined(__IAR_SYSTEMS_ICC__) || defined(__GNUC__) || \
-            defined(__llvm__)
-            #define ALIGN128 __attribute__ ( (aligned (128)))
-        #elif defined(_MSC_VER)
-            /* disable align warning, we want alignment ! */
-            #pragma warning(disable: 4324)
-            #define ALIGN128 __declspec (align (128))
+        /* For IAR ARM the maximum variable alignment on stack is 8-bytes.
+         * Variables declared outside stack (like static globals) can have
+         * higher alignment. */
+        #if defined(__ICCARM__)
+            #define WOLFSSL_ALIGN(x) XALIGNED(8)
         #else
-            #define ALIGN128
+            #define WOLFSSL_ALIGN(x) XALIGNED(x)
         #endif
-
-        #if defined(__IAR_SYSTEMS_ICC__) || defined(__GNUC__)  || \
-            defined(__llvm__)
-            #define ALIGN256 __attribute__ ( (aligned (256)))
-        #elif defined(_MSC_VER)
-            /* disable align warning, we want alignment ! */
-            #pragma warning(disable: 4324)
-            #define ALIGN256 __declspec (align (256))
-        #else
-            #define ALIGN256
-        #endif
-
     #else
-        #ifndef ALIGN16
-            #define ALIGN16
-        #endif
-        #ifndef ALIGN32
-            #define ALIGN32
-        #endif
-        #ifndef ALIGN64
-            #define ALIGN64
-        #endif
-        #ifndef ALIGN128
-            #define ALIGN128
-        #endif
-        #ifndef ALIGN256
-            #define ALIGN256
-        #endif
-    #endif /* WOLFSSL_USE_ALIGN */
+        #define WOLFSSL_ALIGN(x) /* null expansion */
+    #endif
+
+    #ifndef ALIGN8
+        #define ALIGN8   WOLFSSL_ALIGN(8)
+    #endif
+    #ifndef ALIGN16
+        #define ALIGN16  WOLFSSL_ALIGN(16)
+    #endif
+    #ifndef ALIGN32
+        #define ALIGN32  WOLFSSL_ALIGN(32)
+    #endif
+    #ifndef ALIGN64
+        #define ALIGN64  WOLFSSL_ALIGN(64)
+    #endif
+    #ifndef ALIGN128
+        #define ALIGN128 WOLFSSL_ALIGN(128)
+    #endif
+    #ifndef ALIGN256
+        #define ALIGN256 WOLFSSL_ALIGN(256)
+    #endif
 
     #if !defined(PEDANTIC_EXTENSION)
         #if defined(__GNUC__)
@@ -1335,15 +1408,23 @@ typedef struct w64wrapper {
         #define WOLFSSL_THREAD
     #elif defined(WOLFSSL_TIRTOS)
         typedef void          THREAD_RETURN;
+        #define WOLFSSL_THREAD_VOID_RETURN
         typedef Task_Handle   THREAD_TYPE;
         #define WOLFSSL_THREAD
     #elif defined(WOLFSSL_ZEPHYR)
         typedef void            THREAD_RETURN;
-        typedef struct k_thread THREAD_TYPE;
+        #define WOLFSSL_THREAD_VOID_RETURN
+        typedef struct {
+            struct k_thread tid;
+            k_thread_stack_t* threadStack;
+        } THREAD_TYPE;
         #define WOLFSSL_THREAD
     #elif defined(NETOS)
         typedef UINT        THREAD_RETURN;
-        typedef TX_THREAD   THREAD_TYPE;
+        typedef struct {
+            TX_THREAD tid;
+            void* threadStack;
+        } THREAD_TYPE;
         #define WOLFSSL_THREAD
         #define INFINITE TX_WAIT_FOREVER
         #define WAIT_OBJECT_0 TX_NO_WAIT
@@ -1351,22 +1432,127 @@ typedef struct w64wrapper {
         typedef unsigned int  THREAD_RETURN;
         typedef size_t        THREAD_TYPE;
         #define WOLFSSL_THREAD
-    #elif (defined(_POSIX_THREADS) || defined(HAVE_PTHREAD)) && \
-        !defined(__MINGW32__)
+    #elif defined(WOLFSSL_PTHREADS)
+        #ifndef __MACH__
+            #include <pthread.h>
+            typedef struct COND_TYPE {
+                pthread_mutex_t mutex;
+                pthread_cond_t cond;
+            } COND_TYPE;
+        #else
+            #include <dispatch/dispatch.h>
+            typedef struct COND_TYPE {
+                wolfSSL_Mutex mutex;
+                dispatch_semaphore_t cond;
+            } COND_TYPE;
+        #endif
         typedef void*         THREAD_RETURN;
         typedef pthread_t     THREAD_TYPE;
+        #define WOLFSSL_COND
         #define WOLFSSL_THREAD
-        #define INFINITE      (-1)
-        #define WAIT_OBJECT_0 0L
+        #ifndef HAVE_SELFTEST
+            #define WOLFSSL_THREAD_NO_JOIN
+        #endif
+    #elif defined(FREERTOS) && defined(WOLFSSL_ESPIDF)
+        typedef void*          THREAD_RETURN;
+        typedef pthread_t      THREAD_TYPE;
+        #define WOLFSSL_THREAD
     #elif defined(FREERTOS)
         typedef unsigned int   THREAD_RETURN;
         typedef TaskHandle_t   THREAD_TYPE;
         #define WOLFSSL_THREAD
+    #elif defined(USE_WINDOWS_API)
+        typedef unsigned      THREAD_RETURN;
+        typedef uintptr_t     THREAD_TYPE;
+        typedef struct COND_TYPE {
+            wolfSSL_Mutex mutex;
+            HANDLE cond;
+        } COND_TYPE;
+        #define WOLFSSL_COND
+        #define INVALID_THREAD_VAL ((THREAD_TYPE)(INVALID_HANDLE_VALUE))
+        #define WOLFSSL_THREAD __stdcall
+        #if !defined(__MINGW32__)
+            #define WOLFSSL_THREAD_NO_JOIN __cdecl
+        #endif
     #else
         typedef unsigned int  THREAD_RETURN;
         typedef size_t        THREAD_TYPE;
         #define WOLFSSL_THREAD __stdcall
     #endif
+
+
+    #ifndef SINGLE_THREADED
+        /* Necessary headers should already be included. */
+
+        #ifndef INVALID_THREAD_VAL
+            #define INVALID_THREAD_VAL ((THREAD_TYPE)(-1))
+        #endif
+
+        #ifndef WOLFSSL_THREAD_VOID_RETURN
+            #define WOLFSSL_RETURN_FROM_THREAD(x) return (THREAD_RETURN)(x)
+        #else
+            #define WOLFSSL_RETURN_FROM_THREAD(x) \
+                do { (void)(x); return; } while(0)
+        #endif
+
+        /* List of defines/types and what they mean:
+         * THREAD_RETURN - return type of a thread callback
+         * THREAD_TYPE - type that should be passed into thread handling API
+         * INVALID_THREAD_VAL - a value that THREAD_TYPE can be checked against
+         *                      to check if the value is an invalid thread
+         * WOLFSSL_THREAD - attribute that should be used to declare thread
+         *                  callbacks
+         * WOLFSSL_THREAD_NO_JOIN - attribute that should be used to declare
+         *                          thread callbacks that don't require cleanup
+         * WOLFSSL_COND - defined if this system supports signaling
+         * COND_TYPE - type that should be passed into the signaling API
+         * WOLFSSL_THREAD_VOID_RETURN - defined if the thread callback has a
+         *                              void return
+         * WOLFSSL_RETURN_FROM_THREAD - define used to correctly return from a
+         *                              thread callback
+         * THREAD_CB - thread callback type for regular threading API
+         * THREAD_CB_NOJOIN - thread callback type for threading API that don't
+         *                    require cleanup
+         *
+         * Other defines/types are specific for the threading implementation
+         */
+
+        /* Internal wolfSSL threading interface. It does NOT need to be ported
+         * during initial porting efforts. This is a very basic interface. Some
+         * areas don't use this interface on purpose as they need more control
+         * over threads.
+         *
+         * It is currently used for:
+         * - CRL monitor
+         * - Testing
+         * - Entropy generation */
+
+        /* We don't support returns from threads */
+        typedef THREAD_RETURN (WOLFSSL_THREAD *THREAD_CB)(void* arg);
+        WOLFSSL_API int wolfSSL_NewThread(THREAD_TYPE* thread,
+            THREAD_CB cb, void* arg);
+        #ifdef WOLFSSL_THREAD_NO_JOIN
+            /* Create a thread that will be automatically cleaned up. We can't
+             * return a handle/pointer to the new thread because there are no
+             * guarantees for how long it will be valid. */
+            typedef THREAD_RETURN (WOLFSSL_THREAD_NO_JOIN *THREAD_CB_NOJOIN)
+                    (void* arg);
+            WOLFSSL_API int wolfSSL_NewThreadNoJoin(THREAD_CB_NOJOIN cb,
+                    void* arg);
+        #endif
+        WOLFSSL_API int wolfSSL_JoinThread(THREAD_TYPE thread);
+
+        #ifdef WOLFSSL_COND
+            WOLFSSL_API int wolfSSL_CondInit(COND_TYPE* cond);
+            WOLFSSL_API int wolfSSL_CondFree(COND_TYPE* cond);
+            WOLFSSL_API int wolfSSL_CondSignal(COND_TYPE* cond);
+            WOLFSSL_API int wolfSSL_CondWait(COND_TYPE* cond);
+            WOLFSSL_API int wolfSSL_CondStart(COND_TYPE* cond);
+            WOLFSSL_API int wolfSSL_CondEnd(COND_TYPE* cond);
+        #endif
+    #else
+        #define WOLFSSL_RETURN_FROM_THREAD(x) return (THREAD_RETURN)(x)
+    #endif /* SINGLE_THREADED */
 
     #if defined(HAVE_STACK_SIZE)
         #define EXIT_TEST(ret) return (THREAD_RETURN)((size_t)(ret))
@@ -1413,9 +1599,9 @@ typedef struct w64wrapper {
         #define PRAGMA(str) PRAGMA_GCC(str)
         #define PRAGMA_DIAG_POP PRAGMA_GCC_DIAG_POP
     #else
-        #define PRAGMA_GCC_DIAG_PUSH
-        #define PRAGMA_GCC(str)
-        #define PRAGMA_GCC_DIAG_POP
+        #define PRAGMA_GCC_DIAG_PUSH /* null expansion */
+        #define PRAGMA_GCC(str) /* null expansion */
+        #define PRAGMA_GCC_DIAG_POP /* null expansion */
     #endif
 
     #ifdef __clang__
@@ -1426,119 +1612,47 @@ typedef struct w64wrapper {
         #define PRAGMA(str) PRAGMA_CLANG(str)
         #define PRAGMA_DIAG_POP PRAGMA_CLANG_DIAG_POP
     #else
-        #define PRAGMA_CLANG_DIAG_PUSH
-        #define PRAGMA_CLANG(str)
-        #define PRAGMA_CLANG_DIAG_POP
+        #define PRAGMA_CLANG_DIAG_PUSH /* null expansion */
+        #define PRAGMA_CLANG(str) /* null expansion */
+        #define PRAGMA_CLANG_DIAG_POP /* null expansion */
     #endif
 
     #ifndef PRAGMA_DIAG_PUSH
-        #define PRAGMA_DIAG_PUSH
+        #define PRAGMA_DIAG_PUSH /* null expansion */
     #endif
     #ifndef PRAGMA
-        #define PRAGMA(str)
+        #define PRAGMA(str) /* null expansion */
     #endif
     #ifndef PRAGMA_DIAG_POP
-        #define PRAGMA_DIAG_POP
+        #define PRAGMA_DIAG_POP /* null expansion */
     #endif
 
-    #ifdef DEBUG_VECTOR_REGISTER_ACCESS
-        WOLFSSL_API extern THREAD_LS_T int wc_svr_count;
-        WOLFSSL_API extern THREAD_LS_T const char *wc_svr_last_file;
-        WOLFSSL_API extern THREAD_LS_T int wc_svr_last_line;
-
-        #ifdef DEBUG_VECTOR_REGISTERS_ABORT_ON_FAIL
-            #define DEBUG_VECTOR_REGISTERS_EXTRA_FAIL_CLAUSE abort();
-        #elif defined(DEBUG_VECTOR_REGISTERS_EXIT_ON_FAIL)
-            #define DEBUG_VECTOR_REGISTERS_EXTRA_FAIL_CLAUSE exit(1);
-        #else
-            #define DEBUG_VECTOR_REGISTERS_EXTRA_FAIL_CLAUSE
-        #endif
-
-        #define SAVE_VECTOR_REGISTERS(...) {                            \
-            ++wc_svr_count;                                             \
-            if (wc_svr_count > 5) {                                     \
-                fprintf(stderr,                                         \
-                        "%s @ L%d : incr : wc_svr_count %d (last op %s L%d)\n", \
-                        __FILE__,                                       \
-                        __LINE__,                                       \
-                        wc_svr_count,                                   \
-                        wc_svr_last_file,                               \
-                        wc_svr_last_line);                              \
-                DEBUG_VECTOR_REGISTERS_EXTRA_FAIL_CLAUSE                \
-            }                                                           \
-            wc_svr_last_file = __FILE__;                                \
-            wc_svr_last_line = __LINE__;                                \
-        }
-        #define ASSERT_SAVED_VECTOR_REGISTERS(fail_clause) {            \
-            if (wc_svr_count <= 0) {                                    \
-                fprintf(stderr,                                         \
-                        "ASSERT_SAVED_VECTOR_REGISTERS : %s @ L%d : wc_svr_count %d (last op %s L%d)\n", \
-                        __FILE__,                                       \
-                        __LINE__,                                       \
-                        wc_svr_count,                                   \
-                        wc_svr_last_file,                               \
-                        wc_svr_last_line);                              \
-                DEBUG_VECTOR_REGISTERS_EXTRA_FAIL_CLAUSE                \
-                { fail_clause }                                         \
-            }                                                           \
-        }
-        #define ASSERT_RESTORED_VECTOR_REGISTERS(fail_clause) {         \
-            if (wc_svr_count != 0) {                                    \
-                fprintf(stderr,                                         \
-                        "ASSERT_RESTORED_VECTOR_REGISTERS : %s @ L%d : wc_svr_count %d (last op %s L%d)\n", \
-                        __FILE__,                                       \
-                        __LINE__,                                       \
-                        wc_svr_count,                                   \
-                        wc_svr_last_file,                               \
-                        wc_svr_last_line);                              \
-                DEBUG_VECTOR_REGISTERS_EXTRA_FAIL_CLAUSE                \
-                { fail_clause }                                         \
-            }                                                           \
-        }
-        #define RESTORE_VECTOR_REGISTERS(...) {                         \
-            --wc_svr_count;                                             \
-            if ((wc_svr_count > 4) || (wc_svr_count < 0)) {             \
-                fprintf(stderr,                                         \
-                        "%s @ L%d : decr : wc_svr_count %d (last op %s L%d)\n", \
-                        __FILE__,                                       \
-                        __LINE__,                                       \
-                        wc_svr_count,                                   \
-                        wc_svr_last_file,                               \
-                        wc_svr_last_line);                              \
-                DEBUG_VECTOR_REGISTERS_EXTRA_FAIL_CLAUSE                \
-            }                                                           \
-            wc_svr_last_file = __FILE__;                                \
-            wc_svr_last_line = __LINE__;                                \
-        }
-    #else
-        #ifdef _MSC_VER
-            /* disable buggy MSC warning around while(0),
-             *"warning C4127: conditional expression is constant"
-             */
-            #pragma warning(disable: 4127)
-        #endif
-        #ifndef SAVE_VECTOR_REGISTERS
-            #define SAVE_VECTOR_REGISTERS(...) do{}while(0)
-        #endif
-        #ifndef ASSERT_SAVED_VECTOR_REGISTERS
-            #define ASSERT_SAVED_VECTOR_REGISTERS(...) do{}while(0)
-        #endif
-        #ifndef ASSERT_RESTORED_VECTOR_REGISTERS
-            #define ASSERT_RESTORED_VECTOR_REGISTERS(...) do{}while(0)
-        #endif
-        #ifndef RESTORE_VECTOR_REGISTERS
-            #define RESTORE_VECTOR_REGISTERS() do{}while(0)
-        #endif
+    #ifndef SAVE_VECTOR_REGISTERS
+        #define SAVE_VECTOR_REGISTERS(...) WC_DO_NOTHING
     #endif
-
+    #ifndef SAVE_VECTOR_REGISTERS2
+        #define SAVE_VECTOR_REGISTERS2() 0
+    #endif
+    #ifndef WC_DEBUG_SET_VECTOR_REGISTERS_RETVAL
+        #define WC_DEBUG_SET_VECTOR_REGISTERS_RETVAL(x) WC_DO_NOTHING
+    #endif
+    #ifndef ASSERT_SAVED_VECTOR_REGISTERS
+        #define ASSERT_SAVED_VECTOR_REGISTERS(...) WC_DO_NOTHING
+    #endif
+    #ifndef ASSERT_RESTORED_VECTOR_REGISTERS
+        #define ASSERT_RESTORED_VECTOR_REGISTERS(...) WC_DO_NOTHING
+    #endif
+    #ifndef RESTORE_VECTOR_REGISTERS
+        #define RESTORE_VECTOR_REGISTERS() WC_DO_NOTHING
+    #endif
 
     #if FIPS_VERSION_GE(5,1)
         #define WC_SPKRE_F(x,y) wolfCrypt_SetPrivateKeyReadEnable_fips((x),(y))
         #define PRIVATE_KEY_LOCK() WC_SPKRE_F(0,WC_KEYTYPE_ALL)
         #define PRIVATE_KEY_UNLOCK() WC_SPKRE_F(1,WC_KEYTYPE_ALL)
     #else
-        #define PRIVATE_KEY_LOCK() do{}while(0)
-        #define PRIVATE_KEY_UNLOCK() do{}while(0)
+        #define PRIVATE_KEY_LOCK() WC_DO_NOTHING
+        #define PRIVATE_KEY_UNLOCK() WC_DO_NOTHING
     #endif
 
 

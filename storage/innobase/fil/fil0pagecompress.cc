@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (C) 2013, 2021, MariaDB Corporation.
+Copyright (C) 2013, 2023, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -47,13 +47,7 @@ Updated 14/02/2015
 #include "trx0sys.h"
 #include "row0mysql.h"
 #include "buf0lru.h"
-#include "ibuf0ibuf.h"
 #include "zlib.h"
-#ifdef __linux__
-#include <linux/fs.h>
-#include <sys/ioctl.h>
-#include <fcntl.h>
-#endif
 #include "row0mysql.h"
 #include "lz4.h"
 #include "lzo/lzo1x.h"

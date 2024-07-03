@@ -42,6 +42,28 @@ static int heap_drop_table(handlerton *hton, const char *path)
   return error == ENOENT ? -1 : error;
 }
 
+/* See optimizer_costs.txt for how the following values where calculated */
+#define HEAP_ROW_NEXT_FIND_COST  8.0166e-06           // For table scan
+#define BTREE_KEY_NEXT_FIND_COST 0.00007739           // For binary tree scan
+#define HEAP_LOOKUP_COST         0.00016097           // Heap lookup cost
+
+static void heap_update_optimizer_costs(OPTIMIZER_COSTS *costs)
+{
+  /*
+    A lot of values are 0 as heap supports all needed xxx_time() functions
+  */
+  costs->disk_read_cost=0;          // All data in memory
+  costs->disk_read_ratio= 0.0;      // All data in memory
+  costs->key_next_find_cost= 0;
+  costs->key_copy_cost= 0;          // Set in keyread_time()
+  costs->row_copy_cost= 2.334e-06;  // This is small as its just a memcpy
+  costs->row_lookup_cost= 0;        // Direct pointer
+  costs->row_next_find_cost= 0;
+  costs->key_lookup_cost= 0;
+  costs->key_next_find_cost= 0;
+  costs->index_block_copy_cost= 0;
+}
+
 int heap_init(void *p)
 {
   handlerton *heap_hton;
@@ -53,6 +75,7 @@ int heap_init(void *p)
   heap_hton->create=     heap_create_handler;
   heap_hton->panic=      heap_panic;
   heap_hton->drop_table= heap_drop_table;
+  heap_hton->update_optimizer_costs= heap_update_optimizer_costs;
   heap_hton->flags=      HTON_CAN_RECREATE;
 
   return 0;
@@ -73,7 +96,8 @@ static handler *heap_create_handler(handlerton *hton,
 ha_heap::ha_heap(handlerton *hton, TABLE_SHARE *table_arg)
   :handler(hton, table_arg), file(0), records_changed(0), key_stat_version(0), 
   internal_table(0)
-{}
+{
+}
 
 /*
   Hash index statistics is updated (copied from HP_KEYDEF::hash_buckets to 
@@ -225,6 +249,41 @@ void ha_heap::update_key_stats()
   records_changed= 0;
   /* At the end of update_key_stats() we can proudly claim they are OK. */
   key_stat_version= file->s->key_stat_version;
+}
+
+
+IO_AND_CPU_COST ha_heap::keyread_time(uint index, ulong ranges, ha_rows rows,
+                                      ulonglong blocks)
+{
+  KEY *key=table->key_info+index;
+  if (key->algorithm == HA_KEY_ALG_BTREE)
+  {
+    double lookup_cost;
+    lookup_cost= ranges * costs->key_cmp_cost * log2(stats.records+1);
+    return {0, ranges * lookup_cost + (rows-ranges) * BTREE_KEY_NEXT_FIND_COST };
+  }
+  else
+  {
+    return {0, (ranges * HEAP_LOOKUP_COST +
+                (rows-ranges) * BTREE_KEY_NEXT_FIND_COST) };
+  }
+}
+
+
+IO_AND_CPU_COST ha_heap::scan_time()
+{
+  return {0, (double) (stats.records+stats.deleted) * HEAP_ROW_NEXT_FIND_COST };
+}
+
+
+IO_AND_CPU_COST ha_heap::rnd_pos_time(ha_rows rows)
+{
+  /*
+    The row pointer is a direct pointer to the block. Thus almost instant
+    in practice.
+    Note that ha_rnd_pos_time() will add ROW_COPY_COST to this result
+  */
+  return { 0, 0 };
 }
 
 
@@ -440,31 +499,22 @@ int ha_heap::external_lock(THD *thd, int lock_type)
 
   SYNOPSIS
     disable_indexes()
-    mode        mode of operation:
-                HA_KEY_SWITCH_NONUNIQ      disable all non-unique keys
-                HA_KEY_SWITCH_ALL          disable all keys
-                HA_KEY_SWITCH_NONUNIQ_SAVE dis. non-uni. and make persistent
-                HA_KEY_SWITCH_ALL_SAVE     dis. all keys and make persistent
 
   DESCRIPTION
-    Disable indexes and clear keys to use for scanning.
-
-  IMPLEMENTATION
-    HA_KEY_SWITCH_NONUNIQ       is not implemented.
-    HA_KEY_SWITCH_NONUNIQ_SAVE  is not implemented with HEAP.
-    HA_KEY_SWITCH_ALL_SAVE      is not implemented with HEAP.
+    See handler::ha_disable_indexes()
 
   RETURN
     0  ok
     HA_ERR_WRONG_COMMAND  mode not implemented.
 */
 
-int ha_heap::disable_indexes(uint mode)
+int ha_heap::disable_indexes(key_map map, bool persist)
 {
   int error;
 
-  if (mode == HA_KEY_SWITCH_ALL)
+  if (!persist)
   {
+    DBUG_ASSERT(map.is_clear_all());
     if (!(error= heap_disable_indexes(file)))
       set_keys_for_scanning();
   }
@@ -482,11 +532,6 @@ int ha_heap::disable_indexes(uint mode)
 
   SYNOPSIS
     enable_indexes()
-    mode        mode of operation:
-                HA_KEY_SWITCH_NONUNIQ      enable all non-unique keys
-                HA_KEY_SWITCH_ALL          enable all keys
-                HA_KEY_SWITCH_NONUNIQ_SAVE en. non-uni. and make persistent
-                HA_KEY_SWITCH_ALL_SAVE     en. all keys and make persistent
 
   DESCRIPTION
     Enable indexes and set keys to use for scanning.
@@ -495,10 +540,7 @@ int ha_heap::disable_indexes(uint mode)
     since the heap storage engine cannot repair the indexes.
     To be sure, call handler::delete_all_rows() before.
 
-  IMPLEMENTATION
-    HA_KEY_SWITCH_NONUNIQ       is not implemented.
-    HA_KEY_SWITCH_NONUNIQ_SAVE  is not implemented with HEAP.
-    HA_KEY_SWITCH_ALL_SAVE      is not implemented with HEAP.
+    See also handler::ha_enable_indexes()
 
   RETURN
     0  ok
@@ -506,12 +548,13 @@ int ha_heap::disable_indexes(uint mode)
     HA_ERR_WRONG_COMMAND  mode not implemented.
 */
 
-int ha_heap::enable_indexes(uint mode)
+int ha_heap::enable_indexes(key_map map, bool persist)
 {
   int error;
 
-  if (mode == HA_KEY_SWITCH_ALL)
+  if (!persist)
   {
+    DBUG_ASSERT(map.is_prefix(table->s->keys));
     if (!(error= heap_enable_indexes(file)))
       set_keys_for_scanning();
   }

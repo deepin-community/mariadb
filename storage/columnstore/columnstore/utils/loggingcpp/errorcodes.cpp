@@ -81,6 +81,7 @@ ErrorCodes::ErrorCodes()
   fErrorCodes[dataTypeErr] = "data type unknown.";
   fErrorCodes[incompatJoinCols] = "incompatible column types specified for join condition.";
   fErrorCodes[incompatFilterCols] = "incompatible column types specified for filter condition.";
+  fErrorCodes[dataConvertUnsupportedPrecisionValue] = "data conversion gets an unsupported precision value.";
 }
 
 string ErrorCodes::errorString(uint16_t code) const
@@ -103,4 +104,3 @@ string ErrorCodes::errorString(uint16_t code) const
   return (fPreamble + msg);
 }
 }  // namespace logging
-// vim:ts=4 sw=4:

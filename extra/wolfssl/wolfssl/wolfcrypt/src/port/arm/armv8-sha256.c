@@ -44,6 +44,13 @@
     #include <wolfcrypt/src/misc.c>
 #endif
 
+#if defined(FREESCALE_MMCAU_SHA)
+    #ifdef FREESCALE_MMCAU_CLASSIC_SHA
+        #include "cau_api.h"
+    #else
+        #include "fsl_mmcau.h"
+    #endif
+#endif
 
 #ifndef WOLFSSL_ARMASM_NO_HW_CRYPTO
 static const ALIGN32 word32 K[64] = {
@@ -72,6 +79,17 @@ static int InitSha256(wc_Sha256* sha256)
         return BAD_FUNC_ARG;
     }
 
+#ifdef FREESCALE_MMCAU_SHA
+    ret = wolfSSL_CryptHwMutexLock();
+    if (ret == 0) {
+    #ifdef FREESCALE_MMCAU_CLASSIC_SHA
+        cau_sha256_initialize_output(sha256->digest);
+    #else
+        MMCAU_SHA256_InitializeOutput((uint32_t*)sha256->digest);
+    #endif
+        wolfSSL_CryptHwMutexUnLock();
+    }
+#else
     sha256->digest[0] = 0x6A09E667L;
     sha256->digest[1] = 0xBB67AE85L;
     sha256->digest[2] = 0x3C6EF372L;
@@ -80,10 +98,15 @@ static int InitSha256(wc_Sha256* sha256)
     sha256->digest[5] = 0x9B05688CL;
     sha256->digest[6] = 0x1F83D9ABL;
     sha256->digest[7] = 0x5BE0CD19L;
+#endif
 
     sha256->buffLen = 0;
     sha256->loLen   = 0;
     sha256->hiLen   = 0;
+
+#ifdef WOLFSSL_HASH_FLAGS
+    sha256->flags = 0;
+#endif
 
     return ret;
 }
@@ -107,8 +130,8 @@ static WC_INLINE void Sha256Transform(wc_Sha256* sha256, const byte* data,
     word32* k = (word32*)K;
 
     __asm__ volatile (
-    "#load leftover data\n"
-    "LD1 {v0.2d-v3.2d}, %[buffer]   \n"
+    "# load first block of data\n"
+    "LD1 {v0.16b-v3.16b}, [%[dataIn]], #64   \n"
 
     "#load current digest\n"
     "LD1 {v12.2d-v13.2d}, %[digest] \n"
@@ -258,7 +281,7 @@ static WC_INLINE void Sha256Transform(wc_Sha256* sha256, const byte* data,
     "CBZ w8, 2f \n"
 
     "#load in message and schedule updates \n"
-    "LD1 {v0.2d-v3.2d}, [%[dataIn]], #64   \n"
+    "LD1 {v0.16b-v3.16b}, [%[dataIn]], #64   \n"
     "MOV v14.16b, v12.16b \n"
     "MOV v15.16b, v13.16b \n"
     "REV32 v0.16b, v0.16b \n"
@@ -268,12 +291,11 @@ static WC_INLINE void Sha256Transform(wc_Sha256* sha256, const byte* data,
     "B 1b \n" /* do another block */
 
     "2:\n"
-    "STP q12, q13, %[out] \n"
+    "ST1 {v12.2d-v13.2d}, %[out] \n"
 
-    : [out] "=m" (sha256->digest), "=m" (sha256->buffer), "=r" (numBlocks),
-      "=r" (data), "=r" (k)
-    : [k] "4" (k), [digest] "m" (sha256->digest), [buffer] "m" (sha256->buffer),
-      [blocks] "2" (numBlocks), [dataIn] "3" (data)
+    : [out] "=m" (sha256->digest), "=r" (numBlocks), "=r" (data), "=r" (k)
+    : [k] "3" (k), [digest] "m" (sha256->digest), [blocks] "1" (numBlocks),
+      [dataIn] "2" (data)
     : "cc", "memory", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7",
                       "v8",  "v9",  "v10", "v11", "v12", "v13", "v14",
                       "v15", "v16", "v17", "v18", "v19", "v20", "v21",
@@ -283,35 +305,42 @@ static WC_INLINE void Sha256Transform(wc_Sha256* sha256, const byte* data,
 }
 
 /* ARMv8 hardware acceleration */
-static WC_INLINE int Sha256Update(wc_Sha256* sha256, const byte* data, word32 len)
+static WC_INLINE int Sha256Update(wc_Sha256* sha256, const byte* data,
+    word32 len)
 {
     word32 add;
     word32 numBlocks;
 
     /* only perform actions if a buffer is passed in */
     if (len > 0) {
-        /* fill leftover buffer with data */
-        add = min(len, WC_SHA256_BLOCK_SIZE - sha256->buffLen);
-        XMEMCPY((byte*)(sha256->buffer) + sha256->buffLen, data, add);
-        sha256->buffLen += add;
-        data            += add;
-        len             -= add;
+        AddLength(sha256, len);
+
+        if (sha256->buffLen > 0) {
+             /* fill leftover buffer with data */
+             add = min(len, WC_SHA256_BLOCK_SIZE - sha256->buffLen);
+             XMEMCPY((byte*)(sha256->buffer) + sha256->buffLen, data, add);
+             sha256->buffLen += add;
+             data            += add;
+             len             -= add;
+             if (sha256->buffLen == WC_SHA256_BLOCK_SIZE) {
+                 Sha256Transform(sha256, (byte*)sha256->buffer, 1);
+                 sha256->buffLen = 0;
+             }
+        }
 
         /* number of blocks in a row to complete */
         numBlocks = (len + sha256->buffLen)/WC_SHA256_BLOCK_SIZE;
 
         if (numBlocks > 0) {
-            /* get leftover amount after blocks */
-            add = (len + sha256->buffLen) - numBlocks * WC_SHA256_BLOCK_SIZE;
-
             Sha256Transform(sha256, data, numBlocks);
-            data += numBlocks * WC_SHA256_BLOCK_SIZE - sha256->buffLen;
+            data += numBlocks * WC_SHA256_BLOCK_SIZE;
+            len  -= numBlocks * WC_SHA256_BLOCK_SIZE;
+        }
 
-            AddLength(sha256, WC_SHA256_BLOCK_SIZE * numBlocks);
-
+        if (len > 0) {
             /* copy over any remaining data leftover */
-            XMEMCPY(sha256->buffer, data, add);
-            sha256->buffLen = add;
+            XMEMCPY(sha256->buffer, data, len);
+            sha256->buffLen = len;
         }
     }
 
@@ -329,8 +358,6 @@ static WC_INLINE int Sha256Final(wc_Sha256* sha256, byte* hash)
     const word32* k;
 
     local = (byte*)sha256->buffer;
-    AddLength(sha256, sha256->buffLen);  /* before adding pads */
-
     local[sha256->buffLen++] = 0x80;     /* add 1 */
 
     /* pad with zeros */
@@ -357,7 +384,7 @@ static WC_INLINE int Sha256Final(wc_Sha256* sha256, byte* hash)
             "MOV v16.16b, v20.16b \n"
             "MOV v17.16b, v21.16b \n"
 
-            "LD1 {v22.16b-v25.16b}, [%[k]], #64 \n"
+            "LD1 {v22.4s-v25.4s}, [%[k]], #64 \n"
             "SHA256SU0 v4.4s, v1.4s        \n"
             "ADD v0.4s, v0.4s, v22.4s      \n"
             "MOV v6.16b, v2.16b            \n"
@@ -390,7 +417,7 @@ static WC_INLINE int Sha256Final(wc_Sha256* sha256, byte* hash)
             "SHA256H q16, q17, v3.4s       \n"
             "SHA256H2 q17, q18, v3.4s      \n"
 
-            "LD1 {v22.16b-v25.16b}, [%[k]], #64 \n"
+            "LD1 {v22.4s-v25.4s}, [%[k]], #64 \n"
             "SHA256SU0 v8.4s, v5.4s        \n"
             "ADD v4.4s, v4.4s, v22.4s      \n"
             "MOV v18.16b, v16.16b          \n"
@@ -423,7 +450,7 @@ static WC_INLINE int Sha256Final(wc_Sha256* sha256, byte* hash)
             "SHA256H q16, q17, v7.4s         \n"
             "SHA256H2 q17, q18, v7.4s        \n"
 
-            "LD1 {v22.16b-v25.16b}, [%[k]], #64 \n"
+            "LD1 {v22.4s-v25.4s}, [%[k]], #64 \n"
             "SHA256SU0 v12.4s, v9.4s            \n"
             "ADD v8.4s, v8.4s, v22.4s           \n"
             "MOV v18.16b, v16.16b               \n"
@@ -454,7 +481,7 @@ static WC_INLINE int Sha256Final(wc_Sha256* sha256, byte* hash)
             "SHA256H q16, q17, v11.4s           \n"
             "SHA256H2 q17, q18, v11.4s          \n"
 
-            "LD1 {v22.16b-v25.16b}, [%[k]] \n"
+            "LD1 {v22.4s-v25.4s}, [%[k]] \n"
             "ADD v12.4s, v12.4s, v22.4s    \n"
             "MOV v18.16b, v16.16b          \n"
             "SHA256H q16, q17, v12.4s      \n"
@@ -478,7 +505,7 @@ static WC_INLINE int Sha256Final(wc_Sha256* sha256, byte* hash)
             "#Add working vars back into digest state \n"
             "ADD v16.4s, v16.4s, v20.4s \n"
             "ADD v17.4s, v17.4s, v21.4s \n"
-            "STP q16, q17, %[out] \n"
+            "ST1 {v16.2d-v17.2d}, %[out]        \n"
 
             : [out] "=m" (sha256->digest), [k] "+r" (k)
             : [digest] "m" (sha256->digest),
@@ -528,7 +555,7 @@ static WC_INLINE int Sha256Final(wc_Sha256* sha256, byte* hash)
 
         "MOV v16.16b, v20.16b      \n"
         "MOV v17.16b, v21.16b      \n"
-        "LD1 {v22.16b-v25.16b}, [%[k]], #64 \n"
+        "LD1 {v22.4s-v25.4s}, [%[k]], #64 \n"
         "SHA256SU0 v4.4s, v1.4s          \n"
         "ADD v0.4s, v0.4s, v22.4s        \n"
         "MOV v6.16b, v2.16b              \n"
@@ -561,7 +588,7 @@ static WC_INLINE int Sha256Final(wc_Sha256* sha256, byte* hash)
         "SHA256H q16, q17, v3.4s         \n"
         "SHA256H2 q17, q18, v3.4s        \n"
 
-        "LD1 {v22.16b-v25.16b}, [%[k]], #64 \n"
+        "LD1 {v22.4s-v25.4s}, [%[k]], #64 \n"
         "SHA256SU0 v8.4s, v5.4s          \n"
         "ADD v4.4s, v4.4s, v22.4s        \n"
         "MOV v18.16b, v16.16b            \n"
@@ -594,7 +621,7 @@ static WC_INLINE int Sha256Final(wc_Sha256* sha256, byte* hash)
         "SHA256H q16, q17, v7.4s         \n"
         "SHA256H2 q17, q18, v7.4s        \n"
 
-        "LD1 {v22.16b-v25.16b}, [%[k]], #64 \n"
+        "LD1 {v22.4s-v25.4s}, [%[k]], #64 \n"
         "SHA256SU0 v12.4s, v9.4s          \n"
         "ADD v8.4s, v8.4s, v22.4s         \n"
         "MOV v18.16b, v16.16b             \n"
@@ -625,7 +652,7 @@ static WC_INLINE int Sha256Final(wc_Sha256* sha256, byte* hash)
         "SHA256H q16, q17, v11.4s         \n"
         "SHA256H2 q17, q18, v11.4s        \n"
 
-        "LD1 {v22.16b-v25.16b}, [%[k]] \n"
+        "LD1 {v22.4s-v25.4s}, [%[k]] \n"
         "ADD v12.4s, v12.4s, v22.4s    \n"
         "MOV v18.16b, v16.16b          \n"
         "SHA256H q16, q17, v12.4s      \n"
@@ -681,8 +708,9 @@ static WC_INLINE void Sha256Transform(wc_Sha256* sha256, const byte* data,
     word32* digPt = sha256->digest;
 
     __asm__ volatile (
-    "#load leftover data\n"
-    "VLDM %[buffer]!, {q0-q3} \n"
+    "# load first block of data\n"
+    "VLD1.8 {d0-d3}, [%[dataIn]]! \n"
+    "VLD1.8 {d4-d7}, [%[dataIn]]! \n"
 
     "#load current digest\n"
     "VLDM %[digest], {q12-q13} \n"
@@ -842,10 +870,8 @@ static WC_INLINE void Sha256Transform(wc_Sha256* sha256, const byte* data,
     "BEQ 2f \n"
 
     "#load in message and schedule updates \n"
-    "VLD1.32 {q0}, [%[dataIn]]!   \n"
-    "VLD1.32 {q1}, [%[dataIn]]!   \n"
-    "VLD1.32 {q2}, [%[dataIn]]!   \n"
-    "VLD1.32 {q3}, [%[dataIn]]!   \n"
+    "VLD1.8 {d0-d3}, [%[dataIn]]! \n"
+    "VLD1.8 {d4-d7}, [%[dataIn]]! \n"
 
     /* reset K pointer */
     "SUB %[k], %[k], #160 \n"
@@ -871,35 +897,42 @@ static WC_INLINE void Sha256Transform(wc_Sha256* sha256, const byte* data,
 }
 
 /* ARMv8 hardware acceleration Aarch32 */
-static WC_INLINE int Sha256Update(wc_Sha256* sha256, const byte* data, word32 len)
+static WC_INLINE int Sha256Update(wc_Sha256* sha256, const byte* data,
+    word32 len)
 {
     word32 add;
     word32 numBlocks;
 
     /* only perform actions if a buffer is passed in */
     if (len > 0) {
-        /* fill leftover buffer with data */
-        add = min(len, WC_SHA256_BLOCK_SIZE - sha256->buffLen);
-        XMEMCPY((byte*)(sha256->buffer) + sha256->buffLen, data, add);
-        sha256->buffLen += add;
-        data            += add;
-        len             -= add;
+        AddLength(sha256, len);
+
+        if (sha256->buffLen > 0) {
+             /* fill leftover buffer with data */
+             add = min(len, WC_SHA256_BLOCK_SIZE - sha256->buffLen);
+             XMEMCPY((byte*)(sha256->buffer) + sha256->buffLen, data, add);
+             sha256->buffLen += add;
+             data            += add;
+             len             -= add;
+             if (sha256->buffLen == WC_SHA256_BLOCK_SIZE) {
+                 Sha256Transform(sha256, (byte*)sha256->buffer, 1);
+                 sha256->buffLen = 0;
+             }
+        }
 
         /* number of blocks in a row to complete */
         numBlocks = (len + sha256->buffLen)/WC_SHA256_BLOCK_SIZE;
 
         if (numBlocks > 0) {
-            /* get leftover amount after blocks */
-            add = (len + sha256->buffLen) - numBlocks * WC_SHA256_BLOCK_SIZE;
-
             Sha256Transform(sha256, data, numBlocks);
-            data += numBlocks * WC_SHA256_BLOCK_SIZE - sha256->buffLen;
+            data += numBlocks * WC_SHA256_BLOCK_SIZE;
+            len  -= numBlocks * WC_SHA256_BLOCK_SIZE;
+        }
 
-            AddLength(sha256, WC_SHA256_BLOCK_SIZE * numBlocks);
-
+        if (len > 0) {
             /* copy over any remaining data leftover */
-            XMEMCPY(sha256->buffer, data, add);
-            sha256->buffLen = add;
+            XMEMCPY(sha256->buffer, data, len);
+            sha256->buffLen = len;
         }
     }
 
@@ -920,8 +953,6 @@ static WC_INLINE int Sha256Final(wc_Sha256* sha256, byte* hash)
     }
 
     local = (byte*)sha256->buffer;
-    AddLength(sha256, sha256->buffLen);  /* before adding pads */
-
     local[sha256->buffLen++] = 0x80;     /* add 1 */
 
     /* pad with zeros */
@@ -1313,12 +1344,60 @@ static WC_INLINE int Sha256Final(wc_Sha256* sha256, byte* hash)
 
 #endif /* __aarch64__ */
 
-#else
+#else /* WOLFSSL_ARMASM_NO_HW_CRYPTO */
+
+#if defined(FREESCALE_MMCAU_SHA)
+
+    #ifndef WC_HASH_DATA_ALIGNMENT
+        /* these hardware API's require 4 byte (word32) alignment */
+        #define WC_HASH_DATA_ALIGNMENT 4
+    #endif
+
+    static int Transform_Sha256_Len(wc_Sha256* sha256, const byte* data,
+        word32 len)
+    {
+        int ret = wolfSSL_CryptHwMutexLock();
+        if (ret == 0) {
+        #if defined(WC_HASH_DATA_ALIGNMENT) && WC_HASH_DATA_ALIGNMENT > 0
+            if ((wc_ptr_t)data % WC_HASH_DATA_ALIGNMENT) {
+                /* data pointer is NOT aligned,
+                 * so copy and perform one block at a time */
+                byte* local = (byte*)sha256->buffer;
+                while (len >= WC_SHA256_BLOCK_SIZE) {
+                    XMEMCPY(local, data, WC_SHA256_BLOCK_SIZE);
+                #ifdef FREESCALE_MMCAU_CLASSIC_SHA
+                    cau_sha256_hash_n(local, 1, sha256->digest);
+                #else
+                    MMCAU_SHA256_HashN(local, 1, (uint32_t*)sha256->digest);
+                #endif
+                    data += WC_SHA256_BLOCK_SIZE;
+                    len  -= WC_SHA256_BLOCK_SIZE;
+                }
+            }
+            else
+        #endif
+            {
+    #ifdef FREESCALE_MMCAU_CLASSIC_SHA
+            cau_sha256_hash_n((byte*)data, len/WC_SHA256_BLOCK_SIZE,
+                sha256->digest);
+    #else
+            MMCAU_SHA256_HashN((byte*)data, len/WC_SHA256_BLOCK_SIZE,
+                (uint32_t*)sha256->digest);
+    #endif
+            }
+            wolfSSL_CryptHwMutexUnLock();
+        }
+        return ret;
+    }
+
+#else /* */
 
 extern void Transform_Sha256_Len(wc_Sha256* sha256, const byte* data,
     word32 len);
 
-/* ARMv8 hardware acceleration Aarch32 */
+#endif
+
+/* ARMv8 hardware acceleration Aarch32 and Thumb2 */
 static WC_INLINE int Sha256Update(wc_Sha256* sha256, const byte* data, word32 len)
 {
     int ret = 0;
@@ -1425,6 +1504,9 @@ int wc_InitSha256_ex(wc_Sha256* sha256, void* heap, int devId)
         return BAD_FUNC_ARG;
 
     sha256->heap = heap;
+#ifdef WOLF_CRYPTO_CB
+    sha256->devId = devId;
+#endif
     (void)devId;
 
     return InitSha256(sha256);
@@ -1541,13 +1623,85 @@ int wc_Sha256Transform(wc_Sha256* sha256, const unsigned char* data)
     XMEMCPY(sha256->buffer, data, WC_SHA256_BLOCK_SIZE);
 #endif
 #ifndef WOLFSSL_ARMASM_NO_HW_CRYPTO
-    Sha256Transform(sha256, data, 1);
+    Sha256Transform(sha256, (byte*)sha256->buffer, 1);
 #else
-    Transform_Sha256_Len(sha256, data, WC_SHA256_BLOCK_SIZE);
+    Transform_Sha256_Len(sha256, (byte*)sha256->buffer, WC_SHA256_BLOCK_SIZE);
 #endif
     return 0;
 }
 #endif
+
+#if defined(WOLFSSL_HAVE_LMS) && !defined(WOLFSSL_LMS_FULL_HASH)
+/* One block will be used from data.
+ * hash must be big enough to hold all of digest output.
+ */
+int wc_Sha256HashBlock(wc_Sha256* sha256, const unsigned char* data,
+    unsigned char* hash)
+{
+    int ret = 0;
+
+    if ((sha256 == NULL) || (data == NULL)) {
+        return BAD_FUNC_ARG;
+    }
+
+#ifndef WOLFSSL_ARMASM_NO_HW_CRYPTO
+    Sha256Transform(sha256, data, 1);
+#else
+    Transform_Sha256_Len(sha256, data, WC_SHA256_BLOCK_SIZE);
+#endif
+
+    if (hash != NULL) {
+#ifdef LITTLE_ENDIAN_ORDER
+    #ifndef WOLFSSL_ARMASM_NO_HW_CRYPTO
+        #ifdef __aarch64__
+            __asm__ __volatile__ (
+                "LD1 {v0.2d-v1.2d}, [%[digest]]   \n"
+                "REV32 v0.16b, v0.16b \n"
+                "REV32 v1.16b, v1.16b \n"
+                "ST1 {v0.16b-v1.16b}, [%[hash]]  \n"
+                :
+                : [digest] "r" (sha256->digest), [hash] "r" (hash)
+                : "memory", "v0", "v1"
+            );
+        #else
+            __asm__ __volatile__ (
+                "VLDM %[digest], {q0-q1} \n"
+                "VREV32.8 q0, q0 \n"
+                "VREV32.8 q1, q1 \n"
+                "VST1.8 {d0-d3}, [%[hash]] \n"
+                :
+                : [digest] "r" (sha256->digest), [hash] "r" (hash)
+                : "memory", "q0", "q1"
+            );
+        #endif
+    #else
+        word32* hash32 = (word32*)hash;
+        word32* digest = (word32*)sha256->digest;
+        hash32[0] = ByteReverseWord32(digest[0]);
+        hash32[1] = ByteReverseWord32(digest[1]);
+        hash32[2] = ByteReverseWord32(digest[2]);
+        hash32[3] = ByteReverseWord32(digest[3]);
+        hash32[4] = ByteReverseWord32(digest[4]);
+        hash32[5] = ByteReverseWord32(digest[5]);
+        hash32[6] = ByteReverseWord32(digest[6]);
+        hash32[7] = ByteReverseWord32(digest[7]);
+    #endif /* !WOLFSSL_ARMASM_NO_HW_CRYPTO */
+#else
+        XMEMCPY(hash, sha256->digest, WC_SHA256_DIGEST_SIZE);
+#endif
+        sha256->digest[0] = 0x6A09E667L;
+        sha256->digest[1] = 0xBB67AE85L;
+        sha256->digest[2] = 0x3C6EF372L;
+        sha256->digest[3] = 0xA54FF53AL;
+        sha256->digest[4] = 0x510E527FL;
+        sha256->digest[5] = 0x9B05688CL;
+        sha256->digest[6] = 0x1F83D9ABL;
+        sha256->digest[7] = 0x5BE0CD19L;
+    }
+
+    return ret;
+}
+#endif /* WOLFSSL_HAVE_LMS && !WOLFSSL_LMS_FULL_HASH */
 
 #endif /* !NO_SHA256 */
 
@@ -1575,6 +1729,9 @@ int wc_Sha256Transform(wc_Sha256* sha256, const unsigned char* data)
         sha224->loLen   = 0;
         sha224->hiLen   = 0;
 
+    #ifdef WOLFSSL_HASH_FLAGS
+        sha224->flags = 0;
+    #endif
         return ret;
     }
 

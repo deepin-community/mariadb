@@ -35,6 +35,8 @@ PRIVILEGES	#
 COLUMN_COMMENT	
 IS_GENERATED	NEVER
 GENERATION_EXPRESSION	NULL
+IS_SYSTEM_TIME_PERIOD_START	NO
+IS_SYSTEM_TIME_PERIOD_END	NO
 DROP TABLE t1;
 CREATE TABLE t1 (a INET6);
 INSERT INTO t1 VALUES ('::1');
@@ -95,6 +97,8 @@ PRIVILEGES	#
 COLUMN_COMMENT	
 IS_GENERATED	NEVER
 GENERATION_EXPRESSION	NULL
+IS_SYSTEM_TIME_PERIOD_START	NO
+IS_SYSTEM_TIME_PERIOD_END	NO
 TABLE_CATALOG	def
 TABLE_SCHEMA	test
 TABLE_NAME	t1
@@ -117,6 +121,8 @@ PRIVILEGES	#
 COLUMN_COMMENT	
 IS_GENERATED	NEVER
 GENERATION_EXPRESSION	NULL
+IS_SYSTEM_TIME_PERIOD_START	NO
+IS_SYSTEM_TIME_PERIOD_END	NO
 TABLE_CATALOG	def
 TABLE_SCHEMA	test
 TABLE_NAME	t1
@@ -139,6 +145,8 @@ PRIVILEGES	#
 COLUMN_COMMENT	
 IS_GENERATED	NEVER
 GENERATION_EXPRESSION	NULL
+IS_SYSTEM_TIME_PERIOD_START	NO
+IS_SYSTEM_TIME_PERIOD_END	NO
 TABLE_CATALOG	def
 TABLE_SCHEMA	test
 TABLE_NAME	t1
@@ -161,6 +169,8 @@ PRIVILEGES	#
 COLUMN_COMMENT	
 IS_GENERATED	NEVER
 GENERATION_EXPRESSION	NULL
+IS_SYSTEM_TIME_PERIOD_START	NO
+IS_SYSTEM_TIME_PERIOD_END	NO
 TABLE_CATALOG	def
 TABLE_SCHEMA	test
 TABLE_NAME	t1
@@ -183,6 +193,8 @@ PRIVILEGES	#
 COLUMN_COMMENT	
 IS_GENERATED	NEVER
 GENERATION_EXPRESSION	NULL
+IS_SYSTEM_TIME_PERIOD_START	NO
+IS_SYSTEM_TIME_PERIOD_END	NO
 DROP TABLE t1;
 CREATE TABLE t1 (c1 INET6 DEFAULT 0x00);
 ERROR 42000: Invalid default value for 'c1'
@@ -1330,7 +1342,7 @@ id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
 EXPLAIN SELECT * FROM t1 WHERE b IN (SELECT a AS a_inner FROM t1 GROUP BY a_inner);
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
 1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	2	Using where
-2	DEPENDENT SUBQUERY	t1	index_subquery	a	a	17	func	2	Using index; Using where
+2	DEPENDENT SUBQUERY	t1	index_subquery	a	a	17	func	1	Using index; Using where
 SET @@optimizer_switch=DEFAULT;
 DROP TABLE t1;
 #
@@ -2283,6 +2295,93 @@ a
 Warnings:
 Warning	1292	Incorrect inet6 value: ''
 DROP TABLE t1;
+#
+# MDEV-32879 Server crash in my_decimal::operator= or unexpected ER_DUP_ENTRY upon comparison with INET6 and similar types
+#
+CREATE TABLE t1 (a CHAR(36) NOT NULL, b INET6 NOT NULL, c DATETIME(6) NOT NULL);
+INSERT INTO t1 VALUES ('','::','2000-01-01'),('','::','1900-01-01');
+SELECT c + (b = a) AS f, GROUP_CONCAT(c) FROM t1 GROUP BY f;
+f	GROUP_CONCAT(c)
+NULL	2000-01-01 00:00:00.000000,1900-01-01 00:00:00.000000
+Warnings:
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+DROP TABLE t1;
+CREATE TABLE t1 (a CHAR(36) NOT NULL, b INET6 NOT NULL, c DATETIME(6) NOT NULL);
+INSERT INTO t1 VALUES ('','::','2000-01-01'),('','::','1900-01-01');
+SELECT c + (b = a) AS f, COUNT(c) FROM t1 GROUP BY f;
+f	COUNT(c)
+NULL	2
+Warnings:
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+DROP TABLE t1;
+CREATE OR REPLACE TABLE t1 (a CHAR(36) NOT NULL, b INET6 NOT NULL, c DATETIME(6) NOT NULL);
+INSERT INTO t1 VALUES ('','::','2000-01-01'),('','::','1900-01-01');
+SELECT c + (b = a) AS f FROM t1 ORDER BY f;
+f
+NULL
+NULL
+Warnings:
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+DROP TABLE t1;
+CREATE OR REPLACE TABLE t1 (a CHAR(36) NOT NULL, b INET6 NOT NULL);
+INSERT INTO t1 VALUES ('','::'),('','::');
+SELECT 1.00 + (b = a) AS f FROM t1 ORDER BY f;
+f
+NULL
+NULL
+Warnings:
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+SELECT 1.00 + (b BETWEEN a AND '') AS f FROM t1 ORDER BY f;
+f
+NULL
+NULL
+Warnings:
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+SELECT 1.00 + (b IN (a,'')) AS f FROM t1 ORDER BY f;
+f
+NULL
+NULL
+Warnings:
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+Warning	1292	Incorrect inet6 value: ''
+DROP TABLE t1;
+#
+# MDEV-32458 ASAN unknown-crash in Inet6::ascii_to_fbt when casting character string to inet6
+#
+CREATE TABLE t1 (c CHAR(3));
+INSERT INTO t1 VALUES ('1:0'),('00:');
+SELECT * FROM t1 WHERE c>CAST('::1' AS INET6);
+c
+Warnings:
+Warning	1292	Incorrect inet6 value: '1:0'
+Warning	1292	Incorrect inet6 value: '00:'
+DROP TABLE t1;
+# End of 10.6 tests
 #
 # MDEV-22256 Assertion `length == pack_length()' failed in Field_timestamp_with_dec::sort_string
 #

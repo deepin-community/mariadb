@@ -138,8 +138,6 @@ dist_example_DATA=
 
 ACLOCAL_AMFLAGS= -I m4
 
-EXTRA_DIST+= lib/dummy
-
 EXTRA_DIST+= wolfssl.vcproj
 EXTRA_DIST+= wolfssl.vcxproj
 EXTRA_DIST+= wolfssl64.sln
@@ -152,7 +150,6 @@ EXTRA_DIST+= README
 EXTRA_DIST+= ChangeLog.md
 EXTRA_DIST+= LICENSING
 EXTRA_DIST+= INSTALL
-EXTRA_DIST+= IPP
 EXTRA_DIST+= LPCExpresso.cproject
 EXTRA_DIST+= LPCExpresso.project
 EXTRA_DIST+= resource.h wolfssl.rc
@@ -161,7 +158,6 @@ EXTRA_DIST+= m4/ax_atomic.m4
 
 include cmake/include.am
 include wrapper/include.am
-include cyassl/include.am
 include wolfssl/include.am
 include certs/include.am
 include doc/include.am
@@ -169,7 +165,6 @@ include Docker/include.am
 
 include src/include.am
 include support/include.am
-include wolfcrypt/user-crypto/include.am
 include wolfcrypt/benchmark/include.am
 include wolfcrypt/src/include.am
 include wolfcrypt/test/include.am
@@ -177,6 +172,7 @@ include examples/include.am
 include testsuite/include.am
 include tests/include.am
 include sslSniffer/sslSnifferTest/include.am
+include debian/include.am
 include rpm/include.am
 include linuxkm/include.am
 include zephyr/include.am
@@ -245,7 +241,6 @@ test: check
 tests/unit.log: testsuite/testsuite.log
 scripts/unit.log: testsuite/testsuite.log
 
-DISTCLEANFILES+= cyassl-config
 DISTCLEANFILES+= wolfssl-config
 
 MAINTAINERCLEANFILES+= wolfssl/wolfcrypt/async.h
@@ -267,7 +262,6 @@ maintainer-clean-local:
 	-rm build-aux/install-sh
 	-rm build-aux/ltmain.sh
 	-rm build-aux/missing
-	-rm cyassl-config
 	-rmdir build-aux
 	-rm configure
 	-rm config.log

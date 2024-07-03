@@ -154,7 +154,7 @@ char *guess_malloc_library();
 void sf_report_leaked_memory(my_thread_id id);
 int sf_sanity();
 extern my_thread_id (*sf_malloc_dbug_id)(void);
-#define SAFEMALLOC_REPORT_MEMORY(X) sf_report_leaked_memory(X)
+#define SAFEMALLOC_REPORT_MEMORY(X) if (!sf_leaking_memory) sf_report_leaked_memory(X)
 #else
 #define SAFEMALLOC_REPORT_MEMORY(X) do {} while(0)
 #endif
@@ -340,6 +340,14 @@ typedef struct st_dynamic_array
   PSI_memory_key m_psi_key;
   myf malloc_flags;
 } DYNAMIC_ARRAY;
+
+
+typedef struct st_dynamic_array_append
+{
+  DYNAMIC_ARRAY *array;
+  uchar *pos, *end;
+} DYNAMIC_ARRAY_APPEND;
+
 
 typedef struct st_my_tmpdir
 {
@@ -600,6 +608,8 @@ static inline size_t my_b_bytes_in_cache(const IO_CACHE *info)
 
 int my_b_copy_to_file    (IO_CACHE *cache, FILE *file, size_t count);
 int my_b_copy_all_to_file(IO_CACHE *cache, FILE *file);
+int my_b_copy_to_cache(IO_CACHE *from_cache, IO_CACHE *to_cache, size_t count);
+int my_b_copy_all_to_cache(IO_CACHE *from_cache, IO_CACHE *to_cache);
 
 my_off_t my_b_append_tell(IO_CACHE* info);
 my_off_t my_b_safe_tell(IO_CACHE* info); /* picks the correct tell() */
@@ -655,6 +665,7 @@ extern size_t my_fwrite(FILE *stream,const uchar *Buffer,size_t Count,
 		      myf MyFlags);
 extern my_off_t my_fseek(FILE *stream,my_off_t pos,int whence,myf MyFlags);
 extern my_off_t my_ftell(FILE *stream,myf MyFlags);
+extern void (*my_sleep_for_space)(unsigned int seconds);
 
 /* implemented in my_memmem.c */
 extern void *my_memmem(const void *haystack, size_t haystacklen,
@@ -770,7 +781,7 @@ extern int flush_write_cache(RECORD_CACHE *info);
 extern void handle_recived_signals(void);
 
 extern sig_handler my_set_alarm_variable(int signo);
-extern my_bool radixsort_is_appliccable(uint n_items, size_t size_of_element);
+extern my_bool radixsort_is_applicable(uint n_items, size_t size_of_element);
 extern void my_string_ptr_sort(uchar *base,uint items,size_t size);
 extern void radixsort_for_str_ptr(uchar* base[], uint number_of_elements,
 				  size_t size_of_element,uchar *buffer[]);
@@ -844,6 +855,10 @@ extern void freeze_size(DYNAMIC_ARRAY *array);
 #define push_dynamic(A,B) insert_dynamic((A),(B))
 #define reset_dynamic(array) ((array)->elements= 0)
 #define sort_dynamic(A,cmp) my_qsort((A)->buffer, (A)->elements, (A)->size_of_element, (cmp))
+extern void init_append_dynamic(DYNAMIC_ARRAY_APPEND *append,
+                                DYNAMIC_ARRAY *array);
+extern my_bool append_dynamic(DYNAMIC_ARRAY_APPEND *append,
+                              const void * element);
 
 extern my_bool init_dynamic_string(DYNAMIC_STRING *str, const char *init_str,
 				   size_t init_alloc,size_t alloc_increment);
@@ -884,6 +899,7 @@ extern void init_alloc_root(PSI_memory_key key, MEM_ROOT *mem_root,
 extern void *alloc_root(MEM_ROOT *mem_root, size_t Size);
 extern void *multi_alloc_root(MEM_ROOT *mem_root, ...);
 extern void free_root(MEM_ROOT *root, myf MyFLAGS);
+extern void move_root(MEM_ROOT *to, MEM_ROOT *from);
 extern void set_prealloc_root(MEM_ROOT *root, char *ptr);
 extern void reset_root_defaults(MEM_ROOT *mem_root, size_t block_size,
                                 size_t prealloc_size);
@@ -899,6 +915,20 @@ extern char *strmake_root(MEM_ROOT *root,const char *str,size_t len);
 extern void *memdup_root(MEM_ROOT *root,const void *str, size_t len);
 
 extern LEX_CSTRING safe_lexcstrdup_root(MEM_ROOT *root, const LEX_CSTRING str);
+
+static inline LEX_STRING lex_string_strmake_root(MEM_ROOT *mem_root,
+                                                 const char *str, size_t length)
+{
+  LEX_STRING tmp;
+  tmp.str= strmake_root(mem_root, str, length);
+  tmp.length= tmp.str ? length : 0;
+  return tmp;
+}
+
+extern LEX_STRING lex_string_casedn_root(MEM_ROOT *root,
+                                        CHARSET_INFO *cs,
+                                        const char *str, size_t length);
+
 extern my_bool my_compress(uchar *, size_t *, size_t *);
 extern my_bool my_uncompress(uchar *, size_t , size_t *);
 extern uchar *my_compress_alloc(const uchar *packet, size_t *len,
@@ -1047,6 +1077,18 @@ static inline void my_uuid2str(const uchar *guid, char *s, int with_separators)
 
 
 const char *my_dlerror(const char *dlpath);
+
+
+/* System timezone handling*/
+void my_tzset();
+void my_tzname(char *sys_timezone, size_t size);
+
+struct my_tz
+{
+  long seconds_offset;
+  char abbreviation[64];
+};
+void my_tzinfo(time_t t, struct my_tz*);
 
 /* character sets */
 extern void my_charset_loader_init_mysys(MY_CHARSET_LOADER *loader);
