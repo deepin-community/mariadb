@@ -22,8 +22,7 @@
  ***********************************************************************/
 /** @file */
 
-#ifndef COMMANDPACKAGEPROCESSOR_H
-#define COMMANDPACKAGEPROCESSOR_H
+#pragma once
 #include <string>
 #include <vector>
 #include <set>
@@ -34,11 +33,7 @@
 #include <boost/thread/mutex.hpp>
 #include <boost/thread/condition.hpp>
 
-#if defined(_MSC_VER) && defined(DMLPKGPROC_DLLEXPORT)
-#define EXPORT __declspec(dllexport)
-#else
 #define EXPORT
-#endif
 
 namespace dmlpackageprocessor
 {
@@ -52,17 +47,13 @@ class CommandPackageProcessor : public DMLPackageProcessor
   CommandPackageProcessor(BRM::DBRM* aDbrm, uint32_t sid) : DMLPackageProcessor(aDbrm, sid)
   {
   }
-  /** @brief process an CommandDMLPackage
-   *
-   * @param cpackage the CommandDMLPackage to process
-   */
-  EXPORT DMLResult processPackage(dmlpackage::CalpontDMLPackage& cpackage);
 
  protected:
  private:
   void viewTableLock(const dmlpackage::CalpontDMLPackage& cpackage, DMLResult& result);
   void clearTableLock(uint64_t uniqueId, const dmlpackage::CalpontDMLPackage& cpackage, DMLResult& result);
   void establishTableLockToClear(uint64_t tableLockID, BRM::TableLockInfo& lockInfo);
+  DMLResult processPackageInternal(dmlpackage::CalpontDMLPackage& cpackage) override;
 
   // Tracks active cleartablelock commands by storing set of table lock IDs
   static std::set<uint64_t> fActiveClearTableLockCmds;
@@ -72,5 +63,3 @@ class CommandPackageProcessor : public DMLPackageProcessor
 }  // namespace dmlpackageprocessor
 
 #undef EXPORT
-
-#endif  // COMMANDPACKAGEPROCESSOR_H

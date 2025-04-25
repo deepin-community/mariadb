@@ -2,7 +2,7 @@
 
 Copyright (c) 2005, 2016, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2012, Facebook Inc.
-Copyright (c) 2014, 2022, MariaDB Corporation.
+Copyright (c) 2014, 2023, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -408,8 +408,6 @@ inline void mtr_t::zmemcpy(const buf_block_t &b, void *dest, const void *str,
 static void page_zip_compress_write_log(buf_block_t *block,
                                         dict_index_t *index, mtr_t *mtr)
 {
-  ut_ad(!index->is_ibuf());
-
   if (!mtr->is_logged())
     return;
 
@@ -463,8 +461,7 @@ page_zip_get_n_prev_extern(
 	ut_ad(page_is_leaf(page));
 	ut_ad(page_is_comp(page));
 	ut_ad(dict_table_is_comp(index->table));
-	ut_ad(dict_index_is_clust(index));
-	ut_ad(!dict_index_is_ibuf(index));
+	ut_ad(index->is_primary());
 
 	heap_no = rec_get_heap_no_new(rec);
 	ut_ad(heap_no >= PAGE_HEAP_NO_USER_LOW);
@@ -1282,7 +1279,6 @@ page_zip_compress(
 	ut_ad(page_simple_validate_new((page_t*) page));
 	ut_ad(page_zip_simple_validate(page_zip));
 	ut_ad(dict_table_is_comp(index->table));
-	ut_ad(!dict_index_is_ibuf(index));
 
 	MEM_CHECK_DEFINED(page, srv_page_size);
 
@@ -3269,7 +3265,6 @@ page_zip_validate_low(
 	ibool			sloppy)	/*!< in: FALSE=strict,
 					TRUE=ignore the MIN_REC_FLAG */
 {
-	page_zip_des_t	temp_page_zip;
 	ibool		valid;
 
 	if (memcmp(page_zip->data + FIL_PAGE_PREV, page + FIL_PAGE_PREV,
@@ -3310,7 +3305,7 @@ page_zip_validate_low(
 	MEM_CHECK_DEFINED(page, srv_page_size);
 	MEM_CHECK_DEFINED(page_zip->data, page_zip_get_size(page_zip));
 
-	temp_page_zip = *page_zip;
+	page_zip_des_t temp_page_zip(*page_zip);
 	valid = page_zip_decompress_low(&temp_page_zip, temp_page, TRUE);
 	if (!valid) {
 		fputs("page_zip_validate(): failed to decompress\n", stderr);
@@ -3405,17 +3400,16 @@ page_zip_validate_low(
 				goto func_exit;
 			}
 
-			rec = page_rec_get_next_low(rec, TRUE);
-			trec = page_rec_get_next_low(trec, TRUE);
+			rec = page_rec_next_get<true>(page, rec);
+			trec = page_rec_next_get<true>(temp_page, trec);
 		}
 
 		/* Compare the records. */
 		heap = NULL;
 		offsets = NULL;
-		rec = page_rec_get_next_low(
-			page + PAGE_NEW_INFIMUM, TRUE);
-		trec = page_rec_get_next_low(
-			temp_page + PAGE_NEW_INFIMUM, TRUE);
+		rec = page_rec_next_get<true>(page, page + PAGE_NEW_INFIMUM);
+		trec = page_rec_next_get<true>(temp_page,
+					       temp_page + PAGE_NEW_INFIMUM);
 		const ulint n_core = (index && page_is_leaf(page))
 			? index->n_fields : 0;
 
@@ -3447,8 +3441,8 @@ page_zip_validate_low(
 				}
 			}
 
-			rec = page_rec_get_next_low(rec, TRUE);
-			trec = page_rec_get_next_low(trec, TRUE);
+			rec = page_rec_next_get<true>(page, rec);
+			trec = page_rec_next_get<true>(temp_page, trec);
 		} while (rec || trec);
 
 		if (heap) {
@@ -4372,10 +4366,6 @@ Reorganize and compress a page.  This is a low-level operation for
 compressed pages, to be used when page_zip_compress() fails.
 On success, redo log will be written.
 The function btr_page_reorganize() should be preferred whenever possible.
-IMPORTANT: if page_zip_reorganize() is invoked on a leaf page of a
-non-clustered index, the caller must update the insert buffer free
-bits in the same mini-transaction in such a way that the modification
-will be redo-logged.
 @return error code
 @retval DB_FAIL on overflow; the block_zip will be left intact */
 dberr_t
@@ -4396,7 +4386,6 @@ page_zip_reorganize(
 	ut_ad(mtr->memo_contains_flagged(block, MTR_MEMO_PAGE_X_FIX));
 	ut_ad(block->page.zip.data);
 	ut_ad(page_is_comp(page));
-	ut_ad(!dict_index_is_ibuf(index));
 	ut_ad(!index->table->is_temporary());
 	/* Note that page_zip_validate(page_zip, page, index) may fail here. */
 	MEM_CHECK_DEFINED(page, srv_page_size);
@@ -4407,7 +4396,7 @@ page_zip_reorganize(
 	mtr_log_t	log_mode = mtr_set_log_mode(mtr, MTR_LOG_NONE);
 
 	temp_block = buf_block_alloc();
-	btr_search_drop_page_hash_index(block, false);
+	btr_search_drop_page_hash_index(block, nullptr);
 	temp_page = temp_block->page.frame;
 
 	/* Copy the old page to temporary space */
@@ -4503,7 +4492,6 @@ page_zip_copy_recs(
 
 	ut_ad(mtr->memo_contains_flagged(block, MTR_MEMO_PAGE_X_FIX));
 	ut_ad(mtr->memo_contains_page_flagged(src, MTR_MEMO_PAGE_X_FIX));
-	ut_ad(!dict_index_is_ibuf(index));
 	ut_ad(!index->table->is_temporary());
 #ifdef UNIV_ZIP_DEBUG
 	/* The B-tree operations that call this function may set

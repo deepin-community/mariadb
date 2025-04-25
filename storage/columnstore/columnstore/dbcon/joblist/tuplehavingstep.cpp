@@ -24,7 +24,7 @@
 using namespace std;
 
 #include <boost/shared_ptr.hpp>
-#include <boost/shared_array.hpp>
+
 #include <boost/uuid/uuid_io.hpp>
 using namespace boost;
 
@@ -87,7 +87,9 @@ void TupleHavingStep::initialize(const RowGroup& rgIn, const JobInfo& jobInfo)
 
   for (uint64_t i = 0; i < fRowGroupIn.getKeys().size(); ++i)
     if (keyToIndexMap.find(fRowGroupIn.getKeys()[i]) == keyToIndexMap.end())
+    {
       keyToIndexMap.insert(make_pair(fRowGroupIn.getKeys()[i], i));
+    }
 
   updateInputIndex(keyToIndexMap, jobInfo);
 
@@ -125,9 +127,11 @@ void TupleHavingStep::expressionFilter(const ParseTree* filter, JobInfo& jobInfo
   ExpressionStep::expressionFilter(filter, jobInfo);
 
   // extract simple columns from parse tree
+#if 01
   vector<AggregateColumn*> acv;
   fExpressionFilter->walk(getAggCols, &acv);
   fColumns.insert(fColumns.end(), acv.begin(), acv.end());
+#endif
 }
 
 void TupleHavingStep::run()
@@ -408,4 +412,3 @@ void TupleHavingStep::formatMiniStats()
 }
 
 }  // namespace joblist
-// vim:ts=4 sw=4:

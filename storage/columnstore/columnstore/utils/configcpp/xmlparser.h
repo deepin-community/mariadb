@@ -22,8 +22,7 @@
 /**
  * @file
  */
-#ifndef CONFIG_XMLPARSER_H_
-#define CONFIG_XMLPARSER_H_
+#pragma once
 
 #include <string>
 #include <vector>
@@ -64,5 +63,3 @@ class XMLParser
 
 }  // namespace config
 
-#endif
-// vim:ts=4 sw=4:

@@ -1,6 +1,6 @@
-/* wolfssl_KEIL_ARM.h
+/* wolfssl_MDK_ARM.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -70,7 +70,7 @@ typedef int socklen_t ;
 #define tcp_listen    wolfssl_tcp_listen
 #define connect(a,b,c)    connect(a, (SOCKADDR *)(b), c)
 #define SOCKADDR struct sockaddr
-	
+
 /** KEIL-RL TCPnet ****/
 /* TCPnet BSD socket does not have following functions. */
 extern char *inet_ntoa(struct in_addr in);

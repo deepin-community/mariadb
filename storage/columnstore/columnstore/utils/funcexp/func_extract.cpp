@@ -75,7 +75,7 @@ long long dateGet(uint64_t time, IntervalColumn::interval_type unit, bool dateTy
 
     case IntervalColumn::INTERVAL_MICROSECOND: return msec;
 
-    case IntervalColumn::INTERVAL_QUARTER: return month / 4 + 1;
+    case IntervalColumn::INTERVAL_QUARTER: return (month - 1) / 3 + 1;
 
     case IntervalColumn::INTERVAL_WEEK: return helpers::calc_mysql_week(year, month, day, 0);
 
@@ -109,11 +109,11 @@ long long dateGet(uint64_t time, IntervalColumn::interval_type unit, bool dateTy
 
 long long timeGet(uint64_t time, IntervalColumn::interval_type unit)
 {
-  int32_t hour = 0, min = 0, sec = 0, msec = 0, day = 0;
+  int64_t hour = 0, min = 0, sec = 0, msec = 0, day = 0;
 
-  min = (int32_t)((time >> 32) & 0xff);
-  sec = (int32_t)((time >> 24) & 0xff);
-  msec = (int32_t)((time & 0xfffff));
+  min = (int64_t)((time >> 32) & 0xff);
+  sec = (int64_t)((time >> 24) & 0xff);
+  msec = (int64_t)((time & 0xfffff));
 
   // If negative, mask so it doesn't turn positive
   int64_t mask = 0;
@@ -224,8 +224,8 @@ int64_t Func_extract::getIntVal(rowgroup::Row& row, FunctionParm& parm, bool& is
     case CalpontSystemCatalog::CHAR:
     case CalpontSystemCatalog::TEXT:
     {
-      const string& val = parm[0]->data()->getStrVal(row, isNull);
-      time = dataconvert::DataConvert::stringToDatetime(val);
+      const auto& val = parm[0]->data()->getStrVal(row, isNull);
+      time = dataconvert::DataConvert::stringToDatetime(val.safeString(""));
       break;
     }
 
@@ -254,4 +254,3 @@ int64_t Func_extract::getIntVal(rowgroup::Row& row, FunctionParm& parm, bool& is
 }
 
 }  // namespace funcexp
-// vim:ts=4 sw=4:

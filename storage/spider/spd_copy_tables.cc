@@ -17,7 +17,6 @@
 #define MYSQL_SERVER 1
 #include <my_global.h>
 #include "mysql_version.h"
-#include "spd_environ.h"
 #include "sql_priv.h"
 #include "probes_mysql.h"
 #include "sql_class.h"
@@ -52,7 +51,7 @@ int spider_udf_set_copy_tables_param_default(
     copy_tables->database_length = SPIDER_THD_db_length(copy_tables->trx->thd);
     if (
       !(copy_tables->database = spider_create_string(
-        SPIDER_THD_db_str(copy_tables->trx->thd),
+        copy_tables->trx->thd->get_db(),
         copy_tables->database_length))
     ) {
       my_error(ER_OUT_OF_RESOURCES, MYF(0), HA_ERR_OUT_OF_MEM);
@@ -246,6 +245,7 @@ int spider_udf_get_copy_tgt_tables(
   char table_key[MAX_KEY_LENGTH];
   SPIDER_COPY_TABLE_CONN *table_conn = NULL, *src_table_conn_prev = NULL,
     *dst_table_conn_prev = NULL;
+  /* This share has only one link. */
   SPIDER_SHARE *tmp_share;
   char **tmp_connect_info;
   uint *tmp_connect_info_length;
@@ -257,7 +257,7 @@ int spider_udf_get_copy_tgt_tables(
     !(table_tables = spider_open_sys_table(
       thd, SPIDER_SYS_TABLES_TABLE_NAME_STR,
       SPIDER_SYS_TABLES_TABLE_NAME_LEN, FALSE, &open_tables_backup,
-      need_lock, &error_num))
+      &error_num))
   ) {
     my_error(error_num, MYF(0));
     goto error;
@@ -274,7 +274,7 @@ int spider_udf_get_copy_tgt_tables(
   }
   do {
     if (!(table_conn = (SPIDER_COPY_TABLE_CONN *)
-      spider_bulk_malloc(spider_current_trx, 25, MYF(MY_WME | MY_ZEROFILL),
+      spider_bulk_malloc(spider_current_trx, SPD_MID_UDF_GET_COPY_TGT_TABLES_1, MYF(MY_WME | MY_ZEROFILL),
         &table_conn, (uint) (sizeof(SPIDER_COPY_TABLE_CONN)),
         &tmp_share, (uint) (sizeof(SPIDER_SHARE)),
         &tmp_connect_info,
@@ -298,9 +298,9 @@ int spider_udf_get_copy_tgt_tables(
 
     if (
       (error_num = spider_get_sys_tables_connect_info(
-        table_tables, tmp_share, 0, mem_root)) ||
+        table_tables, tmp_share, mem_root)) ||
       (error_num = spider_get_sys_tables_link_status(
-        table_tables, tmp_share, 0, mem_root)) ||
+        table_tables, tmp_share->link_statuses, mem_root)) ||
       (error_num = spider_get_sys_tables_link_idx(
         table_tables, &table_conn->link_idx, mem_root))
     ) {
@@ -445,8 +445,7 @@ int spider_udf_get_copy_tgt_tables(
     error_num = spider_sys_index_next_same(table_tables, table_key);
   } while (error_num == 0);
   spider_sys_index_end(table_tables);
-  spider_close_sys_table(thd, table_tables,
-    &open_tables_backup, need_lock);
+  spider_sys_close_table(thd, &open_tables_backup);
   table_tables = NULL;
 
   if (!copy_tables->table_conn[0])
@@ -468,8 +467,7 @@ int spider_udf_get_copy_tgt_tables(
 
 error:
   if (table_tables)
-    spider_close_sys_table(thd, table_tables,
-      &open_tables_backup, need_lock);
+    spider_sys_close_table(thd, &open_tables_backup);
   if (table_conn)
   {
     spider_free_tmp_dbton_share(tmp_share);
@@ -495,11 +493,10 @@ int spider_udf_get_copy_tgt_conns(
     while (table_conn)
     {
       share = table_conn->share;
-      if (
-        !(table_conn->conn = spider_get_conn(
-          share, 0, share->conn_keys[0], trx, NULL, FALSE, FALSE,
-          SPIDER_CONN_KIND_MYSQL, &error_num))
-      ) {
+      if (!(table_conn->conn=
+                spider_get_conn(share, 0, share->conn_keys[0], trx, NULL,
+                                FALSE, FALSE, &error_num)))
+      {
         my_error(ER_CONNECT_TO_FOREIGN_DATA_SOURCE, MYF(0), share->server_names[0]);
         DBUG_RETURN(ER_CONNECT_TO_FOREIGN_DATA_SOURCE);
       }
@@ -590,7 +587,7 @@ int spider_udf_copy_tables_create_table_list(
   }
 
   if (!(copy_tables->link_idxs[0] = (int *)
-    spider_bulk_malloc(spider_current_trx, 26, MYF(MY_WME | MY_ZEROFILL),
+    spider_bulk_malloc(spider_current_trx, SPD_MID_UDF_COPY_TABLES_CREATE_TABLE_LIST_1, MYF(MY_WME | MY_ZEROFILL),
       &copy_tables->link_idxs[0],
         (uint) (sizeof(int) * copy_tables->link_idx_count[0]),
       &copy_tables->link_idxs[1],
@@ -706,8 +703,8 @@ int spider_udf_bg_copy_exec_sql(
 long long spider_copy_tables_body(
   UDF_INIT *initid,
   UDF_ARGS *args,
-  char *is_null,
-  char *error
+  unsigned char *is_null,
+  unsigned char *error
 ) {
   int error_num, roop_count, all_link_cnt = 0, use_table_charset;
   SPIDER_COPY_TABLES *copy_tables = NULL;
@@ -772,7 +769,7 @@ long long spider_copy_tables_body(
   }
 
   if (!(copy_tables = (SPIDER_COPY_TABLES *)
-    spider_bulk_malloc(spider_current_trx, 27, MYF(MY_WME | MY_ZEROFILL),
+    spider_bulk_malloc(spider_current_trx, SPD_MID_COPY_TABLES_BODY_1, MYF(MY_WME | MY_ZEROFILL),
       &copy_tables, (uint) (sizeof(SPIDER_COPY_TABLES)),
       NullS))
   ) {
@@ -968,7 +965,12 @@ long long spider_copy_tables_body(
   all_link_cnt =
     copy_tables->link_idx_count[0] + copy_tables->link_idx_count[1];
   if (
-    !(tmp_sql = new spider_string[all_link_cnt]) ||
+    !(tmp_sql = new spider_string[all_link_cnt])
+  ) {
+    my_error(ER_OUT_OF_RESOURCES, MYF(0), HA_ERR_OUT_OF_MEM);
+    goto error;
+  }
+  if (
     !(spider = new ha_spider[all_link_cnt])
   ) {
     my_error(ER_OUT_OF_RESOURCES, MYF(0), HA_ERR_OUT_OF_MEM);
@@ -984,7 +986,7 @@ long long spider_copy_tables_body(
   {
     tmp_spider = &spider[roop_count];
     if (!(tmp_spider->dbton_handler = (spider_db_handler **)
-      spider_bulk_alloc_mem(spider_current_trx, 205,
+      spider_bulk_alloc_mem(spider_current_trx, SPD_MID_COPY_TABLES_BODY_2,
         __func__, __FILE__, __LINE__, MYF(MY_WME | MY_ZEROFILL),
         &tmp_spider->dbton_handler,
           sizeof(spider_db_handler *) * SPIDER_DBTON_SIZE,
@@ -997,15 +999,8 @@ long long spider_copy_tables_body(
     tmp_spider->share = table_conn->share;
     tmp_spider->wide_handler = wide_handler;
     wide_handler->trx = copy_tables->trx;
-/*
-    if (spider_db_append_set_names(table_conn->share))
-    {
-      my_error(ER_OUT_OF_RESOURCES, MYF(0), HA_ERR_OUT_OF_MEM);
-      goto error_append_set_names;
-    }
-*/
     tmp_spider->conns = &table_conn->conn;
-    tmp_sql[roop_count].init_calc_mem(122);
+    tmp_sql[roop_count].init_calc_mem(SPD_MID_COPY_TABLES_BODY_3);
     tmp_sql[roop_count].set_charset(copy_tables->access_charset);
     tmp_spider->result_list.sqls = &tmp_sql[roop_count];
     tmp_spider->need_mons = &table_conn->need_mon;
@@ -1030,7 +1025,7 @@ long long spider_copy_tables_body(
   {
     tmp_spider = &spider[roop_count];
     if (!(tmp_spider->dbton_handler = (spider_db_handler **)
-      spider_bulk_alloc_mem(spider_current_trx, 206,
+      spider_bulk_alloc_mem(spider_current_trx, SPD_MID_COPY_TABLES_BODY_4,
         __func__, __FILE__, __LINE__, MYF(MY_WME | MY_ZEROFILL),
         &tmp_spider->dbton_handler,
           sizeof(spider_db_handler *) * SPIDER_DBTON_SIZE,
@@ -1043,15 +1038,8 @@ long long spider_copy_tables_body(
     tmp_spider->share = table_conn->share;
     tmp_spider->wide_handler = wide_handler;
     wide_handler->trx = copy_tables->trx;
-/*
-    if (spider_db_append_set_names(table_conn->share))
-    {
-      my_error(ER_OUT_OF_RESOURCES, MYF(0), HA_ERR_OUT_OF_MEM);
-      goto error_append_set_names;
-    }
-*/
     tmp_spider->conns = &table_conn->conn;
-    tmp_sql[roop_count].init_calc_mem(201);
+    tmp_sql[roop_count].init_calc_mem(SPD_MID_COPY_TABLES_BODY_5);
     tmp_sql[roop_count].set_charset(copy_tables->access_charset);
     tmp_spider->result_list.sqls = &tmp_sql[roop_count];
     tmp_spider->need_mons = &table_conn->need_mon;
@@ -1076,14 +1064,6 @@ long long spider_copy_tables_body(
     bulk_insert_rows)))
     goto error_db_udf_copy_tables;
 
-/*
-  for (table_conn = copy_tables->table_conn[0];
-    table_conn; table_conn = table_conn->next)
-    spider_db_free_set_names(table_conn->share);
-  for (table_conn = copy_tables->table_conn[1];
-    table_conn; table_conn = table_conn->next)
-    spider_db_free_set_names(table_conn->share);
-*/
   if (table_list->table)
   {
     (thd->is_error() ? trans_rollback_stmt(thd) : trans_commit_stmt(thd));
@@ -1104,8 +1084,7 @@ long long spider_copy_tables_body(
     }
     delete [] spider;
   }
-  if (tmp_sql)
-    delete [] tmp_sql;
+  delete [] tmp_sql;
   spider_udf_free_copy_tables_alloc(copy_tables);
 
   DBUG_RETURN(1);
@@ -1113,17 +1092,6 @@ long long spider_copy_tables_body(
 error_db_udf_copy_tables:
 error_create_dbton_handler:
 error_init_dbton_handler:
-/*
-error_append_set_names:
-*/
-/*
-  for (table_conn = copy_tables->table_conn[0];
-    table_conn; table_conn = table_conn->next)
-    spider_db_free_set_names(table_conn->share);
-  for (table_conn = copy_tables->table_conn[1];
-    table_conn; table_conn = table_conn->next)
-    spider_db_free_set_names(table_conn->share);
-*/
 error:
   if (spider)
   {
@@ -1181,6 +1149,11 @@ my_bool spider_copy_tables_init_body(
   char *message
 ) {
   DBUG_ENTER("spider_copy_tables_init_body");
+  if (!spider_hton_ptr)
+  {
+    strcpy(message, "Plugin 'SPIDER' is not loaded");
+    goto error;
+  }
   if (args->arg_count != 3 && args->arg_count != 4)
   {
     strcpy(message, "spider_copy_tables() requires 3 or 4 arguments");

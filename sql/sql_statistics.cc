@@ -73,11 +73,11 @@ static const uint STATISTICS_TABLES= 3;
   The names of the statistical tables in this array must correspond the
   definitions of the tables in the file ../scripts/mysql_system_tables.sql
 */
-static const LEX_CSTRING stat_table_name[STATISTICS_TABLES]=
+static const Lex_ident_table stat_table_name[STATISTICS_TABLES]=
 {
-  { STRING_WITH_LEN("table_stats") },
-  { STRING_WITH_LEN("column_stats") },
-  { STRING_WITH_LEN("index_stats") }
+  "table_stats"_Lex_ident_table,
+  "column_stats"_Lex_ident_table,
+  "index_stats"_Lex_ident_table,
 };
 
 
@@ -320,7 +320,7 @@ static inline int open_stat_table_for_ddl(THD *thd, TABLE_LIST *table,
     push_warning_printf(thd, Sql_condition::WARN_LEVEL_WARN,
                         ER_CHECK_NO_SUCH_TABLE,
                         "Got error %d when trying to open statistics "
-                        "table %`s for updating statistics",
+                        "table %sQ for updating statistics",
                         error_handler.got_error(), stat_table_name->str);
   }
   return res;
@@ -1580,7 +1580,8 @@ public:
       return true;
 
     if (open_cached_file(&io_cache, mysql_tmpdir, TEMP_PREFIX,
-                         1024, MYF(MY_WME)))
+                         1024,
+                         MYF(MY_WME | MY_TRACK_WITH_LIMIT)))
       return true;
 
     handler *h= owner->stat_file;
@@ -1604,12 +1605,14 @@ public:
 
     do {
       h->position(owner->record[0]);
-      my_b_write(&io_cache, h->ref, rowid_size);
+      if (my_b_write(&io_cache, h->ref, rowid_size))
+        return true;
 
     } while (!h->ha_index_next_same(owner->record[0], key, prefix_len));
 
     /* Prepare for reading */
-    reinit_io_cache(&io_cache, READ_CACHE, 0L, 0, 0);
+    if (reinit_io_cache(&io_cache, READ_CACHE, 0L, 0, 0))
+      return true;
     h->ha_index_or_rnd_end();
     if (h->ha_rnd_init(false))
       return true;
@@ -1789,8 +1792,8 @@ public:
     table_field= field;
     tree_key_length= field->pack_length();
 
-    tree= new Unique((qsort_cmp2) simple_str_key_cmp, (void*) field,
-                     tree_key_length, max_heap_table_size, 1);
+    tree= new Unique(simple_str_key_cmp, field, tree_key_length,
+                     max_heap_table_size, 1);
   }
 
   virtual ~Count_distinct_field()
@@ -1877,13 +1880,13 @@ public:
 
 
 static
-int simple_ulonglong_key_cmp(void* arg, uchar* key1, uchar* key2)
+int simple_ulonglong_key_cmp(void*, const void* key1, const void* key2)
 {
-  ulonglong *val1= (ulonglong *) key1;
-  ulonglong *val2= (ulonglong *) key2;
+  const ulonglong *val1= static_cast<const ulonglong *>(key1);
+  const ulonglong *val2= static_cast<const ulonglong *>(key2);
   return *val1 > *val2 ? 1 : *val1 == *val2 ? 0 : -1; 
 }
-  
+
 
 /* 
   The class Count_distinct_field_bit is derived from the class 
@@ -1900,12 +1903,11 @@ public:
     table_field= field;
     tree_key_length= sizeof(ulonglong);
 
-    tree= new Unique((qsort_cmp2) simple_ulonglong_key_cmp,
-                     (void*) &tree_key_length,
+    tree= new Unique(simple_ulonglong_key_cmp, &tree_key_length,
                      tree_key_length, max_heap_table_size, 1);
   }
 
-  bool add()
+  bool add() override
   {
     longlong val= table_field->val_int();   
     return tree->unique_add(&val);
@@ -1984,8 +1986,7 @@ public:
       return;
     }
         
-    if ((calc_state=
-         (Prefix_calc_state *) thd->alloc(sizeof(Prefix_calc_state)*key_parts)))
+    if ((calc_state= thd->alloc<Prefix_calc_state>(key_parts)))
     {
       uint keyno= (uint)(key_info-table->key_info);
       for (i= 0, state= calc_state; i < key_parts; i++, state++)
@@ -2654,7 +2655,7 @@ int collect_statistics_for_index(THD *thd, TABLE *table, uint index)
   DBUG_ENTER("collect_statistics_for_index");
 
   /* No statistics for FULLTEXT indexes. */
-  if (key_info->flags & (HA_FULLTEXT|HA_SPATIAL))
+  if (key_info->algorithm > HA_KEY_ALG_BTREE)
     DBUG_RETURN(rc);
 
   Index_prefix_calc index_prefix_calc(thd, table, key_info);
@@ -2906,6 +2907,9 @@ int collect_statistics_for_table(THD *thd, TABLE *table)
   After having been updated the statistical system tables are closed.     
 */
 
+/* Stack usage 20248 from clang */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
+
 int update_statistics_for_table(THD *thd, TABLE *table)
 {
   TABLE_LIST tables[STATISTICS_TABLES];
@@ -2960,12 +2964,12 @@ int update_statistics_for_table(THD *thd, TABLE *table)
 
   /* Update the statistical table index_stats */
   stat_table= tables[INDEX_STAT].table;
-  uint key;
-  key_map::Iterator it(table->keys_in_use_for_query);
   Index_stat index_stat(stat_table, table);
 
-  while ((key= it++) != key_map::Iterator::BITMAP_END)
+  for (uint key= 0; key < table->s->keys; key++)
   {
+    if (!table->keys_in_use_for_query.is_set(key))
+      continue;
     KEY *key_info= table->key_info+key;
     uint key_parts= table->actual_n_key_parts(key_info);
     for (i= 0; i < key_parts; i++)
@@ -2990,6 +2994,7 @@ int update_statistics_for_table(THD *thd, TABLE *table)
   new_trans.restore_old_transaction();
   DBUG_RETURN(rc);
 }
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 
 /**
@@ -3264,7 +3269,8 @@ read_statistics_for_tables(THD *thd, TABLE_LIST *tables, bool force_reload)
     TABLE_SHARE *table_share;
 
     /* Skip tables that can't have statistics. */
-    if (tl->is_view_or_derived() || !table || !(table_share= table->s))
+    if (tl->is_view_or_derived() || !table || !(table_share= table->s) ||
+        table_share->sequence)
       continue;
     /* Skip temporary tables */
     if (table_share->tmp_table != NO_TMP_TABLE)
@@ -3296,7 +3302,7 @@ read_statistics_for_tables(THD *thd, TABLE_LIST *tables, bool force_reload)
         statistics_for_tables_is_needed= true;
       }
     }
-    else if (is_stat_table(&tl->db, &tl->alias))
+    else if (table_share->table_category == TABLE_CATEGORY_STATISTICS)
       found_stat_table= true;
   }
 
@@ -3397,6 +3403,9 @@ end:
   The function is called when executing the statement DROP TABLE 'tab'.
 */
 
+/* Stack size 20248 with clang */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
+
 int delete_statistics_for_table(THD *thd, const LEX_CSTRING *db,
                                 const LEX_CSTRING *tab)
 {
@@ -3465,6 +3474,7 @@ int delete_statistics_for_table(THD *thd, const LEX_CSTRING *db,
   new_trans.restore_old_transaction();
   DBUG_RETURN(rc);
 }
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 
 /**
@@ -4009,6 +4019,9 @@ int rename_indexes_in_stat_table(THD *thd, TABLE *tab,
   The function is called when executing any statement that renames a table
 */
 
+/* Stack size 20968 with clang */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
+
 int rename_table_in_stat_tables(THD *thd, const LEX_CSTRING *db,
                                 const LEX_CSTRING *tab,
                                 const LEX_CSTRING *new_db,
@@ -4086,6 +4099,7 @@ int rename_table_in_stat_tables(THD *thd, const LEX_CSTRING *db,
   new_trans.restore_old_transaction();
   DBUG_RETURN(rc);
 }
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 
 /**
@@ -4105,13 +4119,17 @@ int rename_table_in_stat_tables(THD *thd, const LEX_CSTRING *db,
 
 void set_statistics_for_table(THD *thd, TABLE *table)
 {
-  TABLE_STATISTICS_CB *stats_cb= table->stats_cb;
-
+  TABLE_STATISTICS_CB *stats_cb= table->s->stats_cb;
   Table_statistics *read_stats= stats_cb ? stats_cb->table_stats : 0;
-  table->used_stat_records= 
+
+  /*
+    The MAX below is to ensure that we don't return 0 rows for a table if it
+    not guaranteed to be empty.
+  */
+  table->used_stat_records=
     (!check_eits_preferred(thd) ||
      !table->stats_is_read || !read_stats || read_stats->cardinality_is_null) ?
-    table->file->stats.records : read_stats->cardinality;
+    table->file->stats.records : MY_MAX(read_stats->cardinality, 1);
 
   /*
     For partitioned table, EITS statistics is based on data from all partitions.
@@ -4445,15 +4463,15 @@ double Histogram_binary::range_selectivity(Field *field,
 /*
   Check whether the table is one of the persistent statistical tables.
 */
-bool is_stat_table(const LEX_CSTRING *db, LEX_CSTRING *table)
+bool is_stat_table(const Lex_ident_db &db, const Lex_ident_table &table)
 {
-  DBUG_ASSERT(db->str && table->str);
+  DBUG_ASSERT(db.str && table.str);
 
-  if (!my_strcasecmp(table_alias_charset, db->str, MYSQL_SCHEMA_NAME.str))
+  if (db.streq(MYSQL_SCHEMA_NAME))
   {
     for (uint i= 0; i < STATISTICS_TABLES; i ++)
     {
-      if (!my_strcasecmp(table_alias_charset, table->str, stat_table_name[i].str))
+      if (table.streq(stat_table_name[i]))
         return true;
     }
   }
@@ -4472,7 +4490,7 @@ bool is_eits_usable(Field *field)
   Column_statistics* col_stats= field->read_stats;
   
   // check if column_statistics was allocated for this field
-  if (!col_stats || !field->table->stats_is_read)
+  if (!col_stats || !field->orig_table->stats_is_read)
     return false;
 
   /*
@@ -4486,8 +4504,8 @@ bool is_eits_usable(Field *field)
   return !col_stats->no_stat_values_provided() &&        //(1)
     field->type() != MYSQL_TYPE_GEOMETRY &&              //(2)
 #ifdef WITH_PARTITION_STORAGE_ENGINE
-    (!field->table->part_info ||
-     !field->table->part_info->field_in_partition_expr(field)) &&     //(3)
+    (!field->orig_table->part_info ||
+     !field->orig_table->part_info->field_in_partition_expr(field)) &&     //(3)
 #endif
     true;
 }

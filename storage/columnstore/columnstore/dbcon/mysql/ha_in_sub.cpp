@@ -151,7 +151,7 @@ execplan::ParseTree* InSub::transform()
   csep->subType(CalpontSelectExecutionPlan::IN_SUBS);
 
   // gwi for the sub query
-  gp_walk_info gwi(fGwip.timeZone);
+  gp_walk_info gwi(fGwip.timeZone, fGwip.subQueriesChain);
   gwi.thd = fGwip.thd;
   gwi.subQuery = this;
 
@@ -188,7 +188,7 @@ execplan::ParseTree* InSub::transform()
     if (gwi.fatalParseError && !gwi.parseErrorText.empty())
       fGwip.parseErrorText = gwi.parseErrorText;
     else
-      fGwip.parseErrorText = "Error occured in InSub::transform()";
+      fGwip.parseErrorText = "Error occurred in InSub::transform()";
 
     return NULL;
   }

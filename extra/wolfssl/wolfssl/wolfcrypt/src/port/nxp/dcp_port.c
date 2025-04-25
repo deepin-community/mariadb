@@ -1,6 +1,6 @@
 /* dcp_port.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -47,9 +47,9 @@
 #define dcp_lock() wolfSSL_CryptHwMutexLock()
 #define dcp_unlock() wolfSSL_CryptHwMutexUnLock()
 #else
-#define dcp_lock_init() do{}while(0)
-#define dcp_lock() do{}while(0)
-#define dcp_unlock() do{}while(0)
+#define dcp_lock_init() WC_DO_NOTHING
+#define dcp_lock()      WC_DO_NOTHING
+#define dcp_unlock()    WC_DO_NOTHING
 #endif
 
 #if DCP_USE_OTP_KEY
@@ -255,7 +255,7 @@ int  DCPAesCbcEncrypt(Aes* aes, byte* out, const byte* in, word32 sz)
     if (ret)
         ret = WC_HW_E;
     else
-        XMEMCPY(aes->reg, out, AES_BLOCK_SIZE);
+        XMEMCPY(aes->reg, out, WC_AES_BLOCK_SIZE);
     dcp_unlock();
     return ret;
 }
@@ -270,7 +270,7 @@ int  DCPAesCbcDecrypt(Aes* aes, byte* out, const byte* in, word32 sz)
     if (ret)
         ret = WC_HW_E;
     else
-        XMEMCPY(aes->reg, in, AES_BLOCK_SIZE);
+        XMEMCPY(aes->reg, in, WC_AES_BLOCK_SIZE);
     dcp_unlock();
     return ret;
 }

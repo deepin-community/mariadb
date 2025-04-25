@@ -19,10 +19,6 @@
 
 /* classes for sum functions */
 
-#ifdef USE_PRAGMA_INTERFACE
-#pragma interface			/* gcc class implementation */
-#endif
-
 #include <my_tree.h>
 #include "sql_udf.h"                            /* udf_handler */
 
@@ -525,7 +521,6 @@ public:
     aggregator_clear();
   }
   virtual void make_unique() { force_copy_fields= TRUE; }
-  Item *get_tmp_table_item(THD *thd) override;
   virtual Field *create_tmp_field(MEM_ROOT *root, bool group, TABLE *table);
   Field *create_tmp_field_ex(MEM_ROOT *root, TABLE *table, Tmp_field_src *src,
                              const Tmp_field_param *param) override
@@ -599,6 +594,17 @@ public:
   bool is_window_func_sum_expr() { return window_func_sum_expr_flag; }
   virtual void setup_caches(THD *thd) {};
   virtual void set_partition_row_count(ulonglong count) { DBUG_ASSERT(0); }
+
+  /*
+    While most Item_sum descendants employ standard aggregators configured
+    through Item_sum::set_aggregator() call, there are exceptions like
+    Item_func_group_concat, which implements its own custom aggregators for
+    deduplication values.
+    This function distinguishes between the use of standard and custom
+    aggregators by the object
+  */
+  virtual bool uses_non_standard_aggregator_for_distinct() const
+  { return false; }
 };
 
 
@@ -693,19 +699,19 @@ public:
     Aggregator(sum), table(NULL), tmp_table_param(NULL), tree(NULL),
     always_null(false), use_distinct_values(false) {}
   virtual ~Aggregator_distinct ();
-  Aggregator_type Aggrtype() { return DISTINCT_AGGREGATOR; }
+  Aggregator_type Aggrtype() override { return DISTINCT_AGGREGATOR; }
 
-  bool setup(THD *);
-  void clear(); 
-  bool add();
-  void endup();
-  virtual my_decimal *arg_val_decimal(my_decimal * value);
-  virtual double arg_val_real();
-  virtual bool arg_is_null(bool use_null_value);
+  bool setup(THD *) override;
+  void clear() override;
+  bool add() override;
+  void endup() override;
+  my_decimal *arg_val_decimal(my_decimal * value) override;
+  double arg_val_real() override;
+  bool arg_is_null(bool use_null_value) override;
 
   bool unique_walk_function(void *element);
   bool unique_walk_function_for_count(void *element);
-  static int composite_key_cmp(void* arg, uchar* key1, uchar* key2);
+  static int composite_key_cmp(void *arg, const void *key1, const void *key2);
 };
 
 
@@ -720,15 +726,15 @@ public:
 
   Aggregator_simple (Item_sum *sum) :
     Aggregator(sum) {}
-  Aggregator_type Aggrtype() { return Aggregator::SIMPLE_AGGREGATOR; }
+  Aggregator_type Aggrtype() override { return Aggregator::SIMPLE_AGGREGATOR; }
 
-  bool setup(THD * thd) { return item_sum->setup(thd); }
-  void clear() { item_sum->clear(); }
-  bool add() { return item_sum->add(); }
-  void endup() {};
-  virtual my_decimal *arg_val_decimal(my_decimal * value);
-  virtual double arg_val_real();
-  virtual bool arg_is_null(bool use_null_value);
+  bool setup(THD * thd) override { return item_sum->setup(thd); }
+  void clear() override { item_sum->clear(); }
+  bool add() override { return item_sum->add(); }
+  void endup() override {};
+  my_decimal *arg_val_decimal(my_decimal * value) override;
+  double arg_val_real() override;
+  bool arg_is_null(bool use_null_value) override;
 };
 
 
@@ -744,7 +750,7 @@ public:
     Item_sum(thd, list) {}
   Item_sum_num(THD *thd, Item_sum_num *item):
     Item_sum(thd, item) {}
-  bool fix_fields(THD *, Item **);
+  bool fix_fields(THD *, Item **) override;
 };
 
 
@@ -796,7 +802,8 @@ public:
     max_length=21;
     base_flags&= ~item_base_t::MAYBE_NULL;
     null_value=0;
-    return FALSE; }
+    return false;
+  }
 };
 
 
@@ -823,8 +830,8 @@ public:
   }
   Item_sum_sum(THD *thd, Item_sum_sum *item);
   enum Sumfunctype sum_func() const override
-  { 
-    return has_with_distinct() ? SUM_DISTINCT_FUNC : SUM_FUNC; 
+  {
+    return has_with_distinct() ? SUM_DISTINCT_FUNC : SUM_FUNC;
   }
   void cleanup() override;
   void direct_add(my_decimal *add_sum_decimal);
@@ -854,7 +861,7 @@ public:
   }
   Item *copy_or_same(THD* thd) override;
   void remove() override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_sum>(thd, this); }
 
   bool supports_removal() const override
@@ -929,7 +936,7 @@ public:
     return has_with_distinct() ? name_distinct : name_normal;
   }
   Item *copy_or_same(THD* thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_count>(thd, this); }
 
   bool supports_removal() const override
@@ -987,7 +994,7 @@ public:
     count= 0;
     Item_sum_sum::cleanup();
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_avg>(thd, this); }
 
   bool supports_removal() const override
@@ -1076,7 +1083,7 @@ public:
     m_stddev= Stddev();
     Item_sum_double::cleanup();
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_variance>(thd, this); }
 };
 
@@ -1102,7 +1109,7 @@ class Item_sum_std final :public Item_sum_variance
     return sample ? stddev_samp_name : std_name;
   }
   Item *copy_or_same(THD* thd) override final;
-  Item *get_copy(THD *thd) override final
+  Item *do_get_copy(THD *thd) const override final
   { return get_item_copy<Item_sum_std>(thd, this); }
 };
 
@@ -1127,6 +1134,7 @@ public:
   { return Type_handler_hybrid_field_type::type_handler(); }
   bool fix_length_and_dec_generic();
   bool fix_length_and_dec_numeric(const Type_handler *h);
+  bool fix_length_and_dec_sint_ge0();
   bool fix_length_and_dec_string();
 };
 
@@ -1172,7 +1180,10 @@ public:
   {
     return get_arg(0)->real_type_handler();
   }
-  const TYPELIB *get_typelib() const  override { return args[0]->get_typelib(); }
+  const Type_extra_attributes type_extra_attributes() const override
+  {
+    return args[0]->type_extra_attributes();
+  }
   void update_field() override;
   void min_max_update_str_field();
   void min_max_update_real_field();
@@ -1203,7 +1214,7 @@ public:
     return sum_name;
   }
   Item *copy_or_same(THD* thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_min>(thd, this); }
 };
 
@@ -1213,7 +1224,7 @@ class Item_sum_max final :public Item_sum_min_max
 public:
   Item_sum_max(THD *thd, Item *item_par): Item_sum_min_max(thd, item_par, -1) {}
   Item_sum_max(THD *thd, Item_sum_max *item) :Item_sum_min_max(thd, item) {}
-  enum Sumfunctype sum_func () const  override {return MAX_FUNC;}
+  enum Sumfunctype sum_func() const override {return MAX_FUNC;}
 
   bool add() override;
   LEX_CSTRING func_name_cstring() const override
@@ -1222,7 +1233,7 @@ public:
     return sum_name;
   }
   Item *copy_or_same(THD* thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_max>(thd, this); }
 };
 
@@ -1264,9 +1275,7 @@ public:
       clear_as_window();
     Item_sum_int::cleanup();
   }
-  void setup_window_func(THD *thd __attribute__((unused)),
-                         Window_spec *window_spec __attribute__((unused)))
-    override
+  void setup_window_func(THD *, Window_spec *) override
   {
     as_window_function= TRUE;
     clear_as_window();
@@ -1317,7 +1326,7 @@ public:
     return sum_name;
   }
   Item *copy_or_same(THD* thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_or>(thd, this); }
 
 private:
@@ -1338,7 +1347,7 @@ public:
     return sum_min_name;
   }
   Item *copy_or_same(THD* thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_and>(thd, this); }
 
 private:
@@ -1357,7 +1366,7 @@ public:
     return sum_min_name;
   }
   Item *copy_or_same(THD* thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_xor>(thd, this); }
 
 private:
@@ -1501,7 +1510,7 @@ public:
   {
     return sp_result_field;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_sp>(thd, this); }
   Item *copy_or_same(THD *thd) override;
 };
@@ -1567,8 +1576,9 @@ public:
   String *val_str(String *str) override
   { return val_string_from_real(str); }
   double val_real() override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_avg_field_double>(thd, this); }
+  Item *do_build_clone(THD *thd) const override { return get_copy(thd); }
 };
 
 
@@ -1597,8 +1607,9 @@ public:
     return VDec(this).to_string_round(str, decimals);
   }
   my_decimal *val_decimal(my_decimal *) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_avg_field_decimal>(thd, this); }
+  Item *do_build_clone(THD *thd) const override { return get_copy(thd); }
 };
 
 
@@ -1619,8 +1630,9 @@ public:
   bool is_null() override { update_null_value(); return null_value; }
   const Type_handler *type_handler() const override
   { return &type_handler_double; }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_variance_field>(thd, this); }
+  Item *do_build_clone(THD *thd) const override { return get_copy(thd); }
 };
 
 
@@ -1632,8 +1644,9 @@ public:
   { }
   enum Type type() const override { return FIELD_STD_ITEM; }
   double val_real() override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_std_field>(thd, this); }
+  Item *do_build_clone(THD *thd) const override { return get_copy(thd); }
 };
 
 
@@ -1731,7 +1744,7 @@ class Item_sum_udf_float :public Item_udf_sum
   bool fix_length_and_dec(THD *thd) override
   { fix_num_length_and_dec(); return FALSE; }
   Item *copy_or_same(THD* thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_udf_float>(thd, this); }
 };
 
@@ -1758,7 +1771,7 @@ public:
   }
   bool fix_length_and_dec(THD *thd) override { decimals=0; max_length=21; return FALSE; }
   Item *copy_or_same(THD* thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_udf_int>(thd, this); }
 };
 
@@ -1800,7 +1813,7 @@ public:
   { return string_type_handler(); }
   bool fix_length_and_dec(THD *thd) override;
   Item *copy_or_same(THD* thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_udf_str>(thd, this); }
 };
 
@@ -1832,7 +1845,7 @@ public:
   bool fix_length_and_dec(THD *thd) override
   { fix_num_length_and_dec(); return FALSE; }
   Item *copy_or_same(THD* thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_sum_udf_decimal>(thd, this); }
 };
 
@@ -1919,12 +1932,12 @@ public:
 #endif /* HAVE_DLOPEN */
 
 C_MODE_START
-int group_concat_key_cmp_with_distinct(void* arg, const void* key1,
-                                       const void* key2);
-int group_concat_key_cmp_with_distinct_with_nulls(void* arg, const void* key1,
-                                                  const void* key2);
-int group_concat_key_cmp_with_order(void* arg, const void* key1,
-                                    const void* key2);
+int group_concat_key_cmp_with_distinct(void *arg, const void *key1,
+                                       const void *key2);
+int group_concat_key_cmp_with_distinct_with_nulls(void *arg, const void *key1,
+                                                  const void *key2);
+int group_concat_key_cmp_with_order(void *arg, const void *key1,
+                                    const void *key2);
 int group_concat_key_cmp_with_order_with_nulls(void *arg, const void *key1,
                                                const void *key2);
 int dump_leaf_key(void* key_arg,
@@ -1987,15 +2000,16 @@ protected:
   */
   bool add(bool exclude_nulls);
 
-  friend int group_concat_key_cmp_with_distinct(void* arg, const void* key1,
-                                                const void* key2);
-  friend int group_concat_key_cmp_with_distinct_with_nulls(void* arg,
-                                                           const void* key1,
-                                                           const void* key2);
-  friend int group_concat_key_cmp_with_order(void* arg, const void* key1,
-					     const void* key2);
+  friend int group_concat_key_cmp_with_distinct(void *arg, const void *key1,
+                                                const void *key2);
+  friend int group_concat_key_cmp_with_distinct_with_nulls(void *arg,
+                                                           const void *key1,
+                                                           const void *key2);
+  friend int group_concat_key_cmp_with_order(void *arg, const void *key1,
+                                             const void *key2);
   friend int group_concat_key_cmp_with_order_with_nulls(void *arg,
-                                       const void *key1, const void *key2);
+                                                        const void *key1,
+                                                        const void *key2);
   friend int dump_leaf_key(void* key_arg,
                            element_count count __attribute__((unused)),
 			   void* item_arg);
@@ -2015,6 +2029,9 @@ protected:
     { return f->val_str(tmp, key + offset); }
   virtual void cut_max_length(String *result,
                               uint old_length, uint max_length) const;
+  bool uses_non_standard_aggregator_for_distinct() const override
+    { return distinct; }
+
 public:
   // Methods used by ColumnStore
   bool get_distinct() const { return distinct; }
@@ -2089,7 +2106,7 @@ public:
   void print(String *str, enum_query_type query_type) override;
   bool change_context_processor(void *cntx) override
     { context= (Name_resolution_context *)cntx; return FALSE; }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_group_concat>(thd, this); }
   qsort_cmp2 get_comparator_function_for_distinct();
   qsort_cmp2 get_comparator_function_for_order_by();

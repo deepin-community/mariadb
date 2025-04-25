@@ -70,5 +70,30 @@
 # endif /* GNUC >= 3.1 */
 #endif
 
-
+/* gcc 7.5.0 does not support __attribute__((no_sanitize("undefined")) */
+#ifndef ATTRIBUTE_NO_UBSAN
+# if (GCC_VERSION >= 8000) || defined(__clang__)
+#  define ATTRIBUTE_NO_UBSAN __attribute__((no_sanitize("undefined")))
+# elif (GCC_VERSION >= 6001)
+#  define ATTRIBUTE_NO_UBSAN __attribute__((no_sanitize_undefined))
+# else
+#  define ATTRIBUTE_NO_UBSAN
+# endif
 #endif
+
+/* Define pragmas to disable warnings for stack frame checking */
+
+#if defined(__clang__)
+#define PRAGMA_DISABLE_CHECK_STACK_FRAME                     \
+_Pragma("clang diagnostic push")                             \
+_Pragma("clang diagnostic ignored \"-Wframe-larger-than=\"")
+
+#define PRAGMA_REENABLE_CHECK_STACK_FRAME                    \
+_Pragma("clang diagnostic pop")
+
+#else
+#define PRAGMA_DISABLE_CHECK_STACK_FRAME
+#define PRAGMA_REENABLE_CHECK_STACK_FRAME
+#endif
+
+#endif /* _my_attribute_h */

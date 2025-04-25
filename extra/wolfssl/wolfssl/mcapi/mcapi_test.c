@@ -1,6 +1,6 @@
 /* mcapi_test.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -23,11 +23,16 @@
 
 /* Tests Microchip CRYPTO API layer */
 
+#ifdef HAVE_CONFIG_H
+    #include <config.h>
+#endif
 
-
-/* mc api header */
+#ifndef WOLFSSL_USER_SETTINGS
+    #include <wolfssl/options.h>
+#endif
 #include <wolfssl/wolfcrypt/settings.h>
 
+/* mc api header */
 #include "crypto.h"
 
 /* sanity test against our default implementation, wolfssl headers  */
@@ -311,7 +316,7 @@ static int check_sha256(void)
     }
 
     if (memcmp(mcDigest, defDigest, CRYPT_SHA256_DIGEST_SIZE) != 0) {
-        printf("sha256 final memcmp fialed\n");
+        printf("sha256 final memcmp failed\n");
         return -1;
     }
     printf("sha256      mcapi test passed\n");
@@ -351,7 +356,7 @@ static int check_sha384(void)
     }
 
     if (memcmp(mcDigest, defDigest, CRYPT_SHA384_DIGEST_SIZE) != 0) {
-        printf("sha384 final memcmp fialed\n");
+        printf("sha384 final memcmp failed\n");
         return -1;
     }
     printf("sha384      mcapi test passed\n");
@@ -391,7 +396,7 @@ static int check_sha512(void)
     }
 
     if (memcmp(mcDigest, defDigest, CRYPT_SHA512_DIGEST_SIZE) != 0) {
-        printf("sha512 final memcmp fialed\n");
+        printf("sha512 final memcmp failed\n");
         return -1;
     }
     printf("sha512      mcapi test passed\n");
@@ -434,7 +439,7 @@ static int check_hmac(void)
     }
 
     if (memcmp(mcDigest, defDigest, CRYPT_SHA_DIGEST_SIZE) != 0) {
-        printf("hmac sha final memcmp fialed\n");
+        printf("hmac sha final memcmp failed\n");
         return -1;
     }
     printf("hmac sha    mcapi test passed\n");
@@ -462,7 +467,7 @@ static int check_hmac(void)
     }
 
     if (memcmp(mcDigest, defDigest, CRYPT_SHA256_DIGEST_SIZE) != 0) {
-        printf("hmac sha256 final memcmp fialed\n");
+        printf("hmac sha256 final memcmp failed\n");
         return -1;
     }
     printf("hmac sha256 mcapi test passed\n");
@@ -490,7 +495,7 @@ static int check_hmac(void)
     }
 
     if (memcmp(mcDigest, defDigest, CRYPT_SHA384_DIGEST_SIZE) != 0) {
-        printf("hmac sha384 final memcmp fialed\n");
+        printf("hmac sha384 final memcmp failed\n");
         return -1;
     }
     printf("hmac sha384 mcapi test passed\n");
@@ -518,7 +523,7 @@ static int check_hmac(void)
     }
 
     if (memcmp(mcDigest, defDigest, CRYPT_SHA512_DIGEST_SIZE) != 0) {
-        printf("hmac sha512 final memcmp fialed\n");
+        printf("hmac sha512 final memcmp failed\n");
         return -1;
     }
     printf("hmac sha512 mcapi test passed\n");

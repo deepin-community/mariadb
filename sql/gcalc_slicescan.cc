@@ -19,8 +19,6 @@
 #include <my_sys.h>
 #include <m_string.h>
 
-#ifdef HAVE_SPATIAL
-
 #include "gcalc_slicescan.h"
 
 
@@ -144,7 +142,7 @@ static void GCALC_DBUG_PRINT_SLICE(const char *header,
   size_t nbuf;
   char buf[1024];
   nbuf= strlen(header);
-  strcpy(buf, header);
+  safe_strcpy(buf, sizeof(buf), header);
   for (; slice; slice= slice->get_next())
   {
     size_t lnbuf= nbuf;
@@ -2010,6 +2008,3 @@ double Gcalc_scan_iterator::get_pure_double(const Gcalc_internal_coord *d,
     res*= -1.0;
   return res;
 }
-
-
-#endif /* HAVE_SPATIAL */

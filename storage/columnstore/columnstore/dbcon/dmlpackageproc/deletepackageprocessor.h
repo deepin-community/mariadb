@@ -22,8 +22,7 @@
  ***********************************************************************/
 /** @file */
 
-#ifndef DELETEPACKAGEPROCESSOR_H
-#define DELETEPACKAGEPROCESSOR_H
+#pragma once
 #include <string>
 #include <iostream>
 #include <vector>
@@ -32,11 +31,7 @@
 #include <vector>
 #include "joblist.h"
 
-#if defined(_MSC_VER) && defined(DMLPKGPROC_DLLEXPORT)
-#define EXPORT __declspec(dllexport)
-#else
 #define EXPORT
-#endif
 
 namespace dmlpackageprocessor
 {
@@ -50,14 +45,11 @@ class DeletePackageProcessor : public DMLPackageProcessor
   DeletePackageProcessor(BRM::DBRM* aDbrm, uint32_t sid) : DMLPackageProcessor(aDbrm, sid)
   {
   }
-  /** @brief process a DeleteDMLPackage
-   *
-   * @param cpackage the delete dml package to process
-   */
-  EXPORT DMLResult processPackage(dmlpackage::CalpontDMLPackage& cpackage);
 
  protected:
  private:
+  DMLResult processPackageInternal(dmlpackage::CalpontDMLPackage& cpackage) override;
+
   /** @brief delete a row
    *
    * @param txnID the transaction id
@@ -88,5 +80,3 @@ class DeletePackageProcessor : public DMLPackageProcessor
 }  // namespace dmlpackageprocessor
 
 #undef EXPORT
-
-#endif  // DELETEPACKAGEPROCESSOR_H

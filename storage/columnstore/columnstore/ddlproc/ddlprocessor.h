@@ -21,8 +21,7 @@
  *
  ***********************************************************************/
 /** @file */
-#ifndef DDLPROCESSOR_H
-#define DDLPROCESSOR_H
+#pragma once
 
 #include "ddlproc.h"
 #include "threadpool.h"
@@ -94,8 +93,7 @@ class DDLProcessor
   WriteEngine::WEClients* fWEClient;
   uint32_t fPMCount;
   querytele::QueryTeleClient fQtc;
+  uint32_t debugLevel{0};
 };
 
 }  // namespace ddlprocessor
-
-#endif  // DDLPROCESSOR_H

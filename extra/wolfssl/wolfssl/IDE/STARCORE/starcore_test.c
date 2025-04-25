@@ -1,6 +1,6 @@
 /* starcore_test.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -20,7 +20,7 @@
  */
 
 
-#include <prototype.h> 
+#include <prototype.h>
 
 #include <wolfssl/wolfcrypt/settings.h>
 #ifndef WOLFSSL_USER_SETTINGS
@@ -135,12 +135,12 @@ int process_a_file(char* fName)
     }
     return ret;
 }
-#endif 
+#endif
 
 void check_ret(int ret)
 {
     if(ret != 0) {
-        exit(-1); 
+        exit(-1);
     }
 }
 
@@ -293,7 +293,7 @@ int testharness_main()
         process_a_file(strcat(path, "AES_CBC_47242.json")); // Failed to allocate buffer large enough for file, fixed by chopping into smaller sections
         process_a_file(strcat(path, "AES_CCM_47247.json")); // Failed, increase stack/heap
         process_a_file(strcat(path, "AES_CCM_47247-part1.json")); // Failed to write out the entire response (got 104 of 370 tgId's in the response)
-        process_a_file(strcat(path, "AES_CCM_47247-part2.json")); // Failed ot write out the entire response (started at 371 and got to 429 of 741 tgId's in the response) looks like alloc failures, increase HEAP
+        process_a_file(strcat(path, "AES_CCM_47247-part2.json")); // Failed to write out the entire response (started at 371 and got to 429 of 741 tgId's in the response) looks like alloc failures, increase HEAP
         process_a_file(strcat(path, "DSA_keyGen_47253.json")); // Success
         process_a_file(strcat(path, "RSA_DecPrim_47306.json")); // Success
         process_a_file(strcat(path, "ECDSA_sigVer_47258.json")); // Success

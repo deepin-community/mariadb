@@ -60,6 +60,16 @@ void Session_sysvars_tracker::vars_list::copy(vars_list* from, THD *thd)
   from->init();
 }
 
+Session_sysvars_tracker::
+sysvar_node_st *Session_sysvars_tracker::vars_list::search(const sys_var *svar)
+{
+  return reinterpret_cast<sysvar_node_st*>(
+           my_hash_search(&m_registered_sysvars,
+                         reinterpret_cast<const uchar*>(&svar->offset),
+                         sizeof(svar->offset)));
+}
+
+
 /**
   Inserts the variable to be tracked into m_registered_sysvars hash.
 
@@ -428,10 +438,12 @@ bool Session_sysvars_tracker::vars_list::store(THD *thd, String *buf)
     SHOW_VAR show;
     CHARSET_INFO *charset;
     size_t val_length, length;
+    mysql_mutex_lock(&LOCK_global_system_variables);
     mysql_mutex_lock(&LOCK_plugin);
     if (!*node->test_load)
     {
       mysql_mutex_unlock(&LOCK_plugin);
+      mysql_mutex_unlock(&LOCK_global_system_variables);
       continue;
     }
     sys_var *svar= node->m_svar;
@@ -444,13 +456,12 @@ bool Session_sysvars_tracker::vars_list::store(THD *thd, String *buf)
     show.name= svar->name.str;
     show.value= (char *) svar;
 
-    mysql_mutex_lock(&LOCK_global_system_variables);
     const char *value= get_one_variable(thd, &show, OPT_SESSION, SHOW_SYS, NULL,
                                         &charset, val_buf, &val_length);
-    mysql_mutex_unlock(&LOCK_global_system_variables);
 
     if (is_plugin)
       mysql_mutex_unlock(&LOCK_plugin);
+    mysql_mutex_unlock(&LOCK_global_system_variables);
 
     length= net_length_size(svar->name.length) +
       svar->name.length +
@@ -506,6 +517,22 @@ bool Session_sysvars_tracker::store(THD *thd, String *buf)
   return false;
 }
 
+/* Parse all session track system variables if not parsed yet. */
+void Session_sysvars_tracker::maybe_parse_all(THD *thd)
+{
+  if (!m_parsed)
+  {
+    DBUG_ASSERT(thd->variables.session_track_system_variables);
+    LEX_STRING tmp= { thd->variables.session_track_system_variables,
+                      strlen(thd->variables.session_track_system_variables) };
+    if (orig_list.parse_var_list(thd, tmp, true, thd->charset()))
+    {
+      orig_list.reinit();
+      return;
+    }
+    m_parsed= true;
+  }
+}
 
 /**
   Mark the system variable as changed.
@@ -520,18 +547,7 @@ void Session_sysvars_tracker::mark_as_changed(THD *thd, const sys_var *var)
   if (!is_enabled())
     return;
 
-  if (!m_parsed)
-  {
-    DBUG_ASSERT(thd->variables.session_track_system_variables);
-    LEX_STRING tmp= { thd->variables.session_track_system_variables,
-                      strlen(thd->variables.session_track_system_variables) };
-    if (orig_list.parse_var_list(thd, tmp, true, thd->charset()))
-    {
-      orig_list.reinit();
-      return;
-    }
-    m_parsed= true;
-  }
+  maybe_parse_all(thd);
 
   /*
     Check if the specified system variable is being tracked, if so
@@ -540,6 +556,23 @@ void Session_sysvars_tracker::mark_as_changed(THD *thd, const sys_var *var)
   if (orig_list.is_enabled() && (node= orig_list.insert_or_search(var)))
   {
     node->m_changed= true;
+    set_changed(thd);
+  }
+}
+
+/**
+  Mark all session tracking system variables as changed.
+*/
+void Session_sysvars_tracker::mark_all_as_changed(THD *thd)
+{
+  if (!is_enabled())
+    return;
+
+  maybe_parse_all(thd);
+
+  for (ulong i= 0; i < orig_list.size(); i++)
+  {
+    orig_list.at(i)->m_changed= true;
     set_changed(thd);
   }
 }
@@ -555,12 +588,13 @@ void Session_sysvars_tracker::mark_as_changed(THD *thd, const sys_var *var)
   @return Pointer to the key buffer.
 */
 
-uchar *Session_sysvars_tracker::sysvars_get_key(const char *entry,
-                                                size_t *length,
-                                                my_bool not_used __attribute__((unused)))
+const uchar *Session_sysvars_tracker::sysvars_get_key(const void *entry,
+                                                      size_t *length, my_bool)
 {
-  *length= sizeof(sys_var *);
-  return (uchar *) &(((sysvar_node_st *) entry)->m_svar);
+  ptrdiff_t *key=
+      &((static_cast<const sysvar_node_st *>(entry))->m_svar->offset);
+  *length= sizeof(*key);
+  return reinterpret_cast<const uchar *>(key);
 }
 
 

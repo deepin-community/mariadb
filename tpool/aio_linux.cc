@@ -21,7 +21,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02111 - 1301 USA*/
 # include <cstdio>
 # include <libaio.h>
 # include <sys/syscall.h>
-
+# include <pthread.h>
+# include <my_sys.h>
 /**
   Invoke the io_getevents() system call, without timeout parameter.
 
@@ -93,12 +94,14 @@ class aio_linux final : public aio
 
   static void getevent_thread_routine(aio_linux *aio)
   {
+    my_thread_set_name("my_getevents");
     /*
       We collect events in small batches to hopefully reduce the
       number of system calls.
     */
     constexpr unsigned MAX_EVENTS= 256;
 
+    aio->m_pool->m_worker_init_callback();
     io_event events[MAX_EVENTS];
     for (;;)
     {
@@ -107,14 +110,14 @@ class aio_linux final : public aio
         continue;
       case -EINVAL:
         if (shutdown_in_progress)
-          return;
+          goto end;
         /* fall through */
       default:
         if (ret < 0)
         {
           fprintf(stderr, "io_getevents returned %d\n", ret);
           abort();
-          return;
+          goto end;
         }
         for (int i= 0; i < ret; i++)
         {
@@ -138,6 +141,8 @@ class aio_linux final : public aio
         }
       }
     }
+end:
+    aio->m_pool->m_worker_destroy_callback();
   }
 
 public:

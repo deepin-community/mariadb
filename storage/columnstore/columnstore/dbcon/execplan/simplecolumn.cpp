@@ -141,6 +141,12 @@ SimpleColumn::SimpleColumn() : ReturnedColumn(), fOid(0), fisColumnStore(true)
   fDistinct = false;
 }
 
+SimpleColumn::SimpleColumn(const std::string& token, ForTestPurposeWithoutOID)
+ : ReturnedColumn(0), fOid(0), fData(token), fisColumnStore(true)
+{
+  parse(token);
+  fDistinct = false;
+}
 SimpleColumn::SimpleColumn(const string& token, const uint32_t sessionID)
  : ReturnedColumn(sessionID), fOid(0), fData(token), fisColumnStore(true)
 {
@@ -199,6 +205,13 @@ SimpleColumn::SimpleColumn(const SimpleColumn& rhs, const uint32_t sessionID)
  , fViewName(rhs.viewName())
  , fTimeZone(rhs.timeZone())
  , fisColumnStore(rhs.isColumnStore())
+{
+}
+
+SimpleColumn::SimpleColumn(const ReturnedColumn& rhs, const uint32_t sessionID)
+ : ReturnedColumn(rhs, sessionID)
+ , fData(rhs.data())
+ , fisColumnStore(true)
 {
 }
 
@@ -264,9 +277,21 @@ const string SimpleColumn::toString() const
          << returnAll() << delim << sequence() << delim << cardinality() << delim << joinInfo() << delim
          << colSource() << delim << (isColumnStore() ? "ColumnStore" : "ForeignEngine") << delim
          << colPosition() << delim << cs.getCharset().cs_name.str << delim << cs.getCharset().coll_name.str
-         << delim << endl;
+         << " inputindex/outputindex: " << fInputIndex << delim << fOutputIndex
+	 << " eid " << fExpressionId
+	 << endl;
 
   return output.str();
+}
+
+string SimpleColumn::toCppCode(IncludeSet& includes) const
+{
+  includes.insert("simplecolumn.h");
+  stringstream ss;
+
+  ss << "SimpleColumn(" << std::quoted(fData)  << ", SimpleColumn::ForTestPurposeWithoutOID{})";
+
+  return ss.str();
 }
 
 void SimpleColumn::parse(const string& token)
@@ -489,12 +514,6 @@ bool SimpleColumn::singleTable(CalpontSystemCatalog::TableAliasName& tan)
 // @todo move to inline
 void SimpleColumn::evaluate(Row& row, bool& isNull)
 {
-  // TODO Move this block into an appropriate place
-  if (UNLIKELY((int)(fInputOffset == (uint32_t)-1)))
-  {
-    fInputOffset = row.getOffset(fInputIndex);
-  }
-
   bool isNull2 = row.isNullValue(fInputIndex);
 
   if (isNull2)
@@ -565,6 +584,16 @@ void SimpleColumn::evaluate(Row& row, bool& isNull)
       else
         fResult.intVal = atoll((char*)&fResult.origIntVal);
 
+      // MCOL-4580 - related, probably can be marked with XXX.
+      // This does not fail in any tests, but it is considered wrong.
+      // The reasonin behind that is that we changed signedness if characters to unsigned
+      // and it might be a case with short strings that they were copied as is using
+      // uint64ToStr encoding into int64_t values. So, potentially, unsuspecting code
+      // may use getUintVal instead of getIntVal to process short char column, getting
+      // unitialized value and give floating behavior.
+      // None of our tests failed, though.
+      fResult.uintVal = fResult.intVal;
+
       break;
     }
 
@@ -622,8 +651,7 @@ void SimpleColumn::evaluate(Row& row, bool& isNull)
       {
         case 16:
         {
-          datatypes::TSInt128::assignPtrPtr(&fResult.decimalVal.s128Value,
-                                            row.getBinaryField_offset<int128_t>(fInputOffset));
+          fResult.decimalVal.s128Value = row.getTSInt128Field(fInputIndex).getValue();
           break;
         }
         case 1:
@@ -661,7 +689,7 @@ void SimpleColumn::evaluate(Row& row, bool& isNull)
     case CalpontSystemCatalog::BLOB:
     case CalpontSystemCatalog::TEXT:
     {
-      fResult.strVal = row.getVarBinaryStringField(fInputIndex);
+      fResult.strVal.assign(row.getVarBinaryField(fInputIndex), row.getVarBinaryLength(fInputIndex));
       break;
     }
 

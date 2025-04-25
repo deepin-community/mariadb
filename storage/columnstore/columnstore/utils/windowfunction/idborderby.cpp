@@ -28,7 +28,7 @@ using namespace std;
 #include "calpontselectexecutionplan.h"
 #include "rowgroup.h"
 
-#include <boost/shared_array.hpp>
+
 using namespace boost;
 
 #include "errorids.h"
@@ -753,7 +753,7 @@ void IdbOrderBy::initialize(const RowGroup& rg)
   // initialize rows
   IdbCompare::initialize(rg);
 
-  uint64_t newSize = rg.getSizeWithStrings(fRowsPerRG);
+  auto newSize = rg.getSizeWithStrings(fRowsPerRG);
   if (fRm && !fRm->getMemory(newSize, fSessionMemLimit))
   {
     cerr << IDBErrorInfo::instance()->errorMsg(fErrorCode) << " @" << __FILE__ << ":" << __LINE__;
@@ -831,7 +831,9 @@ bool EqualCompData::operator()(Row::Pointer a, Row::Pointer b)
         }
         else if (fRow1.getColumnWidth(*i) == datatypes::MAXDECIMALWIDTH)
         {
-          eq = (*fRow1.getBinaryField<int128_t>(*i) == *fRow2.getBinaryField<int128_t>(*i));
+          datatypes::TSInt128 left = fRow1.getTSInt128Field(*i);
+          datatypes::TSInt128 right = fRow2.getTSInt128Field(*i);
+          eq = left.getValue() == right.getValue();
         }
         break;
       }
@@ -898,4 +900,3 @@ bool IdbOrderBy::Eq::operator()(const Row::Pointer& d1, const Row::Pointer& d2) 
 }
 
 }  // namespace ordering
-// vim:ts=4 sw=4:

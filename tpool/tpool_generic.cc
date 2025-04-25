@@ -129,7 +129,7 @@ enum worker_wake_reason
 
 
 /* A per-worker  thread structure.*/
-struct alignas(CPU_LEVEL1_DCACHE_LINESIZE)  worker_data
+struct worker_data
 {
   /** Condition variable to wakeup this worker.*/
   std::condition_variable m_cv;
@@ -156,6 +156,8 @@ struct alignas(CPU_LEVEL1_DCACHE_LINESIZE)  worker_data
   };
 
   int m_state;
+  /* Padding to avoid false sharing */
+  char m_pad[CPU_LEVEL1_DCACHE_LINESIZE];
 
   bool is_executing_task()
   {
@@ -179,16 +181,6 @@ struct alignas(CPU_LEVEL1_DCACHE_LINESIZE)  worker_data
     m_state(NONE),
     m_task_start_time()
   {}
-
-  /*Define custom new/delete because of overaligned structure. */
-  static void *operator new(size_t size)
-  {
-    return aligned_malloc(size, CPU_LEVEL1_DCACHE_LINESIZE);
-  }
-  static void operator delete(void* p)
-  {
-    aligned_free(p);
-  }
 };
 
 
@@ -244,7 +236,7 @@ class thread_pool_generic : public thread_pool
   unsigned int m_concurrency;
 
   /** True, if threadpool is being shutdown, false otherwise */
-  bool m_in_shutdown;
+  bool m_in_shutdown= false;
 
   /** Maintenance timer state : true = active(ON),false = inactive(OFF)*/
   enum class timer_state_t
@@ -304,11 +296,11 @@ class thread_pool_generic : public thread_pool
   }
 public:
   thread_pool_generic(int min_threads, int max_threads);
-  ~thread_pool_generic();
+  ~thread_pool_generic() override;
   void wait_begin() override;
   void wait_end() override;
   void submit_task(task *task) override;
-  virtual aio *create_native_aio(int max_io) override
+  aio *create_native_aio(int max_io) override
   {
 #ifdef _WIN32
     return create_win_aio(this, max_io);
@@ -436,13 +428,13 @@ public:
       m_task.wait();
     }
 
-    virtual ~timer_generic()
+    ~timer_generic() override
     {
       disarm();
     }
   };
-  timer_generic m_maintenance_timer;
-  virtual timer* create_timer(callback_func func, void *data) override
+  timer_generic* m_maintenance_timer=nullptr;
+  timer* create_timer(callback_func func, void *data) override
   {
     return new timer_generic(func, data, this);
   }
@@ -572,8 +564,7 @@ void thread_pool_generic::worker_main(worker_data *thread_var)
 {
   task* task;
   set_tls_pool(this);
-  if(m_worker_init_callback)
-   m_worker_init_callback();
+  m_worker_init_callback();
 
   tls_worker_data = thread_var;
   m_thread_creation_pending.clear();
@@ -583,8 +574,7 @@ void thread_pool_generic::worker_main(worker_data *thread_var)
     task->execute();
   }
 
-  if (m_worker_destroy_callback)
-    m_worker_destroy_callback();
+  m_worker_destroy_callback();
 
   worker_end(thread_var);
 }
@@ -628,7 +618,7 @@ void thread_pool_generic::check_idle(std::chrono::system_clock::time_point now)
   }
 
   /* Switch timer off after 1 minute of idle time */
-  if (now - idle_since > max_idle_time)
+  if (now - idle_since > max_idle_time && m_active_threads.empty())
   {
     idle_since= invalid_timestamp;
     switch_timer(timer_state_t::OFF);
@@ -722,13 +712,17 @@ static int  throttling_interval_ms(size_t n_threads,size_t concurrency)
 /* Create a new worker.*/
 bool thread_pool_generic::add_thread()
 {
-  if (m_thread_creation_pending.test_and_set())
-    return false;
-
   size_t n_threads = thread_count();
 
   if (n_threads >= m_max_threads)
     return false;
+
+  /*
+    Deadlock danger exists, so monitor pool health
+    with maintenance timer.
+  */
+  switch_timer(timer_state_t::ON);
+
   if (n_threads >= m_min_threads)
   {
     auto now = std::chrono::system_clock::now();
@@ -739,10 +733,23 @@ bool thread_pool_generic::add_thread()
         Throttle thread creation and wakeup deadlock detection timer,
         if is it off.
       */
-      switch_timer(timer_state_t::ON);
-
       return false;
     }
+  }
+
+  /* Check and set "thread creation pending" flag before creating the thread. We
+  reset the flag in thread_pool_generic::worker_main in new thread created. The
+  flag must be reset back in case we fail to create the thread. If this flag is
+  not reset all future attempt to create thread for this pool would not work as
+  we would return from here.
+
+  Do not use this flag for pool of fixed size.
+  (since they lack maintenence that would rectify the pool size, if it is too small)
+  */
+  if (m_min_threads != m_max_threads)
+  {
+    if (m_thread_creation_pending.test_and_set())
+      return false;
   }
 
   worker_data *thread_data = m_thread_data_cache.get();
@@ -764,6 +771,7 @@ bool thread_pool_generic::add_thread()
         "current number of threads in pool %zu\n", e.what(), thread_count());
       warning_written = true;
     }
+    m_thread_creation_pending.clear();
     return false;
   }
   return true;
@@ -801,7 +809,7 @@ thread_pool_generic::thread_pool_generic(int min_threads, int max_threads) :
   m_tasks_dequeued(),
   m_wakeups(),
   m_spurious_wakeups(),
-  m_in_shutdown(),
+  m_timer_state(timer_state_t::ON),
   m_timestamp(),
   m_long_tasks_count(),
   m_waiting_task_count(),
@@ -809,12 +817,16 @@ thread_pool_generic::thread_pool_generic(int min_threads, int max_threads) :
   m_min_threads(min_threads),
   m_max_threads(max_threads),
   m_last_thread_count(),
-  m_last_activity(),
-  m_maintenance_timer(thread_pool_generic::maintenance_func, this, nullptr)
+  m_last_activity()
 {
   set_concurrency();
+
   // start the timer
-  m_maintenance_timer.set_time(0, (int)m_timer_interval.count());
+  if (m_min_threads != m_max_threads)
+  {
+    m_maintenance_timer= new timer_generic(thread_pool_generic::maintenance_func, this, nullptr);
+    m_maintenance_timer->set_time(0, (int)m_timer_interval.count());
+  }
 }
 
 
@@ -921,7 +933,8 @@ void thread_pool_generic::switch_timer(timer_state_t state)
   long long period= (state == timer_state_t::OFF) ?
      m_timer_interval.count()*10: m_timer_interval.count();
 
-  m_maintenance_timer.set_period((int)period);
+  if (m_maintenance_timer)
+   m_maintenance_timer->set_period((int)period);
 }
 
 
@@ -939,7 +952,8 @@ thread_pool_generic::~thread_pool_generic()
   m_aio.reset();
 
   /* Also stop the maintanence task early. */
-  m_maintenance_timer.disarm();
+  if (m_maintenance_timer)
+    m_maintenance_timer->disarm();
 
   std::unique_lock<std::mutex> lk(m_mtx);
   m_in_shutdown= true;
@@ -955,6 +969,7 @@ thread_pool_generic::~thread_pool_generic()
   }
 
   lk.unlock();
+  delete m_maintenance_timer;
 }
 
 thread_pool *create_thread_pool_generic(int min_threads, int max_threads)

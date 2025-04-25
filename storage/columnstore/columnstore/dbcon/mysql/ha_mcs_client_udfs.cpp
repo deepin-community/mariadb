@@ -38,6 +38,9 @@ using namespace oam;
 #include "errorids.h"
 using namespace logging;
 
+#include "ddlpkg.h"
+#include "calpontsystemcatalog.h"
+
 // #include "resourcemanager.h"
 
 #include "columnstoreversion.h"
@@ -68,11 +71,51 @@ extern "C"
     return str;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      const char* calsetparms(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
-                              char* is_null, char* error)
+  my_bool setparms_init(UDF_INIT* initid, UDF_ARGS* args, char* message, const char* funcname)
+  {
+    if (args->arg_count != 2 || args->arg_type[0] != STRING_RESULT || args->arg_type[1] != STRING_RESULT)
+    {
+      sprintf(message, "%s() requires two string arguments", funcname);
+      return 1;
+    }
+
+    initid->max_length = MAXSTRINGLENGTH;
+
+    char valuestr[MAXSTRINGLENGTH];
+    size_t vlen = args->lengths[1];
+
+    memcpy(valuestr, args->args[1], vlen--);
+
+    for (size_t i = 0; i < vlen; ++i)
+      if (!isdigit(valuestr[i]))
+      {
+        sprintf(message, "%s() second argument must be numeric or end in G, M or K", funcname);
+        return 1;
+      }
+
+    if (!isdigit(valuestr[vlen]))
+    {
+      switch (valuestr[vlen])
+      {
+        case 'G':
+        case 'g':
+        case 'M':
+        case 'm':
+        case 'K':
+        case 'k':
+        case '\0': break;
+
+        default:
+          sprintf(message, "%s() second argument must be numeric or end in G, M or K", funcname);
+          return 1;
+      }
+    }
+
+    return 0;
+  }
+
+  const char* mcssetparms(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                          char* is_null, char* error)
   {
     char parameter[MAXSTRINGLENGTH];
     char valuestr[MAXSTRINGLENGTH];
@@ -140,64 +183,46 @@ extern "C"
     return result;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool calsetparms_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool mcssetparms_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
   {
-    if (args->arg_count != 2 || args->arg_type[0] != STRING_RESULT || args->arg_type[1] != STRING_RESULT)
+    return setparms_init(initid, args, message, "MCSSETPARMS");
+  }
+
+  void mcssetparms_deinit(UDF_INIT* initid)
+  {
+  }
+
+  const char* calsetparms(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                          char* is_null, char* error)
+  {
+    return mcssetparms(initid, args, result, length, is_null, error);
+  }
+
+  my_bool calsetparms_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return setparms_init(initid, args, message, "CALSETPARMS");
+  }
+
+  void calsetparms_deinit(UDF_INIT* initid)
+  {
+  }
+
+  my_bool getstats_init(UDF_INIT* initid, UDF_ARGS* args, char* message, const char* funcname)
+  {
+    if (args->arg_count != 0)
     {
-      strcpy(message, "CALSETPARMS() requires two string arguments");
+      sprintf(message, "%s() takes no arguments", funcname);
       return 1;
     }
 
-    initid->max_length = MAXSTRINGLENGTH;
-
-    char valuestr[MAXSTRINGLENGTH];
-    size_t vlen = args->lengths[1];
-
-    memcpy(valuestr, args->args[1], vlen--);
-
-    for (size_t i = 0; i < vlen; ++i)
-      if (!isdigit(valuestr[i]))
-      {
-        strcpy(message, "CALSETPARMS() second argument must be numeric or end in G, M or K");
-        return 1;
-      }
-
-    if (!isdigit(valuestr[vlen]))
-    {
-      switch (valuestr[vlen])
-      {
-        case 'G':
-        case 'g':
-        case 'M':
-        case 'm':
-        case 'K':
-        case 'k':
-        case '\0': break;
-
-        default:
-          strcpy(message, "CALSETPARMS() second argument must be numeric or end in G, M or K");
-          return 1;
-      }
-    }
+    initid->maybe_null = 1;
+    initid->max_length = 255;
 
     return 0;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void calsetparms_deinit(UDF_INIT* initid)
-  {
-  }
-
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      const char* calgetstats(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
-                              char* is_null, char* error)
+  const char* mcsgetstats(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                          char* is_null, char* error)
   {
     if (get_fe_conn_info_ptr() == NULL)
     {
@@ -223,34 +248,42 @@ extern "C"
     return result;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool calgetstats_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool mcsgetstats_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
   {
-    if (args->arg_count != 0)
+    return getstats_init(initid, args, message, "MCSGETSTATS");
+  }
+
+  void mcsgetstats_deinit(UDF_INIT* initid)
+  {
+  }
+
+  const char* calgetstats(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                          char* is_null, char* error)
+  {
+    return mcsgetstats(initid, args, result, length, is_null, error);
+  }
+
+  my_bool calgetstats_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return getstats_init(initid, args, message, "CALGETSTATS");
+  }
+
+  void calgetstats_deinit(UDF_INIT* initid)
+  {
+  }
+
+  my_bool settrace_init(UDF_INIT* initid, UDF_ARGS* args, char* message, const char* funcname)
+  {
+    if (args->arg_count != 1 || args->arg_type[0] != INT_RESULT)
     {
-      strcpy(message, "CALGETSTATS() takes no arguments");
+      sprintf(message, "%s() requires one INTEGER argument", funcname);
       return 1;
     }
-
-    initid->maybe_null = 1;
-    initid->max_length = 255;
 
     return 0;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void calgetstats_deinit(UDF_INIT* initid)
-  {
-  }
-
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      long long calsettrace(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
+  long long mcssettrace(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
   {
     if (get_fe_conn_info_ptr() == NULL)
     {
@@ -268,32 +301,31 @@ extern "C"
     return oldTrace;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool calsettrace_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool mcssettrace_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
   {
-    if (args->arg_count != 1 || args->arg_type[0] != INT_RESULT)
-    {
-      strcpy(message, "CALSETTRACE() requires one INTEGER argument");
-      return 1;
-    }
-
-    return 0;
+    return settrace_init(initid, args, message, "MCSSETTRACE");
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void calsettrace_deinit(UDF_INIT* initid)
+  void mcssettrace_deinit(UDF_INIT* initid)
   {
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      // Return 1 if system is ready for reads or 0 if not.
-      long long mcssystemready(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
+  long long calsettrace(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
+  {
+    return mcssettrace(initid, args, is_null, error);
+  }
+
+  my_bool calsettrace_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return settrace_init(initid, args, message, "CALSETTRACE");
+  }
+
+  void calsettrace_deinit(UDF_INIT* initid)
+  {
+  }
+
+  // Return 1 if system is ready for reads or 0 if not.
+  long long mcssystemready(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
   {
     long long rtn = 0;
     Oam oam;
@@ -314,26 +346,17 @@ extern "C"
     return rtn;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool mcssystemready_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool mcssystemready_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
   {
     return 0;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void mcssystemready_deinit(UDF_INIT* initid)
+  void mcssystemready_deinit(UDF_INIT* initid)
   {
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      // Return non-zero if system is read only; 0 if writeable
-      long long mcssystemreadonly(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
+  // Return non-zero if system is read only; 0 if writeable
+  long long mcssystemreadonly(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
   {
     long long rtn = 0;
     DBRM dbrm(true);
@@ -359,26 +382,17 @@ extern "C"
     return rtn;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool mcssystemreadonly_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool mcssystemreadonly_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
   {
     return 0;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void mcssystemreadonly_deinit(UDF_INIT* initid)
+  void mcssystemreadonly_deinit(UDF_INIT* initid)
   {
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      // Return non-zero if this is the primary UM; 0 if not primary
-      long long mcssystemprimary(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
+  // Return non-zero if this is the primary UM; 0 if not primary
+  long long mcssystemprimary(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
   {
     long long rtn = 0;
     Oam oam;
@@ -392,7 +406,7 @@ extern "C"
       localModule = boost::get<0>(st);
       PrimaryUMModuleName = config::Config::makeConfig()->getConfig("SystemConfig", "PrimaryUMModuleName");
 
-      if (boost::iequals(localModule, PrimaryUMModuleName))
+      if (datatypes::ASCIIStringCaseInsensetiveEquals(localModule, PrimaryUMModuleName))
         rtn = 1;
       if (PrimaryUMModuleName == "unassigned")
         rtn = 1;
@@ -410,44 +424,35 @@ extern "C"
     return rtn;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool mcssystemprimary_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool mcssystemprimary_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
   {
     return 0;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void mcssystemprimary_deinit(UDF_INIT* initid)
+  void mcssystemprimary_deinit(UDF_INIT* initid)
   {
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool calviewtablelock_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool viewtablelock_init(UDF_INIT* initid, UDF_ARGS* args, char* message, const char* funcname)
   {
     if (args->arg_count == 2 && (args->arg_type[0] != STRING_RESULT || args->arg_type[1] != STRING_RESULT))
     {
-      strcpy(message, "CALVIEWTABLELOCK() requires two string arguments");
+      sprintf(message, "%s() requires two string arguments", funcname);
       return 1;
     }
     else if ((args->arg_count == 1) && (args->arg_type[0] != STRING_RESULT))
     {
-      strcpy(message, "CALVIEWTABLELOCK() requires one string argument");
+      sprintf(message, "%s() requires one string argument", funcname);
       return 1;
     }
     else if (args->arg_count > 2)
     {
-      strcpy(message, "CALVIEWTABLELOCK() takes one or two arguments only");
+      sprintf(message, "%s() takes one or two arguments only", funcname);
       return 1;
     }
     else if (args->arg_count == 0)
     {
-      strcpy(message, "CALVIEWTABLELOCK() requires at least one argument");
+      sprintf(message, "%s() requires at least one argument", funcname);
       return 1;
     }
 
@@ -457,11 +462,13 @@ extern "C"
     return 0;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      const char* calviewtablelock(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
-                                   char* is_null, char* error)
+  my_bool mcsviewtablelock_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return viewtablelock_init(initid, args, message, "MCSVIEWTABLELOCK");
+  }
+
+  const char* mcsviewtablelock(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                               char* is_null, char* error)
   {
     THD* thd = current_thd;
 
@@ -515,21 +522,30 @@ extern "C"
     return result;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void calviewtablelock_deinit(UDF_INIT* initid)
+  void mcsviewtablelock_deinit(UDF_INIT* initid)
   {
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool calcleartablelock_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool calviewtablelock_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return viewtablelock_init(initid, args, message, "CALVIEWTABLELOCK");
+  }
+
+  const char* calviewtablelock(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                               char* is_null, char* error)
+  {
+    return mcsviewtablelock(initid, args, result, length, is_null, error);
+  }
+
+  void calviewtablelock_deinit(UDF_INIT* initid)
+  {
+  }
+
+  my_bool cleartablelock_init(UDF_INIT* initid, UDF_ARGS* args, char* message, const char* funcname)
   {
     if ((args->arg_count != 1) || (args->arg_type[0] != INT_RESULT))
     {
-      strcpy(message, "CALCLEARTABLELOCK() requires one integer argument (the lockID)");
+      sprintf(message, "%s() requires one integer argument (the lockID)", funcname);
       return 1;
     }
 
@@ -539,11 +555,88 @@ extern "C"
     return 0;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      const char* calcleartablelock(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
-                                    char* is_null, char* error)
+  my_bool mcs_set_ddldebug_level_init(UDF_INIT* initid, UDF_ARGS* args, char* message, const char* funcname)
+  {
+    if ((args->arg_count != 1) || (args->arg_type[0] != INT_RESULT) ||
+        *reinterpret_cast<uint32_t*>(args->args[0]) > 3)
+    {
+      sprintf(message, "%s() requires one integer `debug level` ", funcname);
+      return 1;
+    }
+
+    initid->maybe_null = 0;
+    initid->max_length = 5;
+
+    return 0;
+  }
+
+  const char* mcs_set_ddldebug_level(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length)
+  {
+    uint32_t level = *reinterpret_cast<uint32_t*>(args->args[0]);
+    std::unique_ptr<ddlpackage::DebugDDLStatement> stmt =
+        std::make_unique<ddlpackage::DebugDDLStatement>(level);
+    stmt->fSessionID = execplan::CalpontSystemCatalog::idb_tid2sid(current_thd->thread_id);
+    MessageQueueClient mq("DDLProc");
+
+    ByteStream bytestream;
+    bytestream << (uint32_t)stmt->fSessionID;
+    stmt->serialize(bytestream);
+    ByteStream::byte b = 0;
+    THD* thd = current_thd;
+    string emsg;
+    mq.write(bytestream);
+
+    try
+    {
+      bytestream = mq.read();
+
+      if (bytestream.length() == 0)
+      {
+        thd->get_stmt_da()->set_overwrite_status(true);
+        thd->raise_error_printf(ER_INTERNAL_ERROR, "Lost connection to DDLProc");
+        std::memcpy(result, "Error", 5);
+        *length = 5;
+        return result;
+      }
+      else
+      {
+        bytestream >> b;
+        bytestream >> emsg;
+      }
+    }
+    catch (runtime_error&)
+    {
+      thd->get_stmt_da()->set_overwrite_status(true);
+      thd->raise_error_printf(ER_INTERNAL_ERROR, "Lost connection to DDLProc");
+      std::memcpy(result, "Error", 5);
+      *length = 5;
+      return result;
+    }
+    catch (...)
+    {
+      thd->get_stmt_da()->set_overwrite_status(true);
+      thd->raise_error_printf(ER_INTERNAL_ERROR, "Unknown error caught");
+      std::memcpy(result, "Error", 5);
+      *length = 5;
+      return result;
+    }
+
+    *length = 2;
+    std::memcpy(result, "Ok", 2);
+    return result;
+  }
+
+  void mcs_set_ddldebug_level_deinit(UDF_INIT* initid)
+  {
+  }
+
+  my_bool mcscleartablelock_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return cleartablelock_init(initid, args, message, "MCSCLEARTABLELOCK");
+  }
+
+  const char* mcscleartablelock(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                                char* is_null, char* error)
   {
     if (get_fe_conn_info_ptr() == NULL)
     {
@@ -569,36 +662,45 @@ extern "C"
     return result;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void calcleartablelock_deinit(UDF_INIT* initid)
+  void mcscleartablelock_deinit(UDF_INIT* initid)
   {
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool callastinsertid_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool calcleartablelock_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return cleartablelock_init(initid, args, message, "CALCLEARTABLELOCK");
+  }
+
+  const char* calcleartablelock(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                                char* is_null, char* error)
+  {
+    return mcscleartablelock(initid, args, result, length, is_null, error);
+  }
+
+  void calcleartablelock_deinit(UDF_INIT* initid)
+  {
+  }
+
+  my_bool lastinsertid_init(UDF_INIT* initid, UDF_ARGS* args, char* message, const char* funcname)
   {
     if (args->arg_count == 2 && (args->arg_type[0] != STRING_RESULT || args->arg_type[1] != STRING_RESULT))
     {
-      strcpy(message, "CALLASTINSRTID() requires two string arguments");
+      sprintf(message, "%s() requires two string arguments", funcname);
       return 1;
     }
     else if ((args->arg_count == 1) && (args->arg_type[0] != STRING_RESULT))
     {
-      strcpy(message, "CALLASTINSERTID() requires one string argument");
+      sprintf(message, "%s() requires one string argument", funcname);
       return 1;
     }
     else if (args->arg_count > 2)
     {
-      strcpy(message, "CALLASTINSERTID() takes one or two arguments only");
+      sprintf(message, "%s() takes one or two arguments only", funcname);
       return 1;
     }
     else if (args->arg_count == 0)
     {
-      strcpy(message, "CALLASTINSERTID() requires at least one argument");
+      sprintf(message, "%s() requires at least one argument", funcname);
       return 1;
     }
 
@@ -608,10 +710,12 @@ extern "C"
     return 0;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      long long callastinsertid(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
+  my_bool mcslastinsertid_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return lastinsertid_init(initid, args, message, "MCSLASTINSERTID");
+  }
+
+  long long mcslastinsertid(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
   {
     THD* thd = current_thd;
 
@@ -671,52 +775,70 @@ extern "C"
     return (nextVal - 1);
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void callastinsertid_deinit(UDF_INIT* initid)
+  void mcslastinsertid_deinit(UDF_INIT* initid)
   {
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void calflushcache_deinit(UDF_INIT* initid)
+  my_bool callastinsertid_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return lastinsertid_init(initid, args, message, "CALLASTINSERTID");
+  }
+
+  long long callastinsertid(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
+  {
+    return mcslastinsertid(initid, args, is_null, error);
+  }
+
+  void callastinsertid_deinit(UDF_INIT* initid)
   {
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      long long calflushcache(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
-  {
-    return static_cast<long long>(cacheutils::flushPrimProcCache());
-  }
-
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool calflushcache_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool flushcache_init(UDF_INIT* initid, UDF_ARGS* args, char* message, const char* funcname)
   {
     if (args->arg_count != 0)
     {
-      strcpy(message, "CALFLUSHCACHE() takes no arguments");
+      sprintf(message, "%s() takes no arguments", funcname);
       return 1;
     }
 
     return 0;
   }
 
+  void mcsflushcache_deinit(UDF_INIT* initid)
+  {
+  }
+
+  long long mcsflushcache(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
+  {
+    return static_cast<long long>(cacheutils::flushPrimProcCache());
+  }
+
+  my_bool mcsflushcache_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return flushcache_init(initid, args, message, "MCSFLUSHCACHE");
+  }
+
+  void calflushcache_deinit(UDF_INIT* initid)
+  {
+  }
+
+  long long calflushcache(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
+  {
+    return mcsflushcache(initid, args, is_null, error);
+  }
+
+  my_bool calflushcache_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return flushcache_init(initid, args, message, "CALFLUSHCACHE");
+  }
+
   static const unsigned long TraceSize = 16 * 1024;
 
-// mysqld will call this with only 766 bytes available in result no matter what we asked for in
-// calgettrace_init()
-// if we return a pointer that is not result, mysqld will take our pointer and use it, freeing up result
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      const char* calgettrace(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
-                              char* is_null, char* error)
+  // mysqld will call this with only 766 bytes available in result no matter what we asked for in
+  // calgettrace_init()
+  // if we return a pointer that is not result, mysqld will take our pointer and use it, freeing up result
+  const char* mcsgettrace(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                          char* is_null, char* error)
   {
     const std::string* msgp;
     int flags = 0;
@@ -759,16 +881,13 @@ extern "C"
     return msgp->c_str();
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool calgettrace_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool gettrace_init(UDF_INIT* initid, UDF_ARGS* args, char* message, const char* funcname)
   {
 #if 0
 
         if (args->arg_count != 0)
         {
-            strcpy(message, "CALGETTRACE() takes no arguments");
+            sprintf(message, "%s() takes no arguments", funcname);
             return 1;
         }
 
@@ -779,18 +898,43 @@ extern "C"
     return 0;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void calgettrace_deinit(UDF_INIT* initid)
+  my_bool mcsgettrace_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return gettrace_init(initid, args, message, "MCSGETTRACE");
+  }
+
+  void mcsgettrace_deinit(UDF_INIT* initid)
   {
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      const char* calgetversion(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
-                                char* is_null, char* error)
+  const char* calgettrace(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                          char* is_null, char* error)
+  {
+    return mcsgettrace(initid, args, result, length, is_null, error);
+  }
+
+  my_bool calgettrace_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return gettrace_init(initid, args, message, "CALGETTRACE");
+  }
+
+  void calgettrace_deinit(UDF_INIT* initid)
+  {
+  }
+
+  my_bool getversion_init(UDF_INIT* initid, UDF_ARGS* args, char* message, const char* funcname)
+  {
+    if (args->arg_count != 0)
+    {
+      sprintf(message, "%s() takes no arguments", funcname);
+      return 1;
+    }
+
+    return 0;
+  }
+
+  const char* mcsgetversion(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                            char* is_null, char* error)
   {
     std::string version(columnstore_version);
     *length = version.size();
@@ -798,32 +942,43 @@ extern "C"
     return result;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool calgetversion_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool mcsgetversion_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return getversion_init(initid, args, message, "MCSGETVERSION");
+  }
+
+  void mcsgetversion_deinit(UDF_INIT* initid)
+  {
+  }
+
+  const char* calgetversion(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                            char* is_null, char* error)
+  {
+    return mcsgetversion(initid, args, result, length, is_null, error);
+  }
+
+  my_bool calgetversion_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return getversion_init(initid, args, message, "CALGETVERSION");
+  }
+
+  void calgetversion_deinit(UDF_INIT* initid)
+  {
+  }
+
+  my_bool getsqlcount_init(UDF_INIT* initid, UDF_ARGS* args, char* message, const char* funcname)
   {
     if (args->arg_count != 0)
     {
-      strcpy(message, "CALGETVERSION() takes no arguments");
+      sprintf(message, "%s() takes no arguments", funcname);
       return 1;
     }
 
     return 0;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void calgetversion_deinit(UDF_INIT* initid)
-  {
-  }
-
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      const char* calgetsqlcount(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
-                                 char* is_null, char* error)
+  const char* mcsgetsqlcount(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                             char* is_null, char* error)
   {
     if (get_fe_conn_info_ptr() == NULL)
     {
@@ -864,40 +1019,37 @@ extern "C"
     return result;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool calgetsqlcount_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool mcsgetsqlcount_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
   {
-    if (args->arg_count != 0)
-    {
-      strcpy(message, "CALGETSQLCOUNT() takes no arguments");
-      return 1;
-    }
-
-    return 0;
+    return getstats_init(initid, args, message, "MCSGETSQLCOUNT");
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void calgetsqlcount_deinit(UDF_INIT* initid)
+  void mcsgetsqlcount_deinit(UDF_INIT* initid)
   {
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      long long mcs_emindex_size(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
+  const char* calgetsqlcount(UDF_INIT* initid, UDF_ARGS* args, char* result, unsigned long* length,
+                             char* is_null, char* error)
+  {
+    return mcsgetsqlcount(initid, args, result, length, is_null, error);
+  }
+
+  my_bool calgetsqlcount_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  {
+    return getstats_init(initid, args, message, "CALGETSQLCOUNT");
+  }
+
+  void calgetsqlcount_deinit(UDF_INIT* initid)
+  {
+  }
+
+  long long mcs_emindex_size(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
   {
     DBRM dbrm;
     return dbrm.EMIndexShmemSize();
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool mcs_emindex_size_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool mcs_emindex_size_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
   {
     if (args->arg_count != 0)
     {
@@ -908,26 +1060,17 @@ extern "C"
     return 0;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void mcs_emindex_size_deinit(UDF_INIT* initid)
+  void mcs_emindex_size_deinit(UDF_INIT* initid)
   {
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      long long mcs_emindex_free(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
+  long long mcs_emindex_free(UDF_INIT* initid, UDF_ARGS* args, char* is_null, char* error)
   {
     DBRM dbrm;
     return dbrm.EMIndexShmemFree();
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      my_bool mcs_emindex_free_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
+  my_bool mcs_emindex_free_init(UDF_INIT* initid, UDF_ARGS* args, char* message)
   {
     if (args->arg_count != 0)
     {
@@ -938,10 +1081,7 @@ extern "C"
     return 0;
   }
 
-#ifdef _MSC_VER
-  __declspec(dllexport)
-#endif
-      void mcs_emindex_free_deinit(UDF_INIT* initid)
+  void mcs_emindex_free_deinit(UDF_INIT* initid)
   {
   }
 

@@ -37,6 +37,9 @@
     #define WC_RSA_BLINDING
     #define NO_MULTIBYTE_PRINT
 
+    #define HAVE_CRL
+    #define HAVE_CRL_MONITOR
+
     #if defined(WOLFSSL_LIB)
         /* The lib */
         #define OPENSSL_EXTRA
@@ -71,6 +74,9 @@
                 #if 0
                     #define HAVE_INTEL_AVX2
                 #endif
+
+                #define USE_INTEL_CHACHA_SPEEDUP
+                #define USE_INTEL_POLY1305_SPEEDUP
             #endif
 
             /* Single Precision Support for RSA/DH 1024/2048/3072 and

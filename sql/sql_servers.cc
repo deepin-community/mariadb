@@ -45,6 +45,7 @@
 #include "sp.h"
 #include "transaction.h"
 #include "lock.h"                               // MYSQL_LOCK_IGNORE_TIMEOUT
+#include "create_options.h"
 
 /*
   We only use 1 mutex to guard the data structures - THR_LOCK_servers.
@@ -81,16 +82,17 @@ static int update_server_record_in_cache(FOREIGN_SERVER *existing,
 /* utility functions */
 static void merge_server_struct(FOREIGN_SERVER *from, FOREIGN_SERVER *to);
 
-static uchar *servers_cache_get_key(FOREIGN_SERVER *server, size_t *length,
-			       my_bool not_used __attribute__((unused)))
+static const uchar *servers_cache_get_key(const void *server_, size_t *length,
+                                          my_bool)
 {
+  auto server= static_cast<const FOREIGN_SERVER *>(server_);
   DBUG_ENTER("servers_cache_get_key");
   DBUG_PRINT("info", ("server_name_length %zd server_name %s",
                       server->server_name_length,
                       server->server_name));
 
-  *length= (uint) server->server_name_length;
-  DBUG_RETURN((uchar*) server->server_name);
+  *length= server->server_name_length;
+  DBUG_RETURN(reinterpret_cast<const uchar *>(server->server_name));
 }
 
 static PSI_memory_key key_memory_servers;
@@ -133,9 +135,10 @@ struct close_cached_connection_tables_arg
 };
 
 
-static my_bool close_cached_connection_tables_callback(
-  TDC_element *element, close_cached_connection_tables_arg *arg)
+static my_bool close_cached_connection_tables_callback(void *el, void *a)
 {
+  TDC_element *element= static_cast<TDC_element*>(el);
+  auto arg= static_cast<close_cached_connection_tables_arg*>(a);
   TABLE_LIST *tmp;
 
   mysql_mutex_lock(&element->LOCK_table_share);
@@ -188,9 +191,7 @@ static bool close_cached_connection_tables(THD *thd, LEX_CSTRING *connection)
   close_cached_connection_tables_arg argument= { thd, connection, 0 };
   DBUG_ENTER("close_cached_connections");
 
-  if (tdc_iterate(thd,
-                  (my_hash_walk_action) close_cached_connection_tables_callback,
-                  &argument))
+  if (tdc_iterate(thd, close_cached_connection_tables_callback, &argument))
     DBUG_RETURN(true);
 
   DBUG_RETURN(argument.tables ?
@@ -233,8 +234,9 @@ bool servers_init(bool dont_read_servers_table)
     DBUG_RETURN(TRUE);
 
   /* initialise our servers cache */
-  if (my_hash_init(key_memory_servers, &servers_cache, system_charset_info, 32, 0, 0,
-                   (my_hash_get_key) servers_cache_get_key, 0, 0))
+  if (my_hash_init(key_memory_servers, &servers_cache,
+                   Lex_ident_server::charset_info(),
+                   32, 0, 0, servers_cache_get_key, 0, 0))
   {
     return_val= TRUE; /* we failed, out of memory? */
     goto end;
@@ -252,8 +254,9 @@ bool servers_init(bool dont_read_servers_table)
   */
   if (!(thd=new THD(0)))
     DBUG_RETURN(TRUE);
-  thd->thread_stack= (char*) &thd;
   thd->store_globals();
+  thd->set_query_inner((char*) STRING_WITH_LEN("intern:servers_init"),
+                       default_charset_info);
   /*
     It is safe to call servers_reload() since servers_* arrays and hashes which
     will be freed there are global static objects and thus are initialized
@@ -284,7 +287,7 @@ end:
 
 static bool servers_load(THD *thd, TABLE_LIST *tables)
 {
-  TABLE *table;
+  TABLE *table= tables[0].table;
   READ_RECORD read_record_info;
   bool return_val= TRUE;
   DBUG_ENTER("servers_load");
@@ -293,7 +296,8 @@ static bool servers_load(THD *thd, TABLE_LIST *tables)
   free_root(&mem, MYF(0));
   init_sql_alloc(key_memory_servers, &mem, ACL_ALLOC_BLOCK_SIZE, 0, MYF(0));
 
-  if (init_read_record(&read_record_info,thd,table=tables[0].table, NULL, NULL,
+  table->use_all_columns();
+  if (init_read_record(&read_record_info,thd,table, NULL, NULL,
                        1,0, FALSE))
     DBUG_RETURN(1);
   while (!(read_record_info.read_record()))
@@ -370,6 +374,45 @@ end:
   DBUG_RETURN(return_val);
 }
 
+static bool parse_server_options_json(FOREIGN_SERVER *server, char *ptr)
+{
+  enum json_types vt;
+  const char *keyname, *keyname_end, *v;
+  int v_len, nkey= 0;
+  engine_option_value *option_list_last;
+  DBUG_ENTER("parse_server_options_json");
+  while ((vt= json_get_object_nkey(ptr, ptr+strlen(ptr), nkey++,
+                    &keyname, &keyname_end, &v, &v_len)) != JSV_NOTHING)
+  {
+    if (vt != JSV_STRING)
+      DBUG_RETURN(TRUE);
+    /*
+      We have to make copies here to create "clean" strings and
+      avoid mutating ptr.
+    */
+    Lex_cstring name= {keyname, keyname_end}, value= {v, v + v_len},
+      name_copy= safe_lexcstrdup_root(&mem, name),
+      value_copy= safe_lexcstrdup_root(&mem, value);
+    engine_option_value *option= new (&mem) engine_option_value(
+      engine_option_value::Name(name_copy),
+      engine_option_value::Value(value_copy), true);
+    option->link(&server->option_list, &option_list_last);
+    if (option->value.length)
+    {
+      LEX_CSTRING *optval= &option->value;
+      char *unescaped= (char *) alloca(optval->length);
+      int len= json_unescape_json(optval->str, optval->str + optval->length,
+                                  unescaped, unescaped + optval->length);
+      if (len < 0)
+        DBUG_RETURN(TRUE);
+      DBUG_ASSERT(len <= (int) optval->length);
+      if (len < (int) optval->length)
+        strncpy((char *) optval->str, unescaped, len);
+      optval->length= len;
+    }
+  }
+  DBUG_RETURN(FALSE);
+}
 
 /*
   Initialize structures responsible for servers used in federated
@@ -406,7 +449,6 @@ get_server_from_table_to_cache(TABLE *table)
   FOREIGN_SERVER *server= (FOREIGN_SERVER *)alloc_root(&mem,
                                                        sizeof(FOREIGN_SERVER));
   DBUG_ENTER("get_server_from_table_to_cache");
-  table->use_all_columns();
 
   /* get each field into the server struct ptr */
   ptr= get_field(&mem, table->field[0]);
@@ -431,6 +473,10 @@ get_server_from_table_to_cache(TABLE *table)
   server->scheme= ptr ? ptr : blank;
   ptr= get_field(&mem, table->field[8]);
   server->owner= ptr ? ptr : blank;
+  ptr= get_field(&mem, table->field[9]);
+  server->option_list= NULL;
+  if (ptr && parse_server_options_json(server, ptr))
+    DBUG_RETURN(TRUE);
   DBUG_PRINT("info", ("server->server_name %s", server->server_name));
   DBUG_PRINT("info", ("server->host %s", server->host));
   DBUG_PRINT("info", ("server->db %s", server->db));
@@ -463,7 +509,7 @@ get_server_from_table_to_cache(TABLE *table)
 
   RETURN VALUES
     0  - no error
-    other - error code
+    other - ER_ error code
 */
 
 static int 
@@ -547,15 +593,19 @@ insert_server_record_into_cache(FOREIGN_SERVER *server)
     advance of insertion into the mysql.servers table
 
   RETURN VALUE
-    VOID
-
+    0 - no errors
+    >0 - ER_ error code
 */
 
-static void 
+static int
 store_server_fields(TABLE *table, FOREIGN_SERVER *server)
 {
 
   table->use_all_columns();
+
+  if (table->s->fields < 9)
+    return ER_CANT_FIND_SYSTEM_REC;
+
   /*
     "server" has already been prepped by prepare_server_struct_for_<>
     so, all we need to do is check if the value is set (> -1 for port)
@@ -564,30 +614,69 @@ store_server_fields(TABLE *table, FOREIGN_SERVER *server)
     have changed will be set. If an insert, then all will be set,
     even if with empty strings
   */
-  if (server->host)
+  if (server->host &&
     table->field[1]->store(server->host,
-                           (uint) strlen(server->host), system_charset_info);
-  if (server->db)
+                           (uint) strlen(server->host), system_charset_info))
+    goto err;
+  if (server->db &&
     table->field[2]->store(server->db,
-                           (uint) strlen(server->db), system_charset_info);
-  if (server->username)
+                           (uint) strlen(server->db), system_charset_info))
+    goto err;
+  if (server->username &&
     table->field[3]->store(server->username,
-                           (uint) strlen(server->username), system_charset_info);
-  if (server->password)
+                           (uint) strlen(server->username), system_charset_info))
+    goto err;
+  if (server->password &&
     table->field[4]->store(server->password,
-                           (uint) strlen(server->password), system_charset_info);
-  if (server->port > -1)
-    table->field[5]->store(server->port);
-
-  if (server->socket)
+                           (uint) strlen(server->password), system_charset_info))
+    goto err;
+  if (server->port > -1 &&
+    table->field[5]->store(server->port))
+    goto err;
+  if (server->socket &&
     table->field[6]->store(server->socket,
-                           (uint) strlen(server->socket), system_charset_info);
-  if (server->scheme)
+                           (uint) strlen(server->socket), system_charset_info))
+    goto err;
+  if (server->scheme &&
     table->field[7]->store(server->scheme,
-                           (uint) strlen(server->scheme), system_charset_info);
-  if (server->owner)
+                           (uint) strlen(server->scheme), system_charset_info))
+    goto err;
+  if (server->owner &&
     table->field[8]->store(server->owner,
-                           (uint) strlen(server->owner), system_charset_info);
+                           (uint) strlen(server->owner), system_charset_info))
+    goto err;
+  {
+    engine_option_value *option= server->option_list;
+    StringBuffer<1024> json(table->field[9]->charset());
+    json.append('{');
+    while (option)
+    {
+      if (option->value.str)
+      {
+        json.append('"');
+        json.append(option->name.str, option->name.length);
+        json.append('"');
+        json.append({STRING_WITH_LEN(": \"")});
+        int len= json_escape_string(
+          option->value.str, option->value.str + option->value.length,
+          json.c_ptr() + json.length(), json.c_ptr() + json.alloced_length());
+        json.length(json.length() + len);
+        json.append('"');
+        json.append({STRING_WITH_LEN(", ")});
+      }
+      option= option->next;
+    }
+    if (server->option_list)
+      json.length(json.length() - 2);
+    json.append('}');
+    if (!table->field[9]->store(json.ptr(), json.length(), system_charset_info))
+      return 0;
+  }
+
+err:
+  THD *thd= table->in_use;
+  DBUG_ASSERT(thd->is_error());
+  return thd->get_stmt_da()->get_sql_errno();
 }
 
 /*
@@ -609,7 +698,7 @@ store_server_fields(TABLE *table, FOREIGN_SERVER *server)
 
   RETURN VALUE
     0 - no errors
-    >0 - error code
+    >0 - ER_ error code
 
   */
 
@@ -643,7 +732,8 @@ int insert_server_record(TABLE *table, FOREIGN_SERVER *server)
       error= 1;
     }
     /* store each field to be inserted */
-    store_server_fields(table, server);
+    if ((error= store_server_fields(table, server)))
+      DBUG_RETURN(error);
 
     DBUG_PRINT("info",("record for server '%s' not found!",
                        server->server_name));
@@ -973,9 +1063,15 @@ update_server_record(TABLE *table, FOREIGN_SERVER *server)
 
   table->use_all_columns();
   /* set the field that's the PK to the value we're looking for */
-  table->field[0]->store(server->server_name,
+  if (table->field[0]->store(server->server_name,
                          server->server_name_length,
-                         system_charset_info);
+                         system_charset_info))
+  {
+    DBUG_ASSERT(0); /* Protected by servers_cache */
+    THD *thd= table->in_use;
+    DBUG_ASSERT(thd->is_error());
+    return thd->get_stmt_da()->get_sql_errno();
+  }
 
   if (unlikely((error=
                 table->file->ha_index_read_idx_map(table->record[0], 0,
@@ -993,7 +1089,8 @@ update_server_record(TABLE *table, FOREIGN_SERVER *server)
   {
     /* ok, so we can update since the record exists in the table */
     store_record(table,record[1]);
-    store_server_fields(table, server);
+    if ((error= store_server_fields(table, server)))
+      goto end;
     if (unlikely((error=table->file->ha_update_row(table->record[1],
                                                    table->record[0])) &&
                  error != HA_ERR_RECORD_IS_THE_SAME))
@@ -1182,6 +1279,23 @@ end:
 }
 
 
+static void copy_option_list(MEM_ROOT *mem, FOREIGN_SERVER *server,
+                             engine_option_value *option_list)
+{
+  engine_option_value *option_list_last;
+  server->option_list= NULL;
+  for (engine_option_value *option= option_list; option;
+       option= option->next)
+  {
+    engine_option_value *new_option= new (mem) engine_option_value(option);
+    new_option->name= engine_option_value::Name(
+      safe_lexcstrdup_root(mem, option->name));
+    new_option->value= engine_option_value::Value(
+      safe_lexcstrdup_root(mem, option->value));
+    new_option->link(&server->option_list, &option_list_last);
+  }
+}
+
 /*
 
   SYNOPSIS
@@ -1237,6 +1351,7 @@ prepare_server_struct_for_insert(LEX_SERVER_OPTIONS *server_options)
   SET_SERVER_OR_RETURN(password, "");
   SET_SERVER_OR_RETURN(socket, "");
   SET_SERVER_OR_RETURN(owner, "");
+  copy_option_list(&mem, server, server_options->option_list);
 
   server->server_name_length= server_options->server_name.length;
 
@@ -1291,6 +1406,8 @@ prepare_server_struct_for_update(LEX_SERVER_OPTIONS *server_options,
   SET_ALTERED(socket);
   SET_ALTERED(scheme);
   SET_ALTERED(owner);
+  merge_engine_options(existing->option_list, server_options->option_list,
+                       &altered->option_list, &mem);
 
   /*
     port is initialised to -1, so if unset, it will be -1
@@ -1352,7 +1469,7 @@ void servers_free(bool end)
    FOREIGN_SEVER pointer (copy of one supplied FOREIGN_SERVER)
 */
 
-static FOREIGN_SERVER *clone_server(MEM_ROOT *mem, const FOREIGN_SERVER *server,
+static FOREIGN_SERVER *clone_server(MEM_ROOT *mem, FOREIGN_SERVER *server,
                                     FOREIGN_SERVER *buffer)
 {
   DBUG_ENTER("sql_server.cc:clone_server");
@@ -1373,6 +1490,7 @@ static FOREIGN_SERVER *clone_server(MEM_ROOT *mem, const FOREIGN_SERVER *server,
   buffer->socket= safe_strdup_root(mem, server->socket);
   buffer->owner= safe_strdup_root(mem, server->owner);
   buffer->host= safe_strdup_root(mem, server->host);
+  copy_option_list(mem, buffer, server->option_list);
 
  DBUG_RETURN(buffer);
 }

@@ -57,12 +57,10 @@ namespace
 {
 int setUp()
 {
-#ifndef _MSC_VER
   string cmd = "/bin/rm -f " + logFile + " >/dev/null 2>&1";
   int rc = system(cmd.c_str());
   cmd = "/bin/touch -f " + logFile + " >/dev/null 2>&1";
   rc = system(cmd.c_str());
-#endif
   return rc;
 }
 
@@ -86,12 +84,12 @@ void usage()
 
 const unsigned sysCatalogErr = logging::M0060;
 
-void errorHandler(const unsigned mid, const string& src, const string& msg, bool isCritErr = true)
+void messageHandler(const string& src, const string& msg, bool isCritErr = true)
 {
   logging::LoggingID lid(19);
   logging::MessageLog ml(lid);
   logging::Message::Args args;
-  logging::Message message(mid);
+  logging::Message message(sysCatalogErr);
 
   if (isCritErr)
   {
@@ -145,28 +143,6 @@ int main(int argc, char* argv[])
     return 1;
   }
 
-  oamModuleInfo_t t;
-  bool parentOAMModuleFlag = false;
-
-  // get local module info; validate running on Active Parent OAM Module
-  try
-  {
-    t = oam.getModuleInfo();
-    parentOAMModuleFlag = boost::get<4>(t);
-  }
-  catch (exception&)
-  {
-    parentOAMModuleFlag = true;
-  }
-
-  if (!parentOAMModuleFlag)
-  {
-    cerr << "Exiting, dbbuilder can only be run on the Active "
-            "Parent OAM Module"
-         << endl;
-    return 1;
-  }
-
   logFile = string(MCSLOGDIR) + "/install/dbbuilder.status";
 
   buildOption = atoi(argv[optind++]);
@@ -189,26 +165,65 @@ int main(int argc, char* argv[])
     if (access(logFile.c_str(), W_OK) != 0)
       canWrite = false;
 
+    // MCOL-5162 Automatic syscat upgrade
+    // The below std::unordered_map's are used by the
+    // SystemCatalog::upgrade() call.
+    bool isUpgrade = false;
+
+    std::unordered_map<int, std::pair<int, bool>> upgradeOidMap;
+    upgradeOidMap[OID_SYSTABLE_AUXCOLUMNOID] =         // This is the candidate OID for the upgrade.
+        std::make_pair(OID_SYSTABLE_OBJECTID, false);  // std::pair::first is the reference OID used
+                                                       // to fill the candidate OID with default vals
+                                                       // std::pair::second is set to false by default
+                                                       // which means the candidate OID will not be
+                                                       // upgraded. This is set to true in the code
+                                                       // below if a specific condition is met. Please
+                                                       // note that the candidate and reference OID
+                                                       // datatypes and colwidths are assumed to be the
+                                                       // same in SystemCatalog::upgrade().
+    upgradeOidMap[OID_SYSCOLUMN_CHARSETNUM] = std::make_pair(OID_SYSCOLUMN_OBJECTID, false);
+
+    std::unordered_map<int, OidTypeT> upgradeOidTypeMap;
+    upgradeOidTypeMap[OID_SYSTABLE_AUXCOLUMNOID] = std::make_pair(CalpontSystemCatalog::INT, 4);
+    upgradeOidTypeMap[OID_SYSCOLUMN_CHARSETNUM] = std::make_pair(CalpontSystemCatalog::INT, 4);
+
+    std::unordered_map<int, std::string> upgradeOidDefaultValStrMap;
+    upgradeOidDefaultValStrMap[OID_SYSTABLE_AUXCOLUMNOID] = "0";
+    upgradeOidDefaultValStrMap[OID_SYSCOLUMN_CHARSETNUM] = "0";
+
     try
     {
       if (checkNotThere(1001) != 0)
       {
-        string cmd = "echo 'FAILED: buildOption=" + oam.itoa(buildOption) + "' > " + logFile;
-
-        if (canWrite)
+        for (auto iter = upgradeOidMap.begin(); iter != upgradeOidMap.end(); iter++)
         {
-          rc = system(cmd.c_str());
-        }
-        else
-        {
-          cerr << cmd << endl;
+          if (checkNotThere(iter->first) == 0)
+          {
+            (iter->second).second = true;
+            isUpgrade = true;
+          }
+          messageHandler("", std::string("Upgrade flag is ") + std::to_string(isUpgrade) + std::string(" after checking upgrade candidate OID ") + oam.itoa(iter->first) + std::string(" "), false);
         }
 
-        errorHandler(sysCatalogErr, "Build system catalog",
-                     "System catalog appears to exist.  It will remain intact "
-                     "for reuse.  The database is not recreated.",
-                     false);
-        return 1;
+        if (!isUpgrade)
+        {
+          string cmd = "echo 'OK: buildOption=" + oam.itoa(buildOption) + "' > " + logFile;
+
+          if (canWrite)
+          {
+            rc = system(cmd.c_str());
+          }
+          else
+          {
+            cerr << cmd << endl;
+          }
+
+          messageHandler("Build system catalog",
+                         "System catalog appears to exist.  It will remain intact "
+                         "for reuse.  The database is not recreated.",
+                         false);
+          return 1;
+        }
       }
 
       //@bug5554, make sure IDBPolicy matches the Columnstore.xml config
@@ -218,7 +233,7 @@ int main(int argc, char* argv[])
         config::Config* sysConfig = config::Config::makeConfig(calpontConfigFile.c_str());
         string tmp = sysConfig->getConfig("Installation", "DBRootStorageType");
 
-        if (boost::iequals(tmp, "hdfs"))
+        if (datatypes::ASCIIStringCaseInsensetiveEquals(tmp, "hdfs"))
         {
           // HDFS is configured
           if (!IDBPolicy::useHdfs())  // error install plugin
@@ -237,7 +252,7 @@ int main(int argc, char* argv[])
         else
           cerr << cmd << endl;
 
-        errorHandler(sysCatalogErr, "Build system catalog", ex.what(), false);
+        messageHandler("Build system catalog", ex.what(), false);
         return 1;
       }
       catch (...)
@@ -249,7 +264,7 @@ int main(int argc, char* argv[])
         else
           cerr << cmd << endl;
 
-        errorHandler(sysCatalogErr, "Build system catalog", "HDFS check failed.", false);
+        messageHandler("Build system catalog", "HDFS check failed.", false);
         return 1;
       }
 
@@ -259,19 +274,31 @@ int main(int argc, char* argv[])
       }
 
       SystemCatalog sysCatalog;
-      sysCatalog.build();
+
+      if (!isUpgrade)
+      {
+        sysCatalog.build();
+      }
+      else
+      {
+        string cmd = "echo 'Upgrade system catalog' > " + logFile;
+        if (canWrite)
+        {
+          rc = system(cmd.c_str());
+        }
+        else
+        {
+          cerr << cmd << endl;
+        }
+        sysCatalog.upgrade(upgradeOidMap, upgradeOidTypeMap, upgradeOidDefaultValStrMap);
+      }
 
       std::string cmd = "echo 'OK: buildOption=" + oam.itoa(buildOption) + "' > " + logFile;
 
       if (canWrite)
         rc = system(cmd.c_str());
       else
-#ifdef _MSC_VER
-        (void)0;
-
-#else
         cerr << cmd << endl;
-#endif
 
       cmd = "save_brm";
 
@@ -284,7 +311,7 @@ int main(int argc, char* argv[])
           ostringstream os;
           os << "Warning: running " << cmd << " failed.  This is usually non-fatal.";
           cerr << os.str() << endl;
-          errorHandler(sysCatalogErr, "Save BRM", os.str());
+          messageHandler("Save BRM", os.str());
         }
       }
       else
@@ -301,7 +328,7 @@ int main(int argc, char* argv[])
       else
         cerr << cmd << endl;
 
-      errorHandler(sysCatalogErr, "Build system catalog", ex.what());
+      messageHandler("Build system catalog", ex.what());
     }
     catch (...)
     {
@@ -313,7 +340,7 @@ int main(int argc, char* argv[])
         cerr << cmd << endl;
 
       string err("Caught unknown exception!");
-      errorHandler(sysCatalogErr, "Build system catalog", err);
+      messageHandler("Build system catalog", err);
     }
   }
   else
@@ -324,4 +351,3 @@ int main(int argc, char* argv[])
 
   return 1;
 }
-// vim:ts=4 sw=4:

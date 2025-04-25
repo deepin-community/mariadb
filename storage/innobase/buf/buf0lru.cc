@@ -39,9 +39,6 @@ Created 11/5/1995 Heikki Tuuri
 #include "srv0mon.h"
 #include "my_cpu.h"
 
-/** Flush this many pages in buf_LRU_get_free_block() */
-size_t innodb_lru_flush_size;
-
 /** The number of blocks from the LRU_old pointer onward, including
 the block pointed to, must be buf_pool.LRU_old_ratio/BUF_LRU_OLD_RATIO_DIV
 of the whole LRU list length, except that the tolerance defined below
@@ -59,10 +56,6 @@ static constexpr ulint BUF_LRU_OLD_TOLERANCE = 20;
 /** If we switch on the InnoDB monitor because there are too few available
 frames in the buffer pool, we set this to TRUE */
 static bool buf_lru_switched_on_innodb_mon = false;
-
-/** True if diagnostic message about difficult to find free blocks
-in the buffer bool has already printed. */
-static bool	buf_lru_free_blocks_error_printed;
 
 /******************************************************************//**
 These statistics are not 'of' LRU but 'for' LRU.  We keep count of I/O
@@ -280,6 +273,10 @@ buf_block_t* buf_LRU_get_free_only()
 	while (block != NULL) {
 		ut_ad(block->page.in_free_list);
 		ut_d(block->page.in_free_list = FALSE);
+#ifdef BTR_CUR_HASH_ADAPT
+		ut_ad(!block->n_pointers);
+		ut_ad(!block->index);
+#endif
 		ut_ad(!block->page.oldest_modification());
 		ut_ad(!block->page.in_LRU_list);
 		ut_a(!block->page.in_file());
@@ -289,10 +286,6 @@ buf_block_t* buf_LRU_get_free_only()
 		    || UT_LIST_GET_LEN(buf_pool.withdraw)
 			>= buf_pool.withdraw_target
 		    || !buf_pool.will_be_withdrawn(block->page)) {
-			/* No adaptive hash index entries may point to
-			a free block. */
-			assert_block_ahi_empty(block);
-
 			block->page.set_state(buf_page_t::MEMORY);
 			block->page.set_os_used();
 			break;
@@ -373,139 +366,113 @@ block to read in a page. Note that we only ever get a block from
 the free list. Even when we flush a page or find a page in LRU scan
 we put it to free list to be used.
 * iteration 0:
-  * get a block from the buf_pool.free list, success:done
+  * get a block from the buf_pool.free list
   * if buf_pool.try_LRU_scan is set
     * scan LRU up to 100 pages to free a clean block
     * success:retry the free list
-  * flush up to innodb_lru_flush_size LRU blocks to data files
-    (until UT_LIST_GET_GEN(buf_pool.free) < innodb_lru_scan_depth)
-    * on buf_page_write_complete() the blocks will put on buf_pool.free list
-    * success: retry the free list
+  * invoke buf_pool.page_cleaner_wakeup(true) and wait its completion
 * subsequent iterations: same as iteration 0 except:
-  * scan whole LRU list
-  * scan LRU list even if buf_pool.try_LRU_scan is not set
+  * scan the entire LRU list
 
-@param have_mutex  whether buf_pool.mutex is already being held
-@return the free control block, in state BUF_BLOCK_MEMORY */
-buf_block_t *buf_LRU_get_free_block(bool have_mutex)
+@param get  how to allocate the block
+@return the free control block, in state BUF_BLOCK_MEMORY
+@retval nullptr if get==have_no_mutex_soft and memory was not available */
+buf_block_t* buf_LRU_get_free_block(buf_LRU_get get)
 {
-	ulint		n_iterations	= 0;
-	ulint		flush_failures	= 0;
-	MONITOR_INC(MONITOR_LRU_GET_FREE_SEARCH);
-	if (have_mutex) {
-		mysql_mutex_assert_owner(&buf_pool.mutex);
-		goto got_mutex;
-	}
-	DBUG_EXECUTE_IF("recv_ran_out_of_buffer",
-			if (recv_recovery_is_on()
-			    && recv_sys.apply_log_recs) {
-				mysql_mutex_lock(&buf_pool.mutex);
-				goto flush_lru;
-			});
-get_mutex:
-	mysql_mutex_lock(&buf_pool.mutex);
-got_mutex:
-	buf_LRU_check_size_of_non_data_objects();
-	buf_block_t* block;
+  bool waited= false;
+  MONITOR_INC(MONITOR_LRU_GET_FREE_SEARCH);
+  if (UNIV_LIKELY(get != have_mutex))
+    mysql_mutex_lock(&buf_pool.mutex);
 
-	DBUG_EXECUTE_IF("ib_lru_force_no_free_page",
-		if (!buf_lru_free_blocks_error_printed) {
-			n_iterations = 21;
-			goto not_found;});
+  buf_LRU_check_size_of_non_data_objects();
+
+  buf_block_t *block;
 
 retry:
-	/* If there is a block in the free list, take it */
-	if ((block = buf_LRU_get_free_only()) != nullptr) {
+  /* If there is a block in the free list, take it */
+  block= buf_LRU_get_free_only();
+  if (block)
+  {
 got_block:
-		if (!have_mutex) {
-			mysql_mutex_unlock(&buf_pool.mutex);
-		}
-		block->page.zip.clear();
-		return block;
-	}
+    const ulint LRU_size= UT_LIST_GET_LEN(buf_pool.LRU);
+    const ulint available= UT_LIST_GET_LEN(buf_pool.free);
+    const ulint scan_depth= buf_pool.LRU_scan_depth / 2;
+    ut_ad(LRU_size <= BUF_LRU_MIN_LEN ||
+          available >= scan_depth || buf_pool.need_LRU_eviction());
 
-	MONITOR_INC( MONITOR_LRU_GET_FREE_LOOPS );
-	if (n_iterations || buf_pool.try_LRU_scan) {
-		/* If no block was in the free list, search from the
-		end of the LRU list and try to free a block there.
-		If we are doing for the first time we'll scan only
-		tail of the LRU list otherwise we scan the whole LRU
-		list. */
-		if (buf_LRU_scan_and_free_block(n_iterations
-						? ULINT_UNDEFINED : 100)) {
-			goto retry;
-		}
+    ut_d(bool signalled = false);
 
-		/* Tell other threads that there is no point
-		in scanning the LRU list. */
-		buf_pool.try_LRU_scan = false;
-	}
+    if (UNIV_UNLIKELY(available < scan_depth) && LRU_size > BUF_LRU_MIN_LEN)
+    {
+      mysql_mutex_lock(&buf_pool.flush_list_mutex);
+      if (!buf_pool.page_cleaner_active())
+      {
+        buf_pool.page_cleaner_wakeup(true);
+        ut_d(signalled = true);
+      }
+      mysql_mutex_unlock(&buf_pool.flush_list_mutex);
+    }
 
-	for (;;) {
-		if ((block = buf_LRU_get_free_only()) != nullptr) {
-			goto got_block;
-		}
-		mysql_mutex_unlock(&buf_pool.mutex);
-		mysql_mutex_lock(&buf_pool.flush_list_mutex);
-		const auto n_flush = buf_pool.n_flush();
-		if (!buf_pool.try_LRU_scan) {
-			buf_pool.page_cleaner_wakeup(true);
-		}
-		mysql_mutex_unlock(&buf_pool.flush_list_mutex);
-		mysql_mutex_lock(&buf_pool.mutex);
-		if (!n_flush) {
-			goto not_found;
-		}
-		if (!buf_pool.try_LRU_scan) {
-			my_cond_wait(&buf_pool.done_free,
-				     &buf_pool.mutex.m_mutex);
-		}
-	}
+    if (UNIV_LIKELY(get != have_mutex))
+      mysql_mutex_unlock(&buf_pool.mutex);
 
-not_found:
-	if (n_iterations > 1) {
-		MONITOR_INC( MONITOR_LRU_GET_FREE_WAITS );
-	}
+    DBUG_EXECUTE_IF("ib_free_page_sleep",
+    {
+      static bool do_sleep = true;
+      if (do_sleep && signalled)
+      {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        do_sleep = false;
+      }
+    });
 
-	if (n_iterations == 21 && !buf_lru_free_blocks_error_printed
-	    && srv_buf_pool_old_size == srv_buf_pool_size) {
-		buf_lru_free_blocks_error_printed = true;
-		mysql_mutex_unlock(&buf_pool.mutex);
-		ib::warn() << "Difficult to find free blocks in the buffer pool"
-			" (" << n_iterations << " search iterations)! "
-			<< flush_failures << " failed attempts to"
-			" flush a page!"
-			" Consider increasing innodb_buffer_pool_size."
-			" Pending flushes (fsync): "
-			<< fil_n_pending_tablespace_flushes
-			<< ". " << os_n_file_reads << " OS file reads, "
-			<< os_n_file_writes << " OS file writes, "
-			<< os_n_fsyncs
-			<< " OS fsyncs.";
-		mysql_mutex_lock(&buf_pool.mutex);
-	}
+    block->page.zip.clear();
+    return block;
+  }
 
-	/* No free block was found: try to flush the LRU list.
-	The freed blocks will be up for grabs for all threads.
+  MONITOR_INC(MONITOR_LRU_GET_FREE_LOOPS);
+  if (waited || buf_pool.try_LRU_scan)
+  {
+    /* If no block was in the free list, search from the end of the
+    LRU list and try to free a block there.  If we are doing for the
+    first time we'll scan only tail of the LRU list otherwise we scan
+    the whole LRU list. */
+    if (buf_LRU_scan_and_free_block(waited ? ULINT_UNDEFINED : 100))
+      goto retry;
 
-	TODO: A more elegant way would have been to return one freed
-	up block to the caller here but the code that deals with
-	removing the block from buf_pool.page_hash and buf_pool.LRU is fairly
-	involved (particularly in case of ROW_FORMAT=COMPRESSED pages). We
-	can do that in a separate patch sometime in future. */
-#ifndef DBUG_OFF
-flush_lru:
-#endif
-	if (!buf_flush_LRU(innodb_lru_flush_size, true)) {
-		MONITOR_INC(MONITOR_LRU_SINGLE_FLUSH_FAILURE_COUNT);
-		++flush_failures;
-	}
+    /* Tell other threads that there is no point in scanning the LRU
+    list. */
+    buf_pool.try_LRU_scan= false;
+  }
 
-	n_iterations++;
-	buf_pool.stat.LRU_waits++;
-	mysql_mutex_unlock(&buf_pool.mutex);
-	buf_dblwr.flush_buffered_writes();
-	goto get_mutex;
+  if (get == have_no_mutex_soft)
+  {
+    mysql_mutex_unlock(&buf_pool.mutex);
+    return nullptr;
+  }
+
+  waited= true;
+
+  while (!(block= buf_LRU_get_free_only()))
+  {
+    buf_pool.stat.LRU_waits++;
+
+    timespec abstime;
+    set_timespec(abstime, 1);
+
+    mysql_mutex_lock(&buf_pool.flush_list_mutex);
+    if (!buf_pool.page_cleaner_active())
+      buf_pool.page_cleaner_wakeup(true);
+    mysql_mutex_unlock(&buf_pool.flush_list_mutex);
+    if (my_cond_timedwait(&buf_pool.done_free, &buf_pool.mutex.m_mutex,
+                          &abstime))
+    {
+      buf_pool.LRU_warn();
+      buf_LRU_check_size_of_non_data_objects();
+    }
+  }
+
+  goto got_block;
 }
 
 /** Move the LRU_old pointer so that the length of the old blocks list
@@ -787,6 +754,14 @@ void buf_page_make_young(buf_page_t *bpage)
   mysql_mutex_unlock(&buf_pool.mutex);
 }
 
+bool buf_page_make_young_if_needed(buf_page_t *bpage)
+{
+  const bool not_first{bpage->set_accessed()};
+  if (UNIV_UNLIKELY(buf_page_peek_if_too_old(bpage)))
+    buf_page_make_young(bpage);
+  return not_first;
+}
+
 /** Try to free a block. If bpage is a descriptor of a compressed-only
 ROW_FORMAT=COMPRESSED page, the buf_page_t object will be freed as well.
 The caller must hold buf_pool.mutex.
@@ -808,7 +783,7 @@ bool buf_LRU_free_page(buf_page_t *bpage, bool zip)
 
 	/* We must hold an exclusive hash_lock to prevent
 	bpage->can_relocate() from changing due to a concurrent
-	execution of buf_page_get_low(). */
+	execution of buf_page_get_gen(). */
 	buf_pool_t::hash_chain& chain= buf_pool.page_hash.cell_get(id.fold());
 	page_hash_latch& hash_lock = buf_pool.page_hash.lock_get(chain);
 	/* We cannot use transactional_lock_guard here,
@@ -832,7 +807,7 @@ bool buf_LRU_free_page(buf_page_t *bpage, bool zip)
 		break;
 	case 1:
 		mysql_mutex_lock(&buf_pool.flush_list_mutex);
-		if (const lsn_t om = bpage->oldest_modification()) {
+		if (ut_d(const lsn_t om =) bpage->oldest_modification()) {
 			ut_ad(om == 1);
 			buf_pool.delete_from_flush_list(bpage);
 		}
@@ -853,7 +828,6 @@ relocate_compressed:
 			ut_d(uint32_t s=) b->fix();
 			ut_ad(s == buf_page_t::FREED
 			      || s == buf_page_t::UNFIXED
-			      || s == buf_page_t::IBUF_EXIST
 			      || s == buf_page_t::REINIT);
 		}
 		break;
@@ -981,7 +955,7 @@ func_exit:
 		order to avoid bogus Valgrind or MSAN warnings.*/
 
 		MEM_MAKE_DEFINED(block->page.frame, srv_page_size);
-		btr_search_drop_page_hash_index(block, false);
+		btr_search_drop_page_hash_index(block, nullptr);
 		MEM_UNDEFINED(block->page.frame, srv_page_size);
 		mysql_mutex_lock(&buf_pool.mutex);
 	}
@@ -1007,7 +981,10 @@ buf_LRU_block_free_non_file_page(
 	void*		data;
 
 	ut_ad(block->page.state() == buf_page_t::MEMORY);
+#ifdef BTR_CUR_HASH_ADAPT
 	assert_block_ahi_empty(block);
+	block->n_hash_helps = 0;
+#endif
 	ut_ad(!block->page.in_free_list);
 	ut_ad(!block->page.oldest_modification());
 	ut_ad(!block->page.in_LRU_list);
@@ -1049,7 +1026,7 @@ buf_LRU_block_free_non_file_page(
 }
 
 /** Release a memory block to the buffer pool. */
-ATTRIBUTE_COLD void buf_pool_t::free_block(buf_block_t *block)
+ATTRIBUTE_COLD void buf_pool_t::free_block(buf_block_t *block) noexcept
 {
   ut_ad(this == &buf_pool);
   mysql_mutex_lock(&mutex);
@@ -1200,13 +1177,12 @@ static bool buf_LRU_block_remove_hashed(buf_page_t *bpage, const page_id_t id,
 @param bpage    x-latched page that was found corrupted
 @param state    expected current state of the page */
 ATTRIBUTE_COLD
-void buf_pool_t::corrupted_evict(buf_page_t *bpage, uint32_t state)
+void buf_pool_t::corrupted_evict(buf_page_t *bpage, uint32_t state) noexcept
 {
   const page_id_t id{bpage->id()};
   buf_pool_t::hash_chain &chain= buf_pool.page_hash.cell_get(id.fold());
   page_hash_latch &hash_lock= buf_pool.page_hash.lock_get(chain);
 
-  recv_sys.free_corrupted_page(id);
   mysql_mutex_lock(&mutex);
   hash_lock.lock();
 
@@ -1322,6 +1298,51 @@ bool buf_LRU_scan_and_free_block(ulint limit)
 
   return buf_LRU_free_from_unzip_LRU_list(limit) ||
     buf_LRU_free_from_common_LRU_list(limit);
+}
+
+void buf_LRU_truncate_temp(uint32_t threshold)
+{
+  /* Set the extent descriptor page state as FREED */
+  for (uint32_t cur_xdes_page= xdes_calc_descriptor_page(
+         0, fil_system.temp_space->free_limit);
+       cur_xdes_page >= threshold;)
+  {
+    mtr_t mtr;
+    mtr.start();
+    if (buf_block_t* block= buf_page_get_gen(
+          page_id_t(SRV_TMP_SPACE_ID, cur_xdes_page), 0, RW_X_LATCH,
+          nullptr, BUF_PEEK_IF_IN_POOL, &mtr))
+    {
+      uint32_t state= block->page.state();
+      ut_ad(state > buf_page_t::UNFIXED);
+      ut_ad(state < buf_page_t::READ_FIX);
+      block->page.set_freed(state);
+    }
+    cur_xdes_page-= uint32_t(srv_page_size);
+    mtr.commit();
+  }
+
+  const page_id_t limit{SRV_TMP_SPACE_ID, threshold};
+  mysql_mutex_lock(&buf_pool.mutex);
+  for (buf_page_t* bpage = UT_LIST_GET_FIRST(buf_pool.LRU);
+       bpage;)
+  {
+    buf_page_t* next= UT_LIST_GET_NEXT(LRU, bpage);
+    if (bpage->id() >= limit)
+    {
+    #ifdef UNIV_DEBUG
+      if (bpage->lock.u_lock_try(0))
+      {
+        ut_ad(bpage->state() == buf_page_t::FREED);
+        bpage->lock.u_unlock();
+      }
+    #endif /* UNIV_DEBUG */
+      ut_ad(!reinterpret_cast<buf_block_t*>(bpage)->index);
+      buf_LRU_free_page(bpage, true);
+    }
+    bpage= next;
+  }
+  mysql_mutex_unlock(&buf_pool.mutex);
 }
 
 #ifdef UNIV_DEBUG

@@ -21,6 +21,7 @@
 #include "slave.h"
 #include "strfunc.h"
 #include "sql_repl.h"
+#include "sql_acl.h"
 
 #ifdef HAVE_REPLICATION
 
@@ -31,7 +32,7 @@ static void init_master_log_pos(Master_info* mi);
 Master_info::Master_info(LEX_CSTRING *connection_name_arg,
                          bool is_slave_recovery)
   :Slave_reporting_capability("I/O"),
-   ssl(0), ssl_verify_server_cert(1), fd(-1), io_thd(0), 
+   ssl(1), ssl_verify_server_cert(1), fd(-1), io_thd(0),
    rli(is_slave_recovery), port(MYSQL_PORT),
    checksum_alg_before_fd(BINLOG_CHECKSUM_ALG_UNDEF),
    connect_retry(DEFAULT_CONNECT_RETRY), inited(0), abort_slave(0),
@@ -43,7 +44,8 @@ Master_info::Master_info(LEX_CSTRING *connection_name_arg,
    gtid_reconnect_event_skip_count(0), gtid_event_seen(false),
    in_start_all_slaves(0), in_stop_all_slaves(0), in_flush_all_relay_logs(0),
    users(0), killed(0),
-   total_ddl_groups(0), total_non_trans_groups(0), total_trans_groups(0)
+   total_ddl_groups(0), total_non_trans_groups(0), total_trans_groups(0),
+   semi_sync_reply_enabled(0)
 {
   char *tmp;
   host[0] = 0; user[0] = 0; password[0] = 0;
@@ -55,16 +57,22 @@ Master_info::Master_info(LEX_CSTRING *connection_name_arg,
     Store connection name and lower case connection name
     It's safe to ignore any OMM errors as this is checked by error()
   */
-  connection_name.length= cmp_connection_name.length=
-    connection_name_arg->length;
+  connection_name.length= connection_name_arg->length;
+  size_t cmp_connection_name_nbytes= connection_name_arg->length *
+                                     system_charset_info->casedn_multiply() +
+                                     1;
   if ((connection_name.str= tmp= (char*)
-       my_malloc(PSI_INSTRUMENT_ME, connection_name_arg->length*2+2, MYF(MY_WME))))
+       my_malloc(PSI_INSTRUMENT_ME, connection_name_arg->length + 1 +
+                                    cmp_connection_name_nbytes,
+                 MYF(MY_WME))))
   {
     strmake(tmp, connection_name_arg->str, connection_name.length);
     tmp+= connection_name_arg->length+1;
     cmp_connection_name.str= tmp;
-    memcpy(tmp, connection_name_arg->str, connection_name.length+1);
-    my_casedn_str(system_charset_info, tmp);
+    cmp_connection_name.length=
+      system_charset_info->casedn_z(connection_name_arg->str,
+                                    connection_name_arg->length,
+                                    tmp, cmp_connection_name_nbytes);
   }
   /*
     When MySQL restarted, all Rpl_filter settings which aren't in the my.cnf
@@ -219,8 +227,6 @@ void init_master_log_pos(Master_info* mi)
   mi->gtid_reconnect_event_skip_count= 0;
   mi->gtid_event_seen= false;
 
-  /* Intentionally init ssl_verify_server_cert to 0, no option available  */
-  mi->ssl_verify_server_cert= 0;
   /* 
     always request heartbeat unless master_heartbeat_period is set
     explicitly zero.  Here is the default value for heartbeat period
@@ -497,7 +503,7 @@ file '%s')", fname);
     if (init_intvar_from_file(&master_log_pos, &mi->file, 4) ||
         init_strvar_from_file(mi->host, sizeof(mi->host), &mi->file, 0) ||
         init_strvar_from_file(mi->user, sizeof(mi->user), &mi->file, "test") ||
-        init_strvar_from_file(mi->password, SCRAMBLED_PASSWORD_CHAR_LENGTH+1,
+        init_strvar_from_file(mi->password, sizeof(mi->password),
                               &mi->file, 0) ||
         init_intvar_from_file(&port, &mi->file, MYSQL_PORT) ||
         init_intvar_from_file(&connect_retry, &mi->file,
@@ -865,12 +871,12 @@ void end_master_info(Master_info* mi)
 }
 
 /* Multi-Master By P.Linux */
-uchar *get_key_master_info(Master_info *mi, size_t *length,
-                           my_bool not_used __attribute__((unused)))
+const uchar *get_key_master_info(const void *mi_, size_t *length, my_bool)
 {
+  auto mi= static_cast<const Master_info *>(mi_);
   /* Return lower case name */
   *length= mi->cmp_connection_name.length;
-  return (uchar*) mi->cmp_connection_name.str;
+  return reinterpret_cast<const uchar *>(mi->cmp_connection_name.str);
 }
 
 /*
@@ -880,8 +886,9 @@ uchar *get_key_master_info(Master_info *mi, size_t *length,
   Stops associated slave threads and frees master_info
 */
 
-void free_key_master_info(Master_info *mi)
+void free_key_master_info(void *mi_)
 {
+  Master_info *mi= static_cast<Master_info*>(mi_);
   DBUG_ENTER("free_key_master_info");
   mysql_mutex_unlock(&LOCK_active_mi);
 
@@ -1118,17 +1125,16 @@ bool Master_info_index::init_all_master_info()
   }
 
   /* Initialize Master_info Hash Table */
-  if (my_hash_init(PSI_INSTRUMENT_ME, &master_info_hash, system_charset_info, 
-                   MAX_REPLICATION_THREAD, 0, 0, 
-                   (my_hash_get_key) get_key_master_info, 
-                   (my_hash_free_key)free_key_master_info, HASH_UNIQUE))
-  {                                                      
+  if (my_hash_init(PSI_INSTRUMENT_ME, &master_info_hash,
+                   Lex_ident_master_info::charset_info(),
+                   MAX_REPLICATION_THREAD, 0, 0, get_key_master_info,
+                   free_key_master_info, HASH_UNIQUE))
+  {
     sql_print_error("Initializing Master_info hash table failed");
     DBUG_RETURN(1);
   }
 
   thd= new THD(next_thread_id());  /* Needed by start_slave_threads */
-  thd->thread_stack= (char*) &thd;
   thd->store_globals();
 
   reinit_io_cache(&index_file, READ_CACHE, 0L,0,0);
@@ -1182,8 +1188,7 @@ bool Master_info_index::init_all_master_info()
       else
       {
         /* Master_info already in HASH */
-        sql_print_error(ER_THD_OR_DEFAULT(current_thd,
-                                          ER_CONNECTION_ALREADY_EXISTS),
+        sql_print_error(ER_DEFAULT(ER_CONNECTION_ALREADY_EXISTS),
                         (int) connection_name.length, connection_name.str,
                         (int) connection_name.length, connection_name.str);
         mi->unlock_slave_threads();
@@ -1201,8 +1206,7 @@ bool Master_info_index::init_all_master_info()
                                              Sql_condition::WARN_LEVEL_NOTE))
       {
         /* Master_info was already registered */
-        sql_print_error(ER_THD_OR_DEFAULT(current_thd,
-                                          ER_CONNECTION_ALREADY_EXISTS),
+        sql_print_error(ER_DEFAULT(ER_CONNECTION_ALREADY_EXISTS),
                         (int) connection_name.length, connection_name.str,
                         (int) connection_name.length, connection_name.str);
         mi->unlock_slave_threads();
@@ -1369,20 +1373,17 @@ Master_info_index::get_master_info(const LEX_CSTRING *connection_name,
                                    Sql_condition::enum_warning_level warning)
 {
   Master_info *mi;
-  char buff[MAX_CONNECTION_NAME+1], *res;
-  size_t buff_length;
   DBUG_ENTER("get_master_info");
   DBUG_PRINT("enter",
              ("connection_name: '%.*s'", (int) connection_name->length,
               connection_name->str));
 
   /* Make name lower case for comparison */
-  res= strmake(buff, connection_name->str, connection_name->length);
-  my_casedn_str(system_charset_info, buff); 
-  buff_length= (size_t) (res-buff);
-
+  IdentBufferCasedn<MAX_CONNECTION_NAME> buff(connection_name->str ?
+                                              *connection_name :
+                                              empty_clex_str);
   mi= (Master_info*) my_hash_search(&master_info_hash,
-                                    (uchar*) buff, buff_length);
+                                    (const uchar*) buff.ptr(), buff.length());
   if (!mi && warning != Sql_condition::WARN_LEVEL_NOTE)
   {
     my_error(WARN_NO_MASTER_INFO,
@@ -1521,7 +1522,7 @@ bool Master_info_index::remove_master_info(Master_info *mi, bool clear_log_files
         my_close(index_file_nr,MYF(0));
 
       sql_print_error("Create of Master Info Index file '%s' failed with "
-                      "error: %M",
+                      "error: %iE",
                       index_file_name, error);
       DBUG_RETURN(TRUE);
     }
@@ -1648,6 +1649,9 @@ bool Master_info_index::start_all_slaves(THD *thd)
   DBUG_ENTER("start_all_slaves");
   mysql_mutex_assert_owner(&LOCK_active_mi);
 
+  if (check_global_access(thd, PRIV_STMT_START_SLAVE))
+    DBUG_RETURN(true);
+
   for (uint i= 0; i< master_info_hash.records; i++)
   {
     Master_info *mi;
@@ -1725,6 +1729,9 @@ bool Master_info_index::stop_all_slaves(THD *thd)
   DBUG_ENTER("stop_all_slaves");
   mysql_mutex_assert_owner(&LOCK_active_mi);
   DBUG_ASSERT(thd);
+
+  if (check_global_access(thd, PRIV_STMT_STOP_SLAVE))
+    DBUG_RETURN(true);
 
   for (uint i= 0; i< master_info_hash.records; i++)
   {
@@ -1914,6 +1921,14 @@ void Domain_id_filter::store_ids(THD *thd)
   }
 }
 
+void Domain_id_filter::store_ids(Field ***field)
+{
+  for (int i= DO_DOMAIN_IDS; i <= IGNORE_DOMAIN_IDS; i ++)
+  {
+    field_store_ids(*((*field)++), &m_domain_ids[i]);
+  }
+}
+
 /**
   Initialize the given domain_id list (DYNAMIC_ARRAY) with the
   space-separated list of numbers from the specified IO_CACHE where
@@ -1988,6 +2003,32 @@ void update_change_master_ids(DYNAMIC_ARRAY *new_ids, DYNAMIC_ARRAY *old_ids)
   return;
 }
 
+static size_t store_ids(DYNAMIC_ARRAY *ids, char *buff, size_t buff_len)
+{
+  uint i;
+  size_t cur_len;
+
+  for (i= 0, buff[0]= 0, cur_len= 0; i < ids->elements; i++)
+  {
+    ulong id, len;
+    char dbuff[FN_REFLEN];
+    get_dynamic(ids, (void *) &id, i);
+    len= sprintf(dbuff, (i == 0 ? "%lu" : ", %lu"), id);
+    if (cur_len + len + 4 > buff_len)
+    {
+      /*
+        break the loop whenever remained space could not fit
+        ellipses on the next cycle
+      */
+      cur_len+= sprintf(dbuff + cur_len, "...");
+      break;
+    }
+    cur_len+= sprintf(buff + cur_len, "%s", dbuff);
+  }
+  return cur_len;
+}
+
+
 /**
   Serialize and store the ids from the given ids DYNAMIC_ARRAY into the thd's
   protocol buffer.
@@ -2001,27 +2042,16 @@ void update_change_master_ids(DYNAMIC_ARRAY *new_ids, DYNAMIC_ARRAY *old_ids)
 void prot_store_ids(THD *thd, DYNAMIC_ARRAY *ids)
 {
   char buff[FN_REFLEN];
-  uint i, cur_len;
-
-  for (i= 0, buff[0]= 0, cur_len= 0; i < ids->elements; i++)
-  {
-    ulong id, len;
-    char dbuff[FN_REFLEN];
-    get_dynamic(ids, (void *) &id, i);
-    len= sprintf(dbuff, (i == 0 ? "%lu" : ", %lu"), id);
-    if (cur_len + len + 4 > FN_REFLEN)
-    {
-      /*
-        break the loop whenever remained space could not fit
-        ellipses on the next cycle
-      */
-      cur_len+= sprintf(dbuff + cur_len, "...");
-      break;
-    }
-    cur_len+= sprintf(buff + cur_len, "%s", dbuff);
-  }
+  size_t cur_len= store_ids(ids, buff, sizeof(buff));
   thd->protocol->store(buff, cur_len, &my_charset_bin);
-  return;
+}
+
+
+void field_store_ids(Field *field, DYNAMIC_ARRAY *ids)
+{
+  char buff[FN_REFLEN];
+  size_t cur_len= store_ids(ids, buff, sizeof(buff));
+  field->store(buff, cur_len, &my_charset_bin);
 }
 
 

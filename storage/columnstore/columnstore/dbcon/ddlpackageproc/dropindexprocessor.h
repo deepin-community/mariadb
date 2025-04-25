@@ -21,8 +21,7 @@
  *
  ***********************************************************************/
 /** @file */
-#ifndef DROPINDEXPROCESSOR_H
-#define DROPINDEXPROCESSOR_H
+#pragma once
 
 #include "ddlpackageprocessor.h"
 
@@ -39,11 +38,10 @@ class DropIndexProcessor : public DDLPackageProcessor
    *
    * @param dropIndexStmt the drop index statement
    */
-  DDLResult processPackage(ddlpackage::DropIndexStatement& dropIndexStmt);
+  DDLResult processPackageInternal(ddlpackage::SqlStatement& dropIndexStmt);
 
  protected:
  private:
 };
 
 }  // namespace ddlpackageprocessor
-#endif  // DROPINDEXPROCESSOR_H

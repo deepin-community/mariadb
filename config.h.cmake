@@ -43,6 +43,7 @@
 #cmakedefine HAVE_IA64INTRIN_H 1
 #cmakedefine HAVE_IEEEFP_H 1
 #cmakedefine HAVE_INTTYPES_H 1
+#cmakedefine HAVE_IMMINTRIN_H 1
 #cmakedefine HAVE_KQUEUE 1
 #cmakedefine HAVE_LIMITS_H 1
 #cmakedefine HAVE_LINK_H 1
@@ -72,6 +73,7 @@
 #cmakedefine HAVE_SYS_IOCTL_H 1
 #cmakedefine HAVE_SYS_MALLOC_H 1
 #cmakedefine HAVE_SYS_MMAN_H 1
+#cmakedefine HAVE_SYS_MNTENT_H 1
 #cmakedefine HAVE_SYS_NDIR_H 1
 #cmakedefine HAVE_SYS_PTE_H 1
 #cmakedefine HAVE_SYS_PTEM_H 1
@@ -126,7 +128,6 @@
 /* Functions we may want to use. */
 #cmakedefine HAVE_ACCEPT4 1
 #cmakedefine HAVE_ACCESS 1
-#cmakedefine HAVE_ALARM 1
 #cmakedefine HAVE_ALLOCA 1
 #cmakedefine HAVE_BFILL 1
 #cmakedefine HAVE_INDEX 1
@@ -150,7 +151,6 @@
 #cmakedefine HAVE_GETCWD 1
 #cmakedefine HAVE_GETHOSTBYADDR_R 1
 #cmakedefine HAVE_GETHRTIME 1
-#cmakedefine HAVE_GETPAGESIZE 1
 #cmakedefine HAVE_GETPAGESIZES 1
 #cmakedefine HAVE_GETPASS 1
 #cmakedefine HAVE_GETPASSPHRASE 1
@@ -195,6 +195,7 @@
 #cmakedefine HAVE_PTHREAD_ATTR_GETSTACKSIZE 1
 #cmakedefine HAVE_PTHREAD_ATTR_SETSCOPE 1
 #cmakedefine HAVE_PTHREAD_ATTR_SETSTACKSIZE 1
+#cmakedefine HAVE_PTHREAD_GETATTR_NP 1
 #cmakedefine HAVE_PTHREAD_CONDATTR_CREATE 1
 #cmakedefine HAVE_PTHREAD_GETAFFINITY_NP 1
 #cmakedefine HAVE_PTHREAD_KEY_DELETE 1
@@ -232,7 +233,6 @@
 #cmakedefine HAVE_STRTOUL 1
 #cmakedefine HAVE_STRTOULL 1
 #cmakedefine HAVE_TELL 1
-#cmakedefine HAVE_THR_SETCONCURRENCY 1
 #cmakedefine HAVE_THR_YIELD 1
 #cmakedefine HAVE_TIME 1
 #cmakedefine HAVE_TIMES 1
@@ -255,6 +255,7 @@
 #cmakedefine HAVE_SOCKADDR_IN6_SIN6_LEN 1
 #cmakedefine STRUCT_TIMESPEC_HAS_TV_SEC 1
 #cmakedefine STRUCT_TIMESPEC_HAS_TV_NSEC 1
+#cmakedefine STRUCT_TM_HAS_TM_GMTOFF 1
 
 /* this means that valgrind headers and macros are available */
 #cmakedefine HAVE_VALGRIND_MEMCHECK_H 1
@@ -384,7 +385,6 @@
 #cmakedefine HAVE_GCC_C11_ATOMICS 1
 #cmakedefine HAVE_SOLARIS_ATOMIC 1
 #cmakedefine NO_FCNTL_NONBLOCK 1
-#cmakedefine NO_ALARM 1
 
 #cmakedefine _LARGE_FILES 1
 #cmakedefine _LARGEFILE_SOURCE 1
@@ -499,14 +499,8 @@
 #cmakedefine HAVE_COMPRESS 1
 #cmakedefine HAVE_EncryptAes128Ctr 1
 #cmakedefine HAVE_EncryptAes128Gcm 1
-
-/*
-  Stuff that always need to be defined (compile breaks without it)
-*/
-#define HAVE_SPATIAL 1
-#define HAVE_RTREE_KEYS 1
-#define HAVE_QUERY_CACHE 1
-#define BIG_TABLES 1
+#cmakedefine HAVE_des 1
+#cmakedefine HAVE_hkdf 1
 
 /*
   Important storage engines (those that really need define 

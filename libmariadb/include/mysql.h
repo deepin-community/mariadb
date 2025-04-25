@@ -33,6 +33,7 @@ extern "C" {
 #endif
 
 #include <stdarg.h>
+#include <time.h>
 
 #if !defined (_global_h) && !defined (MY_GLOBAL_INCLUDED) /* If not standard header */
 #include <sys/types.h>
@@ -223,6 +224,7 @@ extern const char *SQLSTATE_UNKNOWN;
     MYSQL_OPT_MAX_ALLOWED_PACKET,
     MYSQL_OPT_NET_BUFFER_LENGTH,
     MYSQL_OPT_TLS_VERSION,
+    MYSQL_OPT_ZSTD_COMPRESSION_LEVEL,
 
     /* MariaDB specific */
     MYSQL_PROGRESS_CALLBACK=5999,
@@ -257,7 +259,9 @@ extern const char *SQLSTATE_UNKNOWN;
     MARIADB_OPT_RESTRICTED_AUTH,
     MARIADB_OPT_RPL_REGISTER_REPLICA,
     MARIADB_OPT_STATUS_CALLBACK,
-    MARIADB_OPT_SERVER_PLUGINS
+    MARIADB_OPT_SERVER_PLUGINS,
+    MARIADB_OPT_BULK_UNIT_RESULTS,
+    MARIADB_OPT_TLS_VERIFICATION_CALLBACK
   };
 
   enum mariadb_value {
@@ -296,7 +300,9 @@ extern const char *SQLSTATE_UNKNOWN;
     MARIADB_CONNECTION_EXTENDED_SERVER_CAPABILITIES,
     MARIADB_CONNECTION_CLIENT_CAPABILITIES,
     MARIADB_CONNECTION_BYTES_READ,
-    MARIADB_CONNECTION_BYTES_SENT
+    MARIADB_CONNECTION_BYTES_SENT,
+    MARIADB_TLS_PEER_CERT_INFO,
+    MARIADB_TLS_VERIFY_STATUS
   };
 
   enum mysql_status { MYSQL_STATUS_READY,
@@ -336,7 +342,7 @@ struct st_mysql_options {
     enum mysql_option methods_to_use;
     char *bind_address;
     my_bool secure_auth;
-    my_bool report_data_truncation; 
+    my_bool report_data_truncation;
     /* function pointers for local infile support */
     int (*local_infile_init)(void **, const char *, void *);
     int (*local_infile_read)(void *, char *, unsigned int);
@@ -445,6 +451,16 @@ typedef struct st_mysql_time
 #define MYSQL_WAIT_EXCEPT    4
 #define MYSQL_WAIT_TIMEOUT   8
 
+#define MARIADB_TLS_VERIFY_OK                  0
+#define MARIADB_TLS_VERIFY_TRUST               1
+#define MARIADB_TLS_VERIFY_HOST                2
+#define MARIADB_TLS_VERIFY_FINGERPRINT         4
+#define MARIADB_TLS_VERIFY_PERIOD              8
+#define MARIADB_TLS_VERIFY_REVOKED            16
+#define MARIADB_TLS_VERIFY_UNKNOWN            32
+#define MARIADB_TLS_VERIFY_ERROR             128  /* last */
+
+
 typedef struct character_set
 {
   unsigned int      number;     /* character set number              */
@@ -479,6 +495,26 @@ struct st_mysql_client_plugin
 {
   MYSQL_CLIENT_PLUGIN_HEADER
 };
+
+enum mariadb_tls_verification {
+  MARIADB_VERIFY_NONE = 0,
+  MARIADB_VERIFY_PIPE,
+  MARIADB_VERIFY_UNIXSOCKET,
+  MARIADB_VERIFY_LOCALHOST,
+  MARIADB_VERIFY_FINGERPRINT,
+  MARIADB_VERIFY_PEER_CERT
+};
+
+typedef struct
+{
+  int version;
+  char *issuer;
+  char *subject;
+  char fingerprint[129];
+  struct tm not_before;
+  struct tm not_after;
+} MARIADB_X509_INFO;
+
 
 struct st_mysql_client_plugin *
 mysql_load_plugin(struct st_mysql *mysql, const char *name, int type,

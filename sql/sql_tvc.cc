@@ -271,7 +271,10 @@ bool table_value_constr::prepare(THD *thd, SELECT_LEX *sl,
 
   if (!holders)
   {
-    holders= type_holders= new (thd->stmt_arena->mem_root) Type_holder[cnt];
+    DBUG_ASSERT(thd->stmt_arena->is_stmt_prepare_or_first_stmt_execute() ||
+                thd->stmt_arena->is_conventional());
+    holders= type_holders=
+      new (thd->active_stmt_arena_to_use()->mem_root) Type_holder[cnt];
     if (!holders ||
          join_type_handlers_for_tvc(thd, li, holders, cnt) ||
          get_type_attributes_for_tvc(thd, li, holders,
@@ -309,7 +312,7 @@ bool table_value_constr::prepare(THD *thd, SELECT_LEX *sl,
     (thd->lex->context_analysis_only & CONTEXT_ANALYSIS_ONLY_VIEW)
   */
 
-  thd->where="order clause";
+  thd->where= THD_WHERE::ORDER_CLAUSE;
   ORDER *order= sl->order_list.first;
   for (; order; order=order->next)
   {
@@ -324,7 +327,7 @@ bool table_value_constr::prepare(THD *thd, SELECT_LEX *sl,
       if (!count || count > first_elem->elements)
       {
         my_error(ER_BAD_FIELD_ERROR, MYF(0),
-                 order_item->full_name(), thd->where);
+                 order_item->full_name(), thd_where(thd));
         DBUG_RETURN(true);
       }
       order->in_field_list= 1;
@@ -708,12 +711,12 @@ st_select_lex *wrap_tvc(THD *thd, st_select_lex *tvc_sl,
     goto err;
   wrapper_sl->select_number= ++thd->lex->stmt_lex->current_select_number;
   wrapper_sl->parent_lex= lex; /* Used in init_query. */
-  wrapper_sl->init_query();
-  wrapper_sl->init_select();
+  wrapper_sl->make_empty_select();
   wrapper_sl->is_tvc_wrapper= true;
 
   wrapper_sl->nest_level= tvc_sl->nest_level;
   wrapper_sl->parsing_place= tvc_sl->parsing_place;
+  wrapper_sl->distinct=      tvc_sl->distinct;
   wrapper_sl->set_linkage(tvc_sl->get_linkage());
   wrapper_sl->exclude_from_table_unique_test=
                                  tvc_sl->exclude_from_table_unique_test;
@@ -741,6 +744,7 @@ st_select_lex *wrap_tvc(THD *thd, st_select_lex *tvc_sl,
   derived_unit->init_query();
   derived_unit->thd= thd;
   derived_unit->include_down(wrapper_sl);
+  derived_unit->distinct= tvc_sl->distinct;
 
   /*
     Attach the select used of TVC as the only slave to the unit for
@@ -957,8 +961,10 @@ Item *Item_func_in::in_predicate_to_in_subs_transformer(THD *thd,
   if (!length  || length > tmp_table_max_key_length() ||
       args[0]->cols() > tmp_table_max_key_parts())
   {
-    trace_conv.add("done", false);
-    trace_conv.add("reason", "key is too long");
+    if (unlikely(trace_conv.trace_started()))
+      trace_conv.
+        add("done", false).
+        add("reason", "key is too long");
     return this;
   }
 
@@ -966,15 +972,19 @@ Item *Item_func_in::in_predicate_to_in_subs_transformer(THD *thd,
   {
     if (!args[i]->const_item())
     {
-      trace_conv.add("done", false);
-      trace_conv.add("reason", "non-constant element in the IN-list");
+      if (unlikely(trace_conv.trace_started()))
+        trace_conv.
+          add("done", false).
+          add("reason", "non-constant element in the IN-list");
       return this;
     }
 
     if (cmp_row_types(args[i], args[0]))
     {
-      trace_conv.add("done", false);
-      trace_conv.add("reason", "type mismatch");
+      if (unlikely(trace_conv.trace_started()))
+        trace_conv.
+          add("done", false).
+          add("reason", "type mismatch");
       return this;
     }
   }
@@ -1009,7 +1019,9 @@ Item *Item_func_in::in_predicate_to_in_subs_transformer(THD *thd,
   lex->init_select();
   tvc_select= lex->current_select;
   derived_unit= tvc_select->master_unit();
+  derived_unit->distinct= 1;
   tvc_select->set_linkage(DERIVED_TABLE_TYPE);
+  tvc_select->distinct= 1;
 
   /* Create TVC used in the transformation */
   if (create_value_list_for_tvc(thd, &values))
@@ -1042,7 +1054,9 @@ Item *Item_func_in::in_predicate_to_in_subs_transformer(THD *thd,
   sq_select->add_where_field(derived_unit->first_select());
   sq_select->context.table_list= sq_select->table_list.first;
   sq_select->context.first_name_resolution_table= sq_select->table_list.first;
-  sq_select->table_list.first->derived_type= DTYPE_TABLE | DTYPE_MATERIALIZE;
+  sq_select->table_list.first->derived_type= (DTYPE_TABLE |
+                                              DTYPE_MATERIALIZE |
+                                              DTYPE_IN_PREDICATE);
   lex->derived_tables|= DERIVED_SUBQUERY;
 
   sq_select->where= 0;

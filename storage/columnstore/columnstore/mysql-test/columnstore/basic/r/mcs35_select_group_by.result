@@ -56,7 +56,9 @@ NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
 NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
 NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
 SELECT * FROM t1 GROUP BY t1_tinyint;
-ERROR HY000: Internal error: MCS-2021: '`mcs35_db1`.`t1`.`t1_int`' is not in GROUP BY clause. All non-aggregate columns in the SELECT and ORDER BY clause must be included in the GROUP BY clause.
+t1_tinyint	t1_int	t1_bigint	t1_double	t1_float	t1_blob	t1_text	t1_char	t1_varchar	t1_datetime
+0	NULL	403685477580676	54.797693231	8.40287	222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222	dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd	d	hello world!	4387-11-08 11:22:30
+NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
 SELECT COUNT(*) FROM t1 GROUP BY t1_tinyint;
 COUNT(*)
 11
@@ -165,5 +167,5 @@ COUNT(*)
 SELECT COUNT(*) FROM t1 WHERE t1_blob IS NOT NULL OR t1_tinyint IS NULL GROUP BY t1_varchar;
 ERROR HY000: Internal error: VARBINARY/BLOB in filter or function is not supported.
 SELECT COUNT(*) FROM t1 GROUP BY t1_tinyint, t1_int, t1_bigint HAVING t1_char = 'b';
-ERROR 42S22: Unknown column 't1_char' in 'having clause'
+ERROR 42S22: Unknown column 't1_char' in 'HAVING'
 DROP DATABASE IF EXISTS mcs35_db1;

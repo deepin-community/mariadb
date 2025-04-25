@@ -56,12 +56,8 @@ is acceptable for the program to die with a clear assert failure. */
 #define BTR_MAX_LEVELS		100
 
 #define BTR_LATCH_MODE_WITHOUT_FLAGS(latch_mode)		\
-	btr_latch_mode((latch_mode) & ~(BTR_INSERT	\
-				| BTR_DELETE_MARK		\
-				| BTR_RTREE_UNDO_INS		\
+	btr_latch_mode((latch_mode) & ~(BTR_RTREE_UNDO_INS	\
 				| BTR_RTREE_DELETE_MARK		\
-				| BTR_DELETE			\
-				| BTR_IGNORE_SEC_UNIQUE		\
 				| BTR_ALREADY_S_LATCHED		\
 				| BTR_LATCH_FOR_INSERT		\
 				| BTR_LATCH_FOR_DELETE))
@@ -79,20 +75,35 @@ btr_root_adjust_on_import(
 	const dict_index_t*	index)	/*!< in: index tree */
 	MY_ATTRIBUTE((warn_unused_result));
 
-/** Report a decryption failure. */
-ATTRIBUTE_COLD void btr_decryption_failed(const dict_index_t &index);
+/** Check a file segment header within a B-tree root page.
+@param offset      file segment header offset
+@param block       B-tree root page
+@param space       tablespace
+@return whether the segment header is valid */
+bool btr_root_fseg_validate(ulint offset, const buf_block_t &block,
+                            const fil_space_t &space);
+
+/** Report a read failure if it is a decryption failure.
+@param err   error code
+@param index the index that is being accessed */
+ATTRIBUTE_COLD void btr_read_failed(dberr_t err, const dict_index_t &index);
 
 /** Get an index page and declare its latching order level.
-@param[in]	index	index tree
-@param[in]	page	page number
-@param[in]	mode	latch mode
-@param[in]	merge	whether change buffer merge should be attempted
-@param[in,out]	mtr	mini-transaction
-@param[out]	err	error code
+@param  index         index tree
+@param  page          page number
+@param  latch_mode    latch mode
+@param  mtr           mini-transaction
+@param  err           error code
+@param  first         set if this is a first-time access to the page
 @return block */
-buf_block_t *btr_block_get(const dict_index_t &index,
-                           uint32_t page, rw_lock_type_t mode, bool merge,
-                           mtr_t *mtr, dberr_t *err= nullptr);
+buf_block_t *btr_block_get(const dict_index_t &index, uint32_t page,
+                           rw_lock_type_t latch_mode, mtr_t *mtr,
+                           dberr_t *err= nullptr, bool *first= nullptr
+#if defined(UNIV_DEBUG) || !defined(DBUG_OFF)
+                           , ulint page_get_mode= BUF_GET
+                           /*!< BUF_GET or BUF_GET_POSSIBLY_FREED */
+#endif /* defined(UNIV_DEBUG) || !defined(DBUG_OFF) */
+                            );
 
 /**************************************************************//**
 Gets the index id field of a page.
@@ -187,13 +198,16 @@ btr_read_autoinc(dict_index_t* index)
 
 /** Read the last used AUTO_INCREMENT value from PAGE_ROOT_AUTO_INC,
 or fall back to MAX(auto_increment_column).
-@param[in]	table	table containing an AUTO_INCREMENT column
-@param[in]	col_no	index of the AUTO_INCREMENT column
-@return	the AUTO_INCREMENT value
-@retval	0 on error or if no AUTO_INCREMENT value was used yet */
-ib_uint64_t
-btr_read_autoinc_with_fallback(const dict_table_t* table, unsigned col_no)
-	MY_ATTRIBUTE((nonnull, warn_unused_result));
+@param table          table containing an AUTO_INCREMENT column
+@param col_no         index of the AUTO_INCREMENT column
+@param mysql_version  TABLE_SHARE::mysql_version
+@param max            the maximum value of the AUTO_INCREMENT column
+@return the AUTO_INCREMENT value
+@retval 0 on error or if no AUTO_INCREMENT value was used yet */
+uint64_t btr_read_autoinc_with_fallback(const dict_table_t *table,
+                                        unsigned col_no, ulong mysql_version,
+                                        uint64_t max)
+  MY_ATTRIBUTE((nonnull, warn_unused_result));
 
 /** Write the next available AUTO_INCREMENT value to PAGE_ROOT_AUTO_INC.
 @param[in,out]	index	clustered index
@@ -241,15 +255,7 @@ btr_root_raise_and_insert(
 	mtr_t*		mtr,	/*!< in: mtr */
 	dberr_t*	err)	/*!< out: error code */
 	MY_ATTRIBUTE((nonnull, warn_unused_result));
-/*************************************************************//**
-Reorganizes an index page.
-
-IMPORTANT: On success, the caller will have to update IBUF_BITMAP_FREE
-if this is a compressed leaf page in a secondary index. This has to
-be done either within the same mini-transaction, or by invoking
-ibuf_reset_free_bits() before mtr_commit(). On uncompressed pages,
-IBUF_BITMAP_FREE is unaffected by reorganization.
-
+/** Reorganize an index page.
 @param cursor  page cursor
 @param mtr     mini-transaction
 @return error code
@@ -258,20 +264,19 @@ dberr_t btr_page_reorganize(page_cur_t *cursor, mtr_t *mtr)
   MY_ATTRIBUTE((nonnull, warn_unused_result));
 /** Decide if the page should be split at the convergence point of inserts
 converging to the left.
-@param[in]	cursor	insert position
+@param cursor	insert position
 @return the first record to be moved to the right half page
-@retval	NULL if no split is recommended */
-rec_t* btr_page_get_split_rec_to_left(const btr_cur_t* cursor);
+@retval	nullptr if no split is recommended */
+rec_t *btr_page_get_split_rec_to_left(const btr_cur_t *cursor) noexcept;
 /** Decide if the page should be split at the convergence point of inserts
 converging to the right.
-@param[in]	cursor		insert position
-@param[out]	split_rec	if split recommended, the first record
-				on the right half page, or
-				NULL if the to-be-inserted record
-				should be first
+@param cursor     insert position
+@param split_rec  if split recommended, the first record on the right
+half page, or nullptr if the to-be-inserted record should be first
 @return whether split is recommended */
 bool
-btr_page_get_split_rec_to_right(const btr_cur_t* cursor, rec_t** split_rec);
+btr_page_get_split_rec_to_right(const btr_cur_t *cursor, rec_t **split_rec)
+  noexcept;
 
 /*************************************************************//**
 Splits an index page to halves and inserts the tuple. It is assumed
@@ -322,7 +327,7 @@ inline void btr_set_min_rec_mark(rec_t *rec, const buf_block_t &block,
   ut_ad(!page_is_leaf(block.page.frame));
   ut_ad(has_prev == page_has_prev(block.page.frame));
 
-  rec-= page_rec_is_comp(rec) ? REC_NEW_INFO_BITS : REC_OLD_INFO_BITS;
+  rec-= page_is_comp(block.page.frame) ? REC_NEW_INFO_BITS : REC_OLD_INFO_BITS;
 
   if (block.page.zip.data)
     /* This flag is computed from other contents on a ROW_FORMAT=COMPRESSED
@@ -333,11 +338,11 @@ inline void btr_set_min_rec_mark(rec_t *rec, const buf_block_t &block,
 }
 
 /** Seek to the parent page of a B-tree page.
-@param[in,out]	mtr	mini-transaction
-@param[in,out]	cursor	cursor pointing to the x-latched parent page
+@param mtr      mini-transaction
+@param cursor   cursor pointing to the x-latched parent page
 @return whether the cursor was successfully positioned */
-bool btr_page_get_father(mtr_t* mtr, btr_cur_t* cursor)
-	MY_ATTRIBUTE((nonnull,warn_unused_result));
+bool btr_page_get_father(mtr_t *mtr, btr_cur_t *cursor) noexcept
+  MY_ATTRIBUTE((nonnull,warn_unused_result));
 #ifdef UNIV_DEBUG
 /************************************************************//**
 Checks that the node pointer to a page is appropriate.
@@ -347,6 +352,7 @@ btr_check_node_ptr(
 /*===============*/
 	dict_index_t*	index,	/*!< in: index tree */
 	buf_block_t*	block,	/*!< in: index page */
+	que_thr_t*	thr,	/*!< in/out: query thread */
 	mtr_t*		mtr)	/*!< in: mtr */
 	MY_ATTRIBUTE((warn_unused_result));
 #endif /* UNIV_DEBUG */
@@ -450,15 +456,8 @@ btr_root_block_get(
 					or RW_X_LATCH */
 	mtr_t*			mtr,	/*!< in: mtr */
 	dberr_t*		err);	/*!< out: error code */
-/*************************************************************//**
-Reorganizes an index page.
 
-IMPORTANT: On success, the caller will have to update IBUF_BITMAP_FREE
-if this is a compressed leaf page in a secondary index. This has to
-be done either within the same mini-transaction, or by invoking
-ibuf_reset_free_bits() before mtr_commit(). On uncompressed pages,
-IBUF_BITMAP_FREE is unaffected by reorganization.
-
+/** Reorganize an index page.
 @return error code
 @retval DB_FAIL if reorganizing a ROW_FORMAT=COMPRESSED page failed */
 dberr_t btr_page_reorganize_block(
@@ -491,15 +490,15 @@ btr_print_index(
 Checks the size and number of fields in a record based on the definition of
 the index.
 @return TRUE if ok */
-ibool
+bool
 btr_index_rec_validate(
 /*===================*/
-	const rec_t*		rec,		/*!< in: index record */
+	const page_cur_t&	cur,		/*!< in: index record */
 	const dict_index_t*	index,		/*!< in: index */
-	ibool			dump_on_error)	/*!< in: TRUE if the function
+	bool			dump_on_error)	/*!< in: true if the function
 						should print hex dump of record
 						and page on error */
-	MY_ATTRIBUTE((warn_unused_result));
+	noexcept MY_ATTRIBUTE((warn_unused_result));
 /**************************************************************//**
 Checks the consistency of an index tree.
 @return	DB_SUCCESS if ok, error code if not */
@@ -529,9 +528,10 @@ btr_lift_page_up(
 				must not be empty: use
 				btr_discard_only_page_on_level if the last
 				record from the page should be removed */
+	que_thr_t*	thr,	/*!< in/out: query thread for SPATIAL INDEX */
 	mtr_t*		mtr,	/*!< in/out: mini-transaction */
 	dberr_t*	err)	/*!< out: error code */
-	__attribute__((nonnull));
+	__attribute__((nonnull(1,2,4,5)));
 
 #define BTR_N_LEAF_PAGES	1
 #define BTR_TOTAL_SIZE		2

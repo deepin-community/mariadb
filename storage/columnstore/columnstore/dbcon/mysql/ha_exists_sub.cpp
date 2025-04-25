@@ -96,7 +96,7 @@ execplan::ParseTree* ExistsSub::transform()
   csep->subType(CalpontSelectExecutionPlan::EXISTS_SUBS);
 
   // gwi for the sub query
-  gp_walk_info gwi(fGwip.timeZone);
+  gp_walk_info gwi(fGwip.timeZone, fGwip.subQueriesChain);
   gwi.thd = fGwip.thd;
   gwi.subQuery = this;
 
@@ -122,7 +122,7 @@ execplan::ParseTree* ExistsSub::transform()
     if (gwi.fatalParseError && !gwi.parseErrorText.empty())
       fGwip.parseErrorText = gwi.parseErrorText;
     else
-      fGwip.parseErrorText = "Error occured in ExistsSub::transform()";
+      fGwip.parseErrorText = "Error occurred in ExistsSub::transform()";
 
     return NULL;
   }

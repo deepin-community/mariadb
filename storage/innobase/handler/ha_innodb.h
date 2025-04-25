@@ -25,10 +25,6 @@ this program; if not, write to the Free Software Foundation, Inc.,
 
 /* The InnoDB handler: the interface between MySQL and InnoDB. */
 
-/** "GEN_CLUST_INDEX" is the name reserved for InnoDB default
-system clustered index when there is no primary key. */
-extern const char innobase_index_reserve_name[];
-
 /** Prebuilt structures in an InnoDB table handle used within MySQL */
 struct row_prebuilt_t;
 
@@ -69,8 +65,6 @@ public:
 
         const char* table_type() const override;
 
-	const char* index_type(uint key_number) override;
-
 	Table_flags table_flags() const override;
 
 	ulong index_flags(uint idx, uint part, bool all_parts) const override;
@@ -105,10 +99,10 @@ public:
 
 	int close(void) override;
 
-	double scan_time() override;
-
-	double read_time(uint index, uint ranges, ha_rows rows) override;
-
+#ifdef NOT_USED
+	IO_AND_CPU_COST scan_time() override;
+        double rnd_pos_time(ha_rows rows) override;
+#endif
 	int write_row(const uchar * buf) override;
 
 	int update_row(const uchar * old_data, const uchar * new_data) override;
@@ -207,8 +201,8 @@ public:
 	int delete_table(const char *name) override;
 
 	int rename_table(const char* from, const char* to) override;
-	inline int defragment_table();
 	int check(THD* thd, HA_CHECK_OPT* check_opt) override;
+	int check_for_upgrade(HA_CHECK_OPT* check_opt) override;
 
 	inline void reload_statistics();
 
@@ -218,12 +212,12 @@ public:
                                  List<FOREIGN_KEY_INFO> *f_key_list) override;
 
 	int get_parent_foreign_key_list(
-		THD*			thd,
+		THD*		thd,
 		List<FOREIGN_KEY_INFO>*	f_key_list) override;
 
 	bool can_switch_engines() override;
 
-	uint referenced_by_foreign_key() override;
+	bool referenced_by_foreign_key() const noexcept override;
 
 	void free_foreign_key_create_info(char* str) override { my_free(str); }
 
@@ -383,6 +377,7 @@ public:
 		uint			n_ranges,
 		uint*			bufsz,
 		uint*			flags,
+                ha_rows                 limit,
 		Cost_estimate*		cost) override;
 
 	/** Initialize multi range read and get information.
@@ -438,6 +433,12 @@ public:
 			  const KEY_PART_INFO& old_part,
 			  const KEY_PART_INFO& new_part) const override;
 
+	/** Check consistency between .frm indexes and InnoDB indexes
+	Set HA_DUPLICATE_KEY_NOT_IN_ORDER if multiple unique index
+	are not in the correct order.
+	@param ib_table InnoDB table definition
+	@retval true if not errors were found */
+	bool check_index_consistency(const dict_table_t* ib_table) noexcept;
 protected:
 	bool
 	can_convert_string(const Field_string* field,
@@ -458,8 +459,13 @@ protected:
 	@see build_template() */
 	void reset_template();
 
-	/** @return whether the table is read-only */
-	bool is_read_only(bool altering_to_supported= false) const;
+	/** Check the transaction is valid.
+        @param altering_to_supported  whether an ALTER TABLE is being run
+        to something else than ROW_FORMAT=COMPRESSED
+        @retval 0 if the transaction is valid for the current operation
+        @retval HA_ERR_TABLE_READONLY  if the table is read-only
+        @retval HA_ERR_ROLLBACK        if the transaction has been aborted */
+	int is_valid_trx(bool altering_to_supported= false) const noexcept;
 
 	inline void update_thd(THD* thd);
 	void update_thd();
@@ -521,6 +527,10 @@ protected:
 
         /** If mysql has locked with external_lock() */
         bool                    m_mysql_has_locked;
+
+	/** If true, disable the Rowid Filter. It is disabled when
+	the enigne is intialized for making rnd_pos() calls */
+	bool                    m_disable_rowid_filter;
 };
 
 
@@ -625,8 +635,6 @@ public:
 		THD*		thd,
 		const TABLE*	form,
 		HA_CREATE_INFO*	create_info,
-		char*		table_name,
-		char*		remote_path,
 		bool		file_per_table,
 		trx_t*		trx = NULL);
 
@@ -641,7 +649,7 @@ public:
 
 	/** Create the internal innodb table.
 	@param create_fk	whether to add FOREIGN KEY constraints */
-	int create_table(bool create_fk = true);
+	int create_table(bool create_fk = true, bool strict= true);
 
   static void create_table_update_dict(dict_table_t* table, THD* thd,
                                        const HA_CREATE_INFO& info,
@@ -701,6 +709,8 @@ public:
 	ulint flags2() const
 	{ return(m_flags2); }
 
+	bool creating_stub() const { return UNIV_UNLIKELY(m_creating_stub); }
+
 	/** Get trx. */
 	trx_t* trx() const
 	{ return(m_trx); }
@@ -738,13 +748,13 @@ private:
 	/** Create options. */
 	HA_CREATE_INFO*	m_create_info;
 
-	/** Table name */
-	char*		m_table_name;
+	/** Table name: {database}/{tablename} */
+	char		m_table_name[FN_REFLEN];
 	/** Table */
 	dict_table_t*	m_table;
 
 	/** Remote path (DATA DIRECTORY) or zero length-string */
-	char*		m_remote_path;
+	char		m_remote_path[FN_REFLEN]; // Absolute path of the table
 
 	/** Local copy of srv_file_per_table. */
 	bool		m_innodb_file_per_table;
@@ -767,6 +777,9 @@ private:
 
 	/** Table flags2 */
 	ulint		m_flags2;
+
+	/** Whether we are creating a stub table for importing. */
+	const bool	m_creating_stub;
 };
 
 /**
@@ -788,7 +801,7 @@ enum fts_doc_id_index_enum {
 };
 
 /**
-Check whether the table has a unique index with FTS_DOC_ID_INDEX_NAME
+Check whether the table has a unique index with name FTS_DOC_ID_INDEX
 on the Doc ID column.
 @return the status of the FTS_DOC_ID index */
 fts_doc_id_index_enum
@@ -801,7 +814,7 @@ innobase_fts_check_doc_id_index(
 	MY_ATTRIBUTE((warn_unused_result));
 
 /**
-Check whether the table has a unique index with FTS_DOC_ID_INDEX_NAME
+Check whether the table has a unique index with name FTS_DOC_ID_INDEX
 on the Doc ID column in MySQL create index definition.
 @return FTS_EXIST_DOC_ID_INDEX if there exists the FTS_DOC_ID index,
 FTS_INCORRECT_DOC_ID_INDEX if the FTS_DOC_ID index is of wrong format */
@@ -879,15 +892,13 @@ innodb_rec_per_key(
 @param[in]	ib_table	InnoDB dict_table_t
 @param[in,out]	s_templ		InnoDB template structure
 @param[in]	add_v		new virtual columns added along with
-				add index call
-@param[in]	locked		true if innobase_share_mutex is held */
+				add index call */
 void
 innobase_build_v_templ(
 	const TABLE*		table,
 	const dict_table_t*	ib_table,
 	dict_vcol_templ_t*	s_templ,
-	const dict_add_v_col_t*	add_v,
-	bool			locked);
+	const dict_add_v_col_t*	add_v = nullptr);
 
 /** callback used by MySQL server layer to initialized
 the table virtual columns' template
@@ -909,6 +920,12 @@ unsigned
 innodb_col_no(const Field* field)
 	MY_ATTRIBUTE((nonnull, warn_unused_result));
 
+/** Get the maximum integer value of a numeric column.
+@param field   column definition
+@return maximum allowed integer value */
+ulonglong innobase_get_int_col_max_value(const Field *field)
+	MY_ATTRIBUTE((nonnull, warn_unused_result));
+
 /********************************************************************//**
 Helper function to push frm mismatch error to error log and
 if needed to sql-layer. */
@@ -926,12 +943,3 @@ ib_push_frm_error(
 @return true if index column length exceeds limit */
 MY_ATTRIBUTE((warn_unused_result))
 bool too_big_key_part_length(size_t max_field_len, const KEY& key);
-
-/** This function is used to rollback one X/Open XA distributed transaction
-which is in the prepared state
-
-@param[in] hton InnoDB handlerton
-@param[in] xid X/Open XA transaction identification
-
-@return 0 or error number */
-int innobase_rollback_by_xid(handlerton* hton, XID* xid);

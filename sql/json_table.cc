@@ -29,22 +29,6 @@
 
 #define HA_ERR_JSON_TABLE (HA_ERR_LAST+1)
 
-/*
-  Allocating memory and *also* using it (reading and
-  writing from it) because some build instructions cause
-  compiler to optimize out stack_used_up. Since alloca()
-  here depends on stack_used_up, it doesnt get executed
-  correctly and causes json_debug_nonembedded to fail
-  ( --error ER_STACK_OVERRUN_NEED_MORE does not occur).
-*/
-#define ALLOCATE_MEM_ON_STACK(A) do \
-                              { \
-                                uchar *array= (uchar*)alloca(A); \
-                                array[0]= 1; \
-                                array[0]++; \
-                                array[0] ? array[0]++ : array[0]--; \
-                              } while(0)
-
 class table_function_handlerton
 {
 public:
@@ -54,6 +38,7 @@ public:
     bzero(&m_hton, sizeof(m_hton));
     m_hton.tablefile_extensions= hton_no_exts;
     m_hton.slot= HA_SLOT_UNDEF;
+    m_hton.flags= HTON_HIDDEN;
   }
 };
 
@@ -245,6 +230,10 @@ public:
   int open(const char *name, int mode, uint test_if_locked) override
   { return 0; }
   int close(void) override { return 0; }
+  void update_optimizer_costs(OPTIMIZER_COSTS *costs) override
+  {
+    memcpy(costs, &heap_optimizer_costs, sizeof(*costs));
+  }
   int rnd_init(bool scan) override;
   int rnd_next(uchar *buf) override;
   int rnd_pos(uchar * buf, uchar *pos) override;
@@ -381,6 +370,8 @@ int ha_json_table::rnd_init(bool scan)
 
 static void store_json_in_field(Field *f, const json_engine_t *je)
 {
+  String res_tmp("", 0, je->s.cs);
+
   switch (je->value_type)
   {
   case JSON_VALUE_NULL:
@@ -401,7 +392,8 @@ static void store_json_in_field(Field *f, const json_engine_t *je)
   default:
     break;
   };
-  f->store((const char *) je->value, (uint32) je->value_len, je->s.cs);
+  st_append_json(&res_tmp, je->s.cs, je->value, je->value_len);
+  f->store((const char *) res_tmp.ptr(), (uint32) res_tmp.length(), je->s.cs);
 }
 
 
@@ -745,7 +737,8 @@ bool Create_json_table::finalize(THD *thd, TABLE *table,
 
   table->db_stat= HA_OPEN_KEYFILE;
   if (unlikely(table->file->ha_open(table, table->s->path.str, O_RDWR,
-                                    HA_OPEN_TMP_TABLE | HA_OPEN_INTERNAL_TABLE)))
+                                    HA_OPEN_TMP_TABLE | HA_OPEN_INTERNAL_TABLE |
+                                    HA_OPEN_SIZE_TRACKING)))
     DBUG_RETURN(true);
 
   table->set_created();
@@ -794,8 +787,7 @@ bool Create_json_table::add_json_table_fields(THD *thd, TABLE *table,
 
     while ((jc2= it2++) != jc)
     {
-      if (lex_string_cmp(system_charset_info,
-            &sql_f->field_name, &jc2->m_field->field_name) == 0)
+      if (sql_f->field_name.streq(jc2->m_field->field_name))
       {
         my_error(ER_DUP_FIELDNAME, MYF(0), sql_f->field_name.str);
         goto err_exit;
@@ -936,7 +928,10 @@ int Json_table_column::set(THD *thd, enum_type ctype, const LEX_CSTRING &path,
     return set(thd, ctype, path, nullptr);
 
   CHARSET_INFO *tmp;
-  if (!(tmp= cl.resolved_to_character_set(&my_charset_utf8mb4_general_ci)))
+  if (!(tmp= cl.resolved_to_character_set(
+                  thd,
+                  thd->variables.character_set_collations,
+                  &my_charset_utf8mb4_general_ci)))
     return 1;
   return set(thd, ctype, path, tmp);
 }
@@ -1046,8 +1041,7 @@ int Json_table_column::On_response::respond(Json_table_column *jc, Field *f,
       return 1;
     case Json_table_column::RESPONSE_DEFAULT:
       f->set_notnull();
-      f->store(m_default.str,
-          m_default.length, jc->m_defaults_cs);
+      m_default->save_in_field(f, TRUE);
       break;
   }
   return 0;
@@ -1057,33 +1051,42 @@ int Json_table_column::On_response::respond(Json_table_column *jc, Field *f,
 int Json_table_column::On_response::print(const char *name, String *str) const
 {
   LEX_CSTRING resp;
-  const LEX_CSTRING *ds= NULL;
+
+  char valbuf[512];
+  String val(valbuf, sizeof(valbuf), str->charset());
+  String *ds= NULL;
+
   if (m_response == Json_table_column::RESPONSE_NOT_SPECIFIED)
     return 0;
 
   switch (m_response)
   {
     case Json_table_column::RESPONSE_NULL:
-      lex_string_set3(&resp, STRING_WITH_LEN("NULL"));
+      resp= { STRING_WITH_LEN("NULL") };
       break;
     case Json_table_column::RESPONSE_ERROR:
-      lex_string_set3(&resp, STRING_WITH_LEN("ERROR"));
+      resp= { STRING_WITH_LEN("ERROR") };
       break;
     case Json_table_column::RESPONSE_DEFAULT:
     {
-      lex_string_set3(&resp, STRING_WITH_LEN("DEFAULT"));
-      ds= &m_default;
+      resp= { STRING_WITH_LEN("DEFAULT") };
+      ds= m_default->val_str(&val);
       break;
     }
     default:
-      lex_string_set3(&resp, "", 0);
+      resp= { "", 0 };
       DBUG_ASSERT(FALSE); /* should never happen. */
   }
 
   return (str->append(' ') || str->append(resp)  ||
-          (ds && (str->append(STRING_WITH_LEN(" '")) ||
-                  str->append_for_single_quote(ds->str, ds->length) ||
-                  str->append('\''))) ||
+          (ds &&
+            (str->append(' ') ||
+             (m_default->result_type()==STRING_RESULT && str->append('\''))||
+
+             str->append_for_single_quote(ds) ||
+
+             (m_default->result_type()==STRING_RESULT && str->append('\''))))||
+
           str->append(STRING_WITH_LEN(" ON ")) ||
           str->append(name, strlen(name)));
 }
@@ -1162,7 +1165,7 @@ bool push_table_function_arg_context(LEX *lex, MEM_ROOT *alloc)
 bool Table_function_json_table::setup(THD *thd, TABLE_LIST *sql_table,
                                      SELECT_LEX *s_lex)
 {
-  thd->where= "JSON_TABLE argument";
+  thd->where= THD_WHERE::JSON_TABLE_ARGUMENT;
 
   if (!m_context_setup_done)
   {
@@ -1474,5 +1477,3 @@ table_map add_table_function_dependencies(List<TABLE_LIST> *join_list,
 
   return res;
 }
-
-

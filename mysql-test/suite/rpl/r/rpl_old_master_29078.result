@@ -48,6 +48,8 @@ ROLLBACK /* added by mysqlbinlog */;
 /*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;
 connection slave;
 set global explicit_defaults_for_timestamp=0;
+Warnings:
+Warning	1287	'explicit_defaults_for_timestamp=0' is deprecated and will be removed in a future release
 include/reset_slave.inc
 include/start_slave.inc
 show create table t1;
@@ -55,12 +57,12 @@ Table	Create Table
 t1	CREATE TABLE `t1` (
   `f1` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   `f2` timestamp NOT NULL DEFAULT '0000-00-00 00:00:00'
-) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 show create table t2;
 Table	Create Table
 t2	CREATE TABLE `t2` (
   `a` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
-) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 set time_zone='+2:00';
 select * from t1;
 f1	f2
@@ -78,12 +80,12 @@ Table	Create Table
 t1	CREATE TABLE `t1` (
   `f1` timestamp NULL DEFAULT NULL,
   `f2` timestamp NULL DEFAULT NULL
-) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 show create table t2;
 Table	Create Table
 t2	CREATE TABLE `t2` (
   `a` timestamp NULL DEFAULT NULL
-) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 select * from t1;
 f1	f2
 NULL	NULL

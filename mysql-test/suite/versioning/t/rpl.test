@@ -414,9 +414,7 @@ select row_start = '1980-01-01 00:00:00', row_end = '1980-01-01 00:00:01' from t
 connection master;
 --let DATAFILE= $MYSQLTEST_VARDIR/tmp/test_versioning_t3.data
 --replace_result $DATAFILE DATAFILE
---disable_ps2_protocol
 eval select x, row_start, row_end into outfile '$DATAFILE' from t1 for system_time all;
---enable_ps2_protocol
 create or replace table t3 like t1;
 set @@system_versioning_insert_history= 1;
 --replace_result $DATAFILE DATAFILE
@@ -441,6 +439,29 @@ set sql_mode=default;
 
 connection master;
 drop tables t1, t2, t3;
+
+
+--echo #
+--echo # MDEV-33330 Server crash or assertion failure in
+--echo # binlog_get_pending_rows_event
+--echo #
+
+create or replace table t (x int) with system versioning
+partition by system_time interval 1 minute auto partitions 3;
+insert into t values (1);
+
+connect (con1,localhost,root,,);
+set timestamp= @@timestamp+120;
+update t set x= x + 1;
+connection default;
+
+# Cleanup
+disconnect con1;
+drop table t;
+
+#
+# End of 11.2 tests
+#
 
 --source suite/versioning/common_finish.inc
 --source include/rpl_end.inc

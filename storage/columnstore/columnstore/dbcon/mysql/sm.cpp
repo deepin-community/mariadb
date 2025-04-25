@@ -278,13 +278,9 @@ void sighandler(int sig_num)
 
 namespace sm
 {
-#ifdef _MSC_VER
-const std::string DEFAULT_SAVE_PATH = "C:\\Calpont\\tmp";
-#else
 const std::string DEFAULT_SAVE_PATH = "/var/tmp";
-#endif
 
-status_t tpl_open(tableid_t tableid, cpsm_tplh_t* ntplh, cpsm_conhdl_t* conn_hdl)
+status_t tpl_open(tableid_t tableid, sp_cpsm_tplh_t& ntplh, cpsm_conhdl_t* conn_hdl)
 {
   SMDEBUGLOG << "tpl_open: ntplh: " << ntplh << " conn_hdl: " << conn_hdl << " tableid: " << tableid << endl;
 
@@ -363,7 +359,7 @@ status_t tpl_scan_close(sp_cpsm_tplsch_t& ntplsch)
   return STATUS_OK;
 }
 
-status_t tpl_close(cpsm_tplh_t* ntplh, cpsm_conhdl_t** conn_hdl, QueryStats& stats, bool ask_4_stats,
+status_t tpl_close(sp_cpsm_tplh_t& ntplh, cpsm_conhdl_t** conn_hdl, QueryStats& stats, bool ask_4_stats,
                    bool clear_scan_ctx)
 {
   cpsm_conhdl_t* hndl = *conn_hdl;
@@ -373,7 +369,7 @@ status_t tpl_close(cpsm_tplh_t* ntplh, cpsm_conhdl_t** conn_hdl, QueryStats& sta
     SMDEBUGLOG << " tableid: " << ntplh->tableid;
 
   SMDEBUGLOG << endl;
-  delete ntplh;
+  ntplh.reset();
 
   // determine end of result set and end of statement execution
   if (hndl->queryState == QUERY_IN_PROCESS)
@@ -492,9 +488,6 @@ status_t sm_cleanup(cpsm_conhdl_t* conn_hdl)
 
 void cpsm_conhdl_t::write(ByteStream bs)
 {
-#ifdef _MSC_VER
-  exeMgr->write(bs);
-#else
   sighandler_t old_handler = signal(SIGPIPE, sighandler);
   sigFlag = false;
   exeMgr->write(bs);
@@ -503,7 +496,6 @@ void cpsm_conhdl_t::write(ByteStream bs)
   if (sigFlag)
     throw runtime_error("Broken Pipe Error");
 
-#endif
 }
 
 }

@@ -744,7 +744,7 @@ row_log_table_low_redundant(
 	ulint		avail_size;
 	mem_heap_t*	heap		= NULL;
 	dtuple_t*	tuple;
-	const ulint	n_fields = rec_get_n_fields_old(rec);
+	const auto	n_fields = rec_get_n_fields_old(rec);
 
 	ut_ad(index->n_fields >= n_fields);
 	ut_ad(index->n_fields == n_fields || index->is_instant());
@@ -1701,22 +1701,7 @@ err_exit:
 		if (error) {
 			goto err_exit;
 		}
-#ifdef UNIV_DEBUG
-		switch (btr_pcur_get_btr_cur(pcur)->flag) {
-		case BTR_CUR_DELETE_REF:
-		case BTR_CUR_DEL_MARK_IBUF:
-		case BTR_CUR_DELETE_IBUF:
-		case BTR_CUR_INSERT_TO_IBUF:
-			/* We did not request buffering. */
-			break;
-		case BTR_CUR_HASH:
-		case BTR_CUR_HASH_FAIL:
-		case BTR_CUR_BINARY:
-			goto flag_ok;
-		}
-		ut_ad(0);
-flag_ok:
-#endif /* UNIV_DEBUG */
+		ut_ad(pcur->btr_cur.flag == BTR_CUR_BINARY);
 
 		if (page_rec_is_infimum(btr_pcur_get_rec(pcur))
 		    || btr_pcur_get_low_match(pcur) < index->n_uniq) {
@@ -1724,8 +1709,8 @@ flag_ok:
 			found, because new_table is being modified by
 			this thread only, and all indexes should be
 			updated in sync. */
-			mtr->commit();
-			return(DB_INDEX_CORRUPT);
+			error = DB_INDEX_CORRUPT;
+			goto err_exit;
 		}
 
 		btr_cur_pessimistic_delete(&error, FALSE,
@@ -1785,22 +1770,8 @@ row_log_table_apply_delete(
 	if (err != DB_SUCCESS) {
 		goto all_done;
 	}
-#ifdef UNIV_DEBUG
-	switch (btr_pcur_get_btr_cur(&pcur)->flag) {
-	case BTR_CUR_DELETE_REF:
-	case BTR_CUR_DEL_MARK_IBUF:
-	case BTR_CUR_DELETE_IBUF:
-	case BTR_CUR_INSERT_TO_IBUF:
-		/* We did not request buffering. */
-		break;
-	case BTR_CUR_HASH:
-	case BTR_CUR_HASH_FAIL:
-	case BTR_CUR_BINARY:
-		goto flag_ok;
-	}
-	ut_ad(0);
-flag_ok:
-#endif /* UNIV_DEBUG */
+
+	ut_ad(btr_pcur_get_btr_cur(&pcur)->flag == BTR_CUR_BINARY);
 
 	if (page_rec_is_infimum(btr_pcur_get_rec(&pcur))
 	    || btr_pcur_get_low_match(&pcur) < index->n_uniq) {
@@ -1934,19 +1905,8 @@ func_exit_committed:
 
 		return error;
 	}
-#ifdef UNIV_DEBUG
-	switch (btr_pcur_get_btr_cur(&pcur)->flag) {
-	case BTR_CUR_DELETE_REF:
-	case BTR_CUR_DEL_MARK_IBUF:
-	case BTR_CUR_DELETE_IBUF:
-	case BTR_CUR_INSERT_TO_IBUF:
-		ut_ad(0);/* We did not request buffering. */
-	case BTR_CUR_HASH:
-	case BTR_CUR_HASH_FAIL:
-	case BTR_CUR_BINARY:
-		break;
-	}
-#endif /* UNIV_DEBUG */
+
+	ut_ad(btr_pcur_get_btr_cur(&pcur)->flag == BTR_CUR_BINARY);
 
 	ut_ad(!page_rec_is_infimum(btr_pcur_get_rec(&pcur))
 	      && btr_pcur_get_low_match(&pcur) >= index->n_uniq);
@@ -2096,8 +2056,17 @@ func_exit_committed:
 		ut_free(pcur.old_rec_buf);
 		pcur.old_rec_buf = nullptr;
 
-		if (ROW_FOUND != row_search_index_entry(
-			    entry, BTR_MODIFY_TREE, &pcur, &mtr)) {
+		error = btr_pcur_open(entry, PAGE_CUR_LE, BTR_MODIFY_TREE,
+				      &pcur, &mtr);
+
+		if (error != DB_SUCCESS) {
+			ut_ad(0);
+			break;
+		}
+
+		if (btr_pcur_is_before_first_on_page(&pcur)
+		    || btr_pcur_get_low_match(&pcur)
+		    != dtuple_get_n_fields(entry)) {
 			ut_ad(0);
 			error = DB_CORRUPTION;
 			break;
@@ -3857,7 +3826,7 @@ UndorecApplier::get_old_rec(const dtuple_t &tuple, dict_index_t *index,
     if (is_same(roll_ptr))
       return version;
     trx_undo_prev_version_build(version, index, *offsets, heap, &prev_version,
-                                nullptr, nullptr, 0);
+                                &mtr, 0, nullptr, nullptr);
     version= prev_version;
   }
   while (version);
@@ -4026,7 +3995,7 @@ void UndorecApplier::log_update(const dtuple_t &tuple,
       copy_rec= rec_copy(mem_heap_alloc(
         heap, rec_offs_size(offsets)), match_rec, offsets);
     trx_undo_prev_version_build(match_rec, clust_index, offsets, heap,
-                                &prev_version, nullptr, nullptr, 0);
+                                &prev_version, &mtr, 0, nullptr, nullptr);
 
     prev_offsets= rec_get_offsets(prev_version, clust_index, prev_offsets,
                                   clust_index->n_core_fields,

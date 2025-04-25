@@ -1,6 +1,6 @@
 /* simpel_tls_tsip_client.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -31,7 +31,7 @@
     #include <wolfssl/wolfcrypt/port/Renesas/renesas-tsip-crypt.h>
 #endif
 
-#define SIMPLE_TLSSEVER_IP       "192.168.10.10"
+#define SIMPLE_TLSSEVER_IP       "192.168.11.5"
 #define SIMPLE_TLSSERVER_PORT    "11111"
 
 ER    t4_tcp_callback(ID cepid, FN fncd , VP p_parblk);
@@ -103,7 +103,7 @@ void wolfSSL_TLS_client_init(const char* cipherlist)
             char *cert       = "./certs/ca-cert.pem";
         #endif
     #else
-        #if defined(USE_ECC_CERT) && defined(USE_CERT_BUFFERS_256) 
+        #if defined(USE_ECC_CERT) && defined(USE_CERT_BUFFERS_256)
             const unsigned char *cert       = ca_ecc_cert_der_256;
             #define  SIZEOF_CERT sizeof_ca_ecc_cert_der_256
         #else
@@ -118,7 +118,7 @@ void wolfSSL_TLS_client_init(const char* cipherlist)
     #endif
 
     /* Create and initialize WOLFSSL_CTX */
-    if ((client_ctx = 
+    if ((client_ctx =
         wolfSSL_CTX_new(wolfSSLv23_client_method_ex((void *)NULL))) == NULL) {
         printf("ERROR: failed to create WOLFSSL_CTX\n");
         return;
@@ -134,7 +134,7 @@ void wolfSSL_TLS_client_init(const char* cipherlist)
         return;
     }
     #else
-    if (wolfSSL_CTX_load_verify_buffer(client_ctx, cert, SIZEOF_CERT, 
+    if (wolfSSL_CTX_load_verify_buffer(client_ctx, cert, SIZEOF_CERT,
                                             SSL_FILETYPE_ASN1) != SSL_SUCCESS){
            printf("ERROR: can't load certificate data\n");
        return;
@@ -150,24 +150,6 @@ void wolfSSL_TLS_client_init(const char* cipherlist)
         printf("ERROR: can't load client-certificate\n");
         return;
     }
-
-    /* set client private key data */
-    #if defined(WOLFSSL_TLS13) && defined(SIMPLE_TLS_TSIP_CLIENT)
-    if (tsip_set_clientPrivateKeyEnc(
-                        g_key_block_data.encrypted_user_ecc256_private_key,
-                                                        TSIP_ECCP256) != 0) {
-        printf("ERROR: can't load client-private key\n");
-        return;
-    }
-    #else
-    if (wolfSSL_CTX_use_PrivateKey_buffer(client_ctx, 
-                                ecc_clikey_der_256,
-                                sizeof_ecc_clikey_der_256,
-                                SSL_FILETYPE_ASN1)      != WOLFSSL_SUCCESS) {
-        printf("ERROR: can't load private-key data.\n");
-        return;
-    }
-    #endif /* WOLFSSL_TLS13 */
 
 #else
     if (wolfSSL_CTX_use_certificate_chain_buffer_format(client_ctx,
@@ -195,15 +177,15 @@ void wolfSSL_TLS_client_init(const char* cipherlist)
     wolfSSL_SetIOSend(client_ctx, my_IOSend);
 
     /* use specific cipher */
-    if (cipherlist != NULL && 
+    if (cipherlist != NULL &&
         wolfSSL_CTX_set_cipher_list(client_ctx, cipherlist) != WOLFSSL_SUCCESS) {
         wolfSSL_CTX_free(client_ctx); client_ctx = NULL;
         printf("client can't set cipher list");
         return;
     }
-    
+
 #if defined(WOLFSSL_TLS13)
-    if (wolfSSL_CTX_UseSupportedCurve(client_ctx, WOLFSSL_ECC_SECP256R1) 
+    if (wolfSSL_CTX_UseSupportedCurve(client_ctx, WOLFSSL_ECC_SECP256R1)
                                                         != WOLFSSL_SUCCESS) {
         wolfSSL_CTX_free(client_ctx); client_ctx = NULL;
         printf("client can't set use supported curves\n");
@@ -216,17 +198,17 @@ void wolfSSL_TLS_client( )
 {
     ID  cepid = 1;
     ER  ercd;
-    int ret;
+    int ret = 0;
     WOLFSSL_CTX *ctx = (WOLFSSL_CTX *)client_ctx;
     WOLFSSL *ssl = NULL;
 
     #define BUFF_SIZE 256
     static const char sendBuff[]= "Hello Server\n" ;
-    
+
     char    rcvBuff[BUFF_SIZE] = {0};
-    
+
     static T_IPV4EP my_addr = { 0, 0 };
-    
+
     T_IPV4EP dst_addr;
 
     if((dst_addr.ipaddr = getIPaddr(SIMPLE_TLSSEVER_IP)) == 0){
@@ -234,7 +216,7 @@ void wolfSSL_TLS_client( )
         goto out;
     }
     if((dst_addr.portno = getPort(SIMPLE_TLSSERVER_PORT)) == 0){
-        printf("ERROR: IP address\n");
+        printf("ERROR: Port number\n");
         goto out;
     }
 
@@ -248,9 +230,96 @@ void wolfSSL_TLS_client( )
         goto out;
     }
 
-    #ifdef SIMPLE_TLS_TSIP_CLIENT
-    tsip_set_callback_ctx(ssl, &userContext);
-    #endif
+#ifdef SIMPLE_TLS_TSIP_CLIENT
+    ret = tsip_set_callback_ctx(ssl, &userContext);
+#endif
+
+    /* set client private key data */
+#ifdef USE_ECC_CERT
+
+    #ifdef WOLFSSL_RENESAS_TSIP_TLS
+
+    /* TSIP specific ECC private key */
+    if (ret == 0){
+        ret = tsip_use_PrivateKey_buffer_TLS(ssl,
+                (const char*)g_key_block_data.encrypted_user_ecc256_private_key,
+                sizeof(g_key_block_data.encrypted_user_ecc256_private_key),
+                TSIP_ECCP256);
+        if (ret != 0) {
+            printf("ERROR tsip_use_PrivateKey_buffer_TLS\n");
+        }
+    }
+    # if defined(WOLFSSL_CHECK_SIG_FAULTS)
+    if (ret == 0){
+        ret = tsip_use_PublicKey_buffer_TLS(ssl,
+                (const char*)g_key_block_data.encrypted_user_ecc256_public_key,
+                sizeof(g_key_block_data.encrypted_user_ecc256_public_key),
+                TSIP_ECCP256);
+        if (ret != 0) {
+            printf("ERROR tsip_use_PublicKey_buffer_TLS\n");
+        }
+    }
+    #endif /* WOLFSSL_CHECK_SIG_FAULTS */
+
+    #else
+
+    /* DER format ECC private key */
+    if (ret == 0) {
+        ret = wolfSSL_use_PrivateKey_buffer(ssl,
+                                    ecc_clikey_der_256,
+                                    sizeof_ecc_clikey_der_256,
+                                    WOLFSSL_FILETYPE_ASN1);
+        if (ret != SSL_SUCCESS) {
+            printf("ERROR wolfSSL_use_PrivateKey_buffer: %d\n",
+                                                wolfSSL_get_error(ssl, 0));
+            ret = -1;
+        }
+    }
+
+    #endif /* WOLFSSL_RENESAS_TSIP_TLS */
+
+#else
+
+    #if defined(WOLFSSL_RENESAS_TSIP_TLS)
+
+    /* Note: TSIP asks RSA client key pair for client authentication.  */
+
+    /* TSIP specific RSA private key */
+    if (ret == 0) {
+        ret = tsip_use_PrivateKey_buffer_TLS(ssl,
+               (const char*)g_key_block_data.encrypted_user_rsa2048_private_key,
+               sizeof(g_key_block_data.encrypted_user_rsa2048_private_key),
+                                                        TSIP_RSA2048);
+        if (ret != 0) {
+            printf("ERROR tsip_use_PrivateKey_buffer_TLS :%d\n", ret);
+        }
+    }
+    if (ret == 0) {
+        ret = tsip_use_PublicKey_buffer_TLS(ssl,
+                (const char*)g_key_block_data.encrypted_user_rsa2048_public_key,
+                sizeof(g_key_block_data.encrypted_user_rsa2048_public_key),
+                                                        TSIP_RSA2048);
+        if (ret != 0) {
+            printf("ERROR tsip_use_PublicKey_buffer_TLS: %d\n", ret);
+        }
+    }
+
+    #else
+
+    if (ret == 0) {
+        err = wolfSSL_use_PrivateKey_buffer(ssl, client_key_der_2048,
+                            sizeof_client_key_der_2048, WOLFSSL_FILETYPE_ASN1);
+
+        if (err != SSL_SUCCESS) {
+            printf("ERROR wolfSSL_use_PrivateKey_buffer: %d\n",
+                                                wolfSSL_get_error(ssl, 0));
+            ret = -1;
+        }
+    }
+
+    #endif /* WOLFSSL_RENESAS_TSIP_TLS */
+
+#endif /* USE_ECC_CERT */
 
     /* set callback context */
     wolfSSL_SetIOReadCtx(ssl, (void *)&cepid);

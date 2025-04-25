@@ -1,6 +1,6 @@
 /* wolfcaam_seco.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -24,7 +24,7 @@
 #ifndef WOLFCAAM_SECO_H
 #define WOLFCAAM_SECO_H
 
-#include <wolfssl/wolfcrypt/settings.h>
+#include <wolfssl/wolfcrypt/types.h>
 
 #ifdef WOLFSSL_SECO_CAAM
 
@@ -38,7 +38,7 @@
 #define Boolean int
 #define Success 1
 #define Failure 0
-#define INTERRUPT_Panic()
+#define INTERRUPT_Panic() WC_DO_NOTHING
 #define MemoryMapMayNotBeEmpty -1
 #define CAAM_WAITING -2
 #define NoActivityReady -1

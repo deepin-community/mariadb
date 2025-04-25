@@ -15,7 +15,7 @@ t1	CREATE TABLE `t1` (
   `a` int(11) DEFAULT NULL,
   `b` int(11) GENERATED ALWAYS AS (`a` * 2) STORED,
   UNIQUE KEY `b` (`b`)
-) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 describe t1;
 Field	Type	Null	Key	Default	Extra
 a	int(11)	YES		NULL	
@@ -30,7 +30,7 @@ t1	CREATE TABLE `t1` (
   `a` int(11) DEFAULT NULL,
   `b` int(11) GENERATED ALWAYS AS (`a` * 2) STORED,
   UNIQUE KEY `b` (`b`)
-) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 describe t1;
 Field	Type	Null	Key	Default	Extra
 a	int(11)	YES		NULL	
@@ -59,7 +59,7 @@ t1	CREATE TABLE `t1` (
   `a` int(11) DEFAULT NULL,
   `b` int(11) GENERATED ALWAYS AS (`a` * 2) STORED,
   KEY `b` (`b`)
-) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 describe t1;
 Field	Type	Null	Key	Default	Extra
 a	int(11)	YES		NULL	
@@ -72,7 +72,7 @@ t1	CREATE TABLE `t1` (
   `a` int(11) DEFAULT NULL,
   `b` int(11) GENERATED ALWAYS AS (`a` * 2) STORED,
   KEY `a` (`a`,`b`)
-) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 describe t1;
 Field	Type	Null	Key	Default	Extra
 a	int(11)	YES	MUL	NULL	
@@ -214,6 +214,25 @@ PRIMARY KEY(pk),
 INDEX(vc(32))
 );
 DELETE FROM t1 WHERE vc IS NULL ORDER BY pk;
+DROP TABLE t1;
+SET sql_mode='';
+CREATE TABLE t1 (a INT GENERATED ALWAYS AS (1) VIRTUAL,KEY(a)) ENGINE=MyISAM;
+INSERT INTO t1 SELECT 1 FROM seq_1_to_2 ;
+Warnings:
+Warning	1906	The value specified for generated column 'a' in table 't1' has been ignored
+Warning	1906	The value specified for generated column 'a' in table 't1' has been ignored
+SELECT * FROM t1;
+a
+1
+1
+DROP TABLE t1;
+CREATE TABLE t1 (a INT GENERATED ALWAYS AS (1) VIRTUAL,KEY(a)) ENGINE=MyISAM;
+INSERT INTO t1 SELECT 1 UNION SELECT 1;
+Warnings:
+Warning	1906	The value specified for generated column 'a' in table 't1' has been ignored
+SELECT * FROM t1;
+a
+1
 DROP TABLE t1;
 #
 # MDEV-11737 Failing assertion: block->magic_n == MEM_BLOCK_MAGIC_N

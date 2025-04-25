@@ -1,6 +1,6 @@
 /* main.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -27,7 +27,7 @@
 /* wolfCrypt_Init/wolfCrypt_Cleanup to turn CryptoCell hardware on/off */
 #include <wolfssl/wolfcrypt/wc_port.h>
 
-/* SEGGER_RTT_Init, you can potential replace it with other serial terminal */
+/* SEGGER_RTT_Init, you can potentially replace it with other serial terminal */
 #include "SEGGER_RTT.h"
 
 int main(void)
@@ -63,4 +63,3 @@ int main(void)
 
     return 0;
 }
-

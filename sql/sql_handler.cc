@@ -62,10 +62,6 @@
 #include "sql_select.h"
 #include "transaction.h"
 
-#ifdef USE_PRAGMA_IMPLEMENTATION
-#pragma implementation				// gcc: Class implementation
-#endif
-
 #define HANDLER_TABLES_HASH_SIZE 120
 
 static enum enum_ha_read_modes rkey_to_rnext[]=
@@ -112,11 +108,12 @@ SQL_HANDLER::~SQL_HANDLER()
     Pointer to the TABLE_LIST struct.
 */
 
-static char *mysql_ha_hash_get_key(SQL_HANDLER *table, size_t *key_len,
-                                   my_bool first __attribute__((unused)))
+static const uchar *mysql_ha_hash_get_key(const void *table_, size_t *key_len,
+                                          my_bool)
 {
+  auto table= static_cast<const SQL_HANDLER *>(table_);
   *key_len= table->handler_name.length + 1 ; /* include '\0' in comparisons */
-  return (char*) table->handler_name.str;
+  return reinterpret_cast<const uchar *>(table->handler_name.str);
 }
 
 
@@ -134,9 +131,9 @@ static char *mysql_ha_hash_get_key(SQL_HANDLER *table, size_t *key_len,
     Nothing
 */
 
-static void mysql_ha_hash_free(SQL_HANDLER *table)
+static void mysql_ha_hash_free(void *table)
 {
-  delete table;
+  delete static_cast<SQL_HANDLER *>(table);
 }
 
 static void mysql_ha_close_childs(THD *thd, TABLE_LIST *current_table_list,
@@ -291,8 +288,7 @@ bool mysql_ha_open(THD *thd, TABLE_LIST *tables, SQL_HANDLER *reopen)
     */
     if (my_hash_init(key_memory_THD_handler_tables_hash,
                      &thd->handler_tables_hash, &my_charset_latin1,
-                     HANDLER_TABLES_HASH_SIZE, 0, 0, (my_hash_get_key)
-                     mysql_ha_hash_get_key, (my_hash_free_key)
+                     HANDLER_TABLES_HASH_SIZE, 0, 0, mysql_ha_hash_get_key,
                      mysql_ha_hash_free, 0))
     {
       DBUG_PRINT("exit",("ERROR"));
@@ -638,6 +634,7 @@ mysql_ha_fix_cond_and_key(SQL_HANDLER *handler,
                "WHERE", "HANDLER");
       return 1;                                 // ROWNUM() used
     }
+    thd->where= THD_WHERE::WHERE_CLAUSE;
     if (cond->fix_fields_if_needed_for_bool(thd, &cond))
       return 1;
   }
@@ -646,9 +643,8 @@ mysql_ha_fix_cond_and_key(SQL_HANDLER *handler,
   {
     /* Check if same as last keyname. If not, do a full lookup */
     if (handler->keyno < 0 ||
-        my_strcasecmp(&my_charset_latin1,
-                      keyname,
-                      table->s->key_info[handler->keyno].name.str))
+        !Lex_ident_column(Lex_cstring_strlen(keyname)).
+          streq(table->s->key_info[handler->keyno].name))
     {
       if ((handler->keyno= find_type(keyname, &table->s->keynames,
                                      FIND_TYPE_NO_PREFIX) - 1) < 0)
@@ -659,28 +655,28 @@ mysql_ha_fix_cond_and_key(SQL_HANDLER *handler,
       }
     }
 
+    const KEY *c_key= table->s->key_info + handler->keyno;
+
+    if (c_key->algorithm == HA_KEY_ALG_FULLTEXT ||
+        c_key->algorithm == HA_KEY_ALG_VECTOR ||
+        (ha_rkey_mode != HA_READ_KEY_EXACT &&
+         (table->key_info[handler->keyno].index_flags &
+          (HA_READ_NEXT | HA_READ_PREV | HA_READ_RANGE)) == 0))
+    {
+      my_error(ER_KEY_DOESNT_SUPPORT, MYF(0),
+               table->file->index_type(handler->keyno), c_key->name.str);
+      return 1;
+    }
+
     /* Check key parts */
     if (mode == RKEY)
     {
-      TABLE *table= handler->table;
       KEY *keyinfo= table->key_info + handler->keyno;
       KEY_PART_INFO *key_part= keyinfo->key_part;
       List_iterator<Item> it_ke(*key_expr);
       Item *item;
       key_part_map keypart_map;
       uint key_len;
-      const KEY *c_key= table->s->key_info + handler->keyno;
-
-      if ((c_key->flags & HA_SPATIAL) ||
-           c_key->algorithm == HA_KEY_ALG_FULLTEXT ||
-          (ha_rkey_mode != HA_READ_KEY_EXACT &&
-           (table->file->index_flags(handler->keyno, 0, TRUE) &
-            (HA_READ_NEXT | HA_READ_PREV | HA_READ_RANGE)) == 0))
-      {
-        my_error(ER_KEY_DOESNT_SUPPORT, MYF(0),
-                 table->file->index_type(handler->keyno), keyinfo->name.str);
-        return 1;
-      }
 
       if (key_expr->elements > keyinfo->user_defined_key_parts)
       {
@@ -690,14 +686,14 @@ mysql_ha_fix_cond_and_key(SQL_HANDLER *handler,
       }
 
       if (key_expr->elements < keyinfo->user_defined_key_parts &&
-               (table->file->index_flags(handler->keyno, 0, TRUE) &
-                HA_ONLY_WHOLE_INDEX))
+          (table->key_info[handler->keyno].index_flags & HA_ONLY_WHOLE_INDEX))
       {
         my_error(ER_KEY_DOESNT_SUPPORT, MYF(0),
                  table->file->index_type(handler->keyno), keyinfo->name.str);
         return 1;
       }
 
+      thd->where= THD_WHERE::HANDLER_STATEMENT;
       for (keypart_map= key_len=0 ; (item=it_ke++) ; key_part++)
       {
 	/* note that 'item' can be changed by fix_fields() call */
@@ -714,7 +710,7 @@ mysql_ha_fix_cond_and_key(SQL_HANDLER *handler,
           MY_BITMAP *old_map= dbug_tmp_use_all_columns(table, &table->write_set);
           int res= item->save_in_field(key_part->field, 1);
           dbug_tmp_restore_column_map(&table->write_set, old_map);
-          if (res)
+          if (res < 0 || thd->is_error())
             return 1;
         }
         key_len+= key_part->store_length;
@@ -955,7 +951,7 @@ retry:
     {
       DBUG_ASSERT(keyname != 0);
 
-      if (unlikely(!(key= (uchar*) thd->calloc(ALIGN_SIZE(handler->key_len)))))
+      if (unlikely(!(key= thd->calloc<uchar>(ALIGN_SIZE(handler->key_len)))))
 	goto err;
       if (unlikely((error= table->file->ha_index_or_rnd_end())))
         break;
@@ -989,7 +985,8 @@ retry:
       }
       goto ok;
     }
-    if (cond && !cond->val_int())
+    thd->inc_examined_row_count();
+    if (cond && !cond->val_bool())
     {
       if (thd->is_error())
         goto err;
@@ -1003,6 +1000,7 @@ retry:
         goto err;
 
       protocol->write();
+      thd->inc_sent_row_count(1);
     }
     num_rows++;
   }
@@ -1080,10 +1078,8 @@ static SQL_HANDLER *mysql_ha_find_match(THD *thd, TABLE_LIST *tables)
       if (tables->is_anonymous_derived_table())
         continue;
       if ((! tables->db.str[0] ||
-          ! my_strcasecmp(&my_charset_latin1, hash_tables->db.str,
-                          tables->get_db_name())) &&
-          ! my_strcasecmp(&my_charset_latin1, hash_tables->table_name.str,
-                          tables->get_table_name()))
+          tables->get_db_name().streq(hash_tables->db)) &&
+          tables->get_table_name().streq(hash_tables->table_name))
       {
         /* Link into hash_tables list */
         hash_tables->next= head;

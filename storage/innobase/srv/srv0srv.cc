@@ -3,7 +3,7 @@
 Copyright (c) 1995, 2017, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2008, 2009 Google Inc.
 Copyright (c) 2009, Percona Inc.
-Copyright (c) 2013, 2022, MariaDB Corporation.
+Copyright (c) 2013, 2023, MariaDB Corporation.
 
 Portions of this file contain modifications contributed and copyrighted by
 Google, Inc. Those modifications are gratefully acknowledged and are described
@@ -48,7 +48,6 @@ Created 10/8/1995 Heikki Tuuri
 #include "buf0lru.h"
 #include "dict0boot.h"
 #include "dict0load.h"
-#include "ibuf0ibuf.h"
 #include "lock0lock.h"
 #include "log0recv.h"
 #include "mem0mem.h"
@@ -61,7 +60,6 @@ Created 10/8/1995 Heikki Tuuri
 #include "srv0start.h"
 #include "trx0i_s.h"
 #include "trx0purge.h"
-#include "btr0defragment.h"
 #include "ut0mem.h"
 #include "fil0fil.h"
 #include "fil0crypt.h"
@@ -106,9 +104,6 @@ segment). It is quite possible that some of the tablespaces doesn't host
 any of the rollback-segment based on configuration used. */
 uint32_t srv_undo_tablespaces_active;
 
-/** Rate at which UNDO records should be purged. */
-ulong	srv_purge_rseg_truncate_frequency;
-
 /** Enable or Disable Truncate of UNDO tablespace.
 Note: If enabled then UNDO tablespace will be selected for truncate.
 While Server waits for undo-tablespace to truncate if user disables
@@ -126,9 +121,9 @@ my_bool	srv_read_only_mode;
 /** store to its own file each table created by an user; data
 dictionary tables are in the system tablespace 0 */
 my_bool	srv_file_per_table;
-/** Set if InnoDB operates in read-only mode or innodb-force-recovery
-is greater than SRV_FORCE_NO_TRX_UNDO. */
-my_bool	high_level_read_only;
+/** Set if innodb_read_only is set or innodb_force_recovery
+is SRV_FORCE_NO_UNDO_LOG_SCAN or greater. */
+bool high_level_read_only;
 
 /** Sort buffer size in index creation */
 ulong	srv_sort_buf_size;
@@ -185,10 +180,6 @@ with mysql_mutex_lock(), which will wait until it gets the mutex. */
 ulint	srv_buf_pool_size;
 /** Requested buffer pool chunk size */
 size_t	srv_buf_pool_chunk_unit;
-/** innodb_lru_scan_depth; number of blocks scanned in LRU flush batch */
-ulong	srv_LRU_scan_depth;
-/** innodb_flush_neighbors; whether or not to flush neighbors of a block */
-ulong	srv_flush_neighbors;
 /** Previously requested size */
 ulint	srv_buf_pool_old_size;
 /** Current size as scaling factor for the other components */
@@ -218,13 +209,6 @@ my_bool	srv_random_read_ahead;
 in the buffer cache and accessed sequentially for InnoDB to trigger a
 readahead request. */
 ulong	srv_read_ahead_threshold;
-
-/** innodb_change_buffer_max_size; maximum on-disk size of change
-buffer in terms of percentage of the buffer pool. */
-uint	srv_change_buffer_max_size;
-
-ulong	srv_file_flush_method;
-
 
 /** copy of innodb_open_files; @see innodb_init_params() */
 ulint	srv_max_n_open_files;
@@ -282,7 +266,7 @@ my_bool	srv_print_all_deadlocks;
 INFORMATION_SCHEMA.innodb_cmp_per_index */
 my_bool	srv_cmp_per_index_enabled;
 
-/** innodb_fast_shutdown=1 skips purge and change buffer merge.
+/** innodb_fast_shutdown=1 skips the purge of transaction history.
 innodb_fast_shutdown=2 effectively crashes the server (no log checkpoint).
 innodb_fast_shutdown=3 is a clean shutdown that skips the rollback
 of active transaction (to be done on restart). */
@@ -316,8 +300,6 @@ unsigned long long srv_stats_modified_counter;
 based on number of configured pages */
 my_bool	srv_stats_sample_traditional;
 
-my_bool	srv_use_doublewrite_buf;
-
 /** innodb_sync_spin_loops */
 ulong	srv_n_spin_wait_rounds;
 /** innodb_spin_wait_delay */
@@ -325,21 +307,6 @@ uint	srv_spin_wait_delay;
 
 /** Number of initialized rollback segments for persistent undo log */
 ulong	srv_available_undo_logs;
-
-/* Defragmentation */
-my_bool	srv_defragment;
-/** innodb_defragment_n_pages */
-uint	srv_defragment_n_pages;
-uint	srv_defragment_stats_accuracy;
-/** innodb_defragment_fill_factor_n_recs */
-uint	srv_defragment_fill_factor_n_recs;
-/** innodb_defragment_fill_factor */
-double	srv_defragment_fill_factor;
-/** innodb_defragment_frequency */
-uint	srv_defragment_frequency;
-/** derived from innodb_defragment_frequency;
-@see innodb_defragment_frequency_update() */
-ulonglong	srv_defragment_interval;
 
 /** Current mode of operation */
 enum srv_operation_mode srv_operation;
@@ -355,6 +322,10 @@ my_bool	srv_print_innodb_lock_monitor;
 /** innodb_force_primary_key; whether to disallow CREATE TABLE without
 PRIMARY KEY */
 my_bool	srv_force_primary_key;
+
+/** innodb_alter_copy_bulk; Whether to allow bulk insert operation
+inside InnoDB alter for copy algorithm; */
+my_bool innodb_alter_copy_bulk;
 
 /** Key version to encrypt the temporary tablespace */
 my_bool innodb_encrypt_temporary_tables;
@@ -384,8 +355,6 @@ FILE*	srv_misc_tmpfile;
 ulint		srv_main_active_loops;
 /** Iterations of the loop bounded by the 'srv_idle' label. */
 ulint		srv_main_idle_loops;
-/** Iterations of the loop bounded by the 'srv_shutdown' label. */
-static ulint		srv_main_shutdown_loops;
 /** Log writes involving flush. */
 ulint		srv_log_writes_and_flush;
 
@@ -551,10 +520,9 @@ srv_print_master_thread_info(
 	FILE  *file)    /* in: output stream */
 {
 	fprintf(file, "srv_master_thread loops: " ULINTPF " srv_active, "
-		ULINTPF " srv_shutdown, " ULINTPF " srv_idle\n"
+		ULINTPF " srv_idle\n"
 		"srv_master_thread log flush and writes: " ULINTPF "\n",
 		srv_main_active_loops,
-		srv_main_shutdown_loops,
 		srv_main_idle_loops,
 		srv_log_writes_and_flush);
 }
@@ -563,6 +531,7 @@ static void thread_pool_thread_init()
 {
 	my_thread_init();
 	pfs_register_thread(thread_pool_thread_key);
+	my_thread_set_name("ib_tpool_worker");
 }
 static void thread_pool_thread_end()
 {
@@ -773,23 +742,18 @@ srv_printf_innodb_monitor(
 	      "--------\n", file);
 	os_aio_print(file);
 
-	ibuf_print(file);
-
 #ifdef BTR_CUR_HASH_ADAPT
-	if (btr_search_enabled) {
+	if (btr_search.enabled) {
 		fputs("-------------------\n"
 		      "ADAPTIVE HASH INDEX\n"
 		      "-------------------\n", file);
-		for (ulint i = 0; i < btr_ahi_parts; ++i) {
-			const auto part= &btr_search_sys.parts[i];
-			part->latch.rd_lock(SRW_LOCK_CALL);
-			ut_ad(part->heap->type == MEM_HEAP_FOR_BTR_SEARCH);
+		for (ulong i = 0; i < btr_search.n_parts; ++i) {
+			btr_sea::partition& part= btr_search.parts[i];
+			part.blocks_mutex.wr_lock();
 			fprintf(file, "Hash table size " ULINTPF
 				", node heap has " ULINTPF " buffer(s)\n",
-				part->table.n_cells,
-				part->heap->base.count
-				- !part->heap->free_block);
-			part->latch.rd_unlock();
+				part.table.n_cells, part.blocks.count + !!part.spare);
+			part.blocks_mutex.wr_unlock();
 		}
 
 		const ulint with_ahi = btr_cur_n_sea;
@@ -845,6 +809,9 @@ srv_printf_innodb_monitor(
 	return(ret);
 }
 
+void innodb_io_slots_stats(tpool::aio_opcode op,
+                           innodb_async_io_stats_t *stats);
+
 /******************************************************************//**
 Function to pass InnoDB status variables to MySQL */
 void
@@ -856,23 +823,27 @@ srv_export_innodb_status(void)
 	if (!srv_read_only_mode) {
 		fil_crypt_total_stat(&crypt_stat);
 	}
+	innodb_io_slots_stats(tpool::aio_opcode::AIO_PREAD,
+		&export_vars.async_read_stats);
+	innodb_io_slots_stats(tpool::aio_opcode::AIO_PWRITE,
+		&export_vars.async_write_stats);
 
 #ifdef BTR_CUR_HASH_ADAPT
 	export_vars.innodb_ahi_hit = btr_cur_n_sea;
 	export_vars.innodb_ahi_miss = btr_cur_n_non_sea;
 
 	ulint mem_adaptive_hash = 0;
-	for (ulong i = 0; i < btr_ahi_parts; i++) {
-		const auto part= &btr_search_sys.parts[i];
-		part->latch.rd_lock(SRW_LOCK_CALL);
-		if (part->heap) {
-			ut_ad(part->heap->type == MEM_HEAP_FOR_BTR_SEARCH);
-
-			mem_adaptive_hash += mem_heap_get_size(part->heap)
-				+ part->table.n_cells * sizeof(hash_cell_t);
-		}
-		part->latch.rd_unlock();
+	for (ulong i = 0; i < btr_search.n_parts; i++) {
+		btr_sea::partition& part= btr_search.parts[i];
+		part.blocks_mutex.wr_lock();
+		mem_adaptive_hash += part.blocks.count + !!part.spare;
+		part.blocks_mutex.wr_unlock();
 	}
+	mem_adaptive_hash <<= srv_page_size_shift;
+	btr_search.parts[0].latch.rd_lock(SRW_LOCK_CALL);
+	mem_adaptive_hash += btr_search.parts[0].table.n_cells
+		* sizeof *btr_search.parts[0].table.array * btr_search.n_parts;
+	btr_search.parts[0].latch.rd_unlock();
 	export_vars.innodb_mem_adaptive_hash = mem_adaptive_hash;
 #endif
 
@@ -900,6 +871,9 @@ srv_export_innodb_status(void)
 
 	export_vars.innodb_data_written = srv_stats.data_written
 		+ (dblwr << srv_page_size_shift);
+
+	export_vars.innodb_buffer_pool_read_requests
+		= buf_pool.stat.n_page_gets;
 
 	export_vars.innodb_buffer_pool_bytes_data =
 		buf_pool.stat.LRU_bytes
@@ -952,11 +926,6 @@ srv_export_innodb_status(void)
 
 	export_vars.innodb_n_temp_blocks_decrypted =
 		srv_stats.n_temp_blocks_decrypted;
-
-	export_vars.innodb_defragment_compression_failures =
-		btr_defragment_compression_failures;
-	export_vars.innodb_defragment_failures = btr_defragment_failures;
-	export_vars.innodb_defragment_count = btr_defragment_count;
 
 	export_vars.innodb_onlineddl_rowlog_rows = onlineddl_rowlog_rows;
 	export_vars.innodb_onlineddl_rowlog_pct_used = onlineddl_rowlog_pct_used;
@@ -1162,10 +1131,9 @@ bool purge_sys_t::running()
 
 void purge_sys_t::stop_FTS()
 {
-  latch.rd_lock(SRW_LOCK_CALL);
-  m_FTS_paused++;
-  latch.rd_unlock();
-  while (m_active)
+  ut_d(const auto paused=) m_FTS_paused.fetch_add(1);
+  ut_ad((paused + 1) & ~PAUSED_SYS);
+  while (m_active.load(std::memory_order_acquire))
     std::this_thread::sleep_for(std::chrono::seconds(1));
 }
 
@@ -1199,8 +1167,8 @@ void purge_sys_t::stop()
 /** Resume purge in data dictionary tables */
 void purge_sys_t::resume_SYS(void *)
 {
-  ut_d(auto paused=) purge_sys.m_SYS_paused--;
-  ut_ad(paused);
+  ut_d(auto paused=) purge_sys.m_FTS_paused.fetch_sub(PAUSED_SYS);
+  ut_ad(paused >= PAUSED_SYS);
 }
 
 /** Resume purge at UNLOCK TABLES after FLUSH TABLES FOR EXPORT */
@@ -1272,31 +1240,6 @@ static void srv_sync_log_buffer_in_background()
 	}
 }
 
-/** Report progress during shutdown.
-@param last   time of last output
-@param n_read number of page reads initiated for change buffer merge */
-static void srv_shutdown_print(time_t &last, ulint n_read)
-{
-  time_t now= time(nullptr);
-  if (now - last >= 15)
-  {
-    last= now;
-
-    const ulint ibuf_size= ibuf.size;
-    sql_print_information("Completing change buffer merge;"
-                          " %zu page reads initiated;"
-                          " %zu change buffer pages remain",
-                          n_read, ibuf_size);
-#if defined HAVE_SYSTEMD && !defined EMBEDDED_LIBRARY
-    service_manager_extend_timeout(INNODB_EXTEND_TIMEOUT_INTERVAL,
-                                   "Completing change buffer merge;"
-                                   " %zu page reads initiated;"
-                                   " %zu change buffer pages remain",
-                                   n_read, ibuf_size);
-#endif
-  }
-}
-
 /** Perform periodic tasks whenever the server is active.
 @param counter_time  microsecond_interval_timer() */
 static void srv_master_do_active_tasks(ulonglong counter_time)
@@ -1332,32 +1275,6 @@ static void srv_master_do_idle_tasks(ulonglong counter_time)
 	}
 	MONITOR_INC_TIME_IN_MICRO_SECS(
 		MONITOR_SRV_DICT_LRU_MICROSECOND, counter_time);
-}
-
-/**
-Complete the shutdown tasks such as background DROP TABLE,
-and optionally change buffer merge (on innodb_fast_shutdown=0). */
-void srv_shutdown(bool ibuf_merge)
-{
-	ulint		n_read = 0;
-	time_t		now = time(NULL);
-
-	do {
-		ut_ad(!srv_read_only_mode);
-		ut_ad(srv_shutdown_state == SRV_SHUTDOWN_CLEANUP);
-		++srv_main_shutdown_loops;
-
-		if (ibuf_merge) {
-			srv_main_thread_op_info = "doing insert buffer merge";
-			/* Disallow the use of change buffer to
-			avoid a race condition with
-			ibuf_read_merge_pages() */
-			ibuf_max_size_update(0);
-			log_free_check();
-			n_read = ibuf_contract();
-			srv_shutdown_print(now, n_read);
-		}
-	} while (n_read);
 }
 
 /** The periodic master task controlling the server. */
@@ -1421,7 +1338,6 @@ static bool srv_purge_should_exit(size_t old_history_size)
 
 /*********************************************************************//**
 Fetch and execute a task from the work queue.
-@param [in,out]	slot	purge worker thread slot
 @return true if a task was executed */
 static bool srv_task_execute()
 {
@@ -1503,7 +1419,8 @@ inline void purge_coordinator_state::do_purge()
     ulint n_pages_handled= trx_purge(n_threads, history_size);
     if (!trx_sys.history_exists())
       goto no_history;
-    if (purge_sys.truncate.current || srv_shutdown_state != SRV_SHUTDOWN_NONE)
+    if (purge_sys.truncating_tablespace() ||
+        srv_shutdown_state != SRV_SHUTDOWN_NONE)
     {
       purge_truncation_task.wait();
       trx_purge_truncate_history();
@@ -1561,6 +1478,13 @@ static void release_thd(THD *thd, void *ctx)
 	set_current_thd(0);
 }
 
+void srv_purge_worker_task_low()
+{
+  ut_ad(current_thd);
+  while (srv_task_execute())
+    ut_ad(purge_sys.running());
+}
+
 static void purge_worker_callback(void*)
 {
   ut_ad(!current_thd);
@@ -1568,8 +1492,7 @@ static void purge_worker_callback(void*)
   ut_ad(srv_force_recovery < SRV_FORCE_NO_BACKGROUND);
   void *ctx;
   THD *thd= acquire_thd(&ctx);
-  while (srv_task_execute())
-    ut_ad(purge_sys.running());
+  srv_purge_worker_task_low();
   release_thd(thd,ctx);
 }
 
@@ -1655,5 +1578,9 @@ void srv_purge_shutdown()
     }
     purge_sys.coordinator_shutdown();
     srv_shutdown_purge_tasks();
+    if (!srv_fast_shutdown && !high_level_read_only && srv_was_started &&
+        !opt_bootstrap && srv_operation == SRV_OPERATION_NORMAL &&
+        !srv_sys_space.is_shrink_fail())
+      fsp_system_tablespace_truncate(true);
   }
 }

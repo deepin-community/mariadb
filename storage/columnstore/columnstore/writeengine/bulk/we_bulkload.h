@@ -21,11 +21,8 @@
  *******************************************************************************/
 /** @file */
 
-#ifndef _WE_BULKLOAD_H_
-#define _WE_BULKLOAD_H_
-#ifndef _MSC_VER
+#pragma once
 #include <pthread.h>
-#endif
 #include <fstream>
 #include <string>
 #include <vector>
@@ -80,7 +77,7 @@ class BulkLoad : public FileOp
   /**
    * @brief Pre process jobs to validate and assign values to the job structure
    */
-  int preProcess(Job& job, int tableNo, TableInfo* tableInfo);
+  int preProcess(Job& job, int tableNo, std::shared_ptr<TableInfo>& tableInfo);
 
   /**
    * @brief Print job information
@@ -197,7 +194,7 @@ class BulkLoad : public FileOp
   std::string fAlternateImportDir;                 // Alternate bulk import directory
   std::string fErrorDir;                           // Opt. where error records record
   std::string fProcessName;                        // Application process name
-  static boost::ptr_vector<TableInfo> fTableInfo;  // Vector of Table information
+  static std::vector<std::shared_ptr<TableInfo>> fTableInfo;  // Vector of Table information
   int fNoOfParseThreads;                           // Number of parse threads
   int fNoOfReadThreads;                            // Number of read threads
   boost::thread_group fReadThreads;                // Read thread group
@@ -554,5 +551,3 @@ inline bool BulkLoad::disableTimeOut() const
 }  // namespace WriteEngine
 
 #undef EXPORT
-
-#endif  // _WE_BULKLOAD_H_

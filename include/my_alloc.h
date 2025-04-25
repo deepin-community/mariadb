@@ -25,6 +25,8 @@
 #define ALLOC_MAX_BLOCK_TO_DROP			4096
 #define ALLOC_MAX_BLOCK_USAGE_BEFORE_DROP	10
 
+#define ROOT_FLAG_READ_ONLY       4
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -53,14 +55,18 @@ typedef struct st_mem_root
   unsigned short first_block_usage;
   unsigned short flags;
 
-#ifdef PROTECT_STATEMENT_MEMROOT
-  int read_only;
-#endif
-
   void (*error_handler)(void);
 
   PSI_memory_key psi_key;
 } MEM_ROOT;
+
+typedef struct st_mem_root_savepoint
+{
+  MEM_ROOT *root;
+  USED_MEM *free;
+  USED_MEM *used;
+  unsigned short first_block_usage;
+} MEM_ROOT_SAVEPOINT;
 
 #ifdef  __cplusplus
 }

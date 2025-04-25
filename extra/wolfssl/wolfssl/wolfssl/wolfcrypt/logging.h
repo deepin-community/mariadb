@@ -1,6 +1,6 @@
 /* logging.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -89,6 +89,11 @@ enum wc_FuncNum {
 };
 #endif
 
+#if defined(ARDUINO)
+/* implemented in Arduino wolfssl.h */
+extern WOLFSSL_API int wolfSSL_Arduino_Serial_Print(const char* const s);
+#endif /* ARDUINO */
+
 typedef void (*wolfSSL_Logging_cb)(const int logLevel,
                                    const char *const logMessage);
 
@@ -100,6 +105,8 @@ WOLFSSL_API int  wolfSSL_Debugging_ON(void);
 /* turn logging off */
 WOLFSSL_API void wolfSSL_Debugging_OFF(void);
 
+WOLFSSL_API void wolfSSL_SetLoggingPrefix(const char* prefix);
+
 #ifdef HAVE_WC_INTROSPECTION
     WOLFSSL_API const char *wolfSSL_configure_args(void);
     WOLFSSL_API const char *wolfSSL_global_cflags(void);
@@ -107,11 +114,12 @@ WOLFSSL_API void wolfSSL_Debugging_OFF(void);
 
 
 #if (defined(OPENSSL_EXTRA) && !defined(_WIN32) && \
-        !defined(NO_ERROR_QUEUE)) || defined(DEBUG_WOLFSSL_VERBOSE)
+        !defined(NO_ERROR_QUEUE)) || defined(DEBUG_WOLFSSL_VERBOSE) \
+        || defined(HAVE_MEMCACHED)
 #define WOLFSSL_HAVE_ERROR_QUEUE
 #endif
 
-#if defined(OPENSSL_EXTRA) || defined(DEBUG_WOLFSSL_VERBOSE)
+#if defined(OPENSSL_EXTRA) || defined(DEBUG_WOLFSSL_VERBOSE) || defined(HAVE_MEMCACHED)
     WOLFSSL_LOCAL int wc_LoggingInit(void);
     WOLFSSL_LOCAL int wc_LoggingCleanup(void);
     WOLFSSL_LOCAL int wc_AddErrorNode(int error, int line, char* buf,
@@ -133,7 +141,7 @@ WOLFSSL_API void wolfSSL_Debugging_OFF(void);
         WOLFSSL_API void wc_ERR_print_errors_cb(int (*cb)(const char *str,
                                                 size_t len, void *u), void *u);
     #endif
-#endif /* OPENSSL_EXTRA || DEBUG_WOLFSSL_VERBOSE */
+#endif /* OPENSSL_EXTRA || DEBUG_WOLFSSL_VERBOSE || HAVE_MEMCACHED */
 
 #ifdef WOLFSSL_FUNC_TIME
     /* WARNING: This code is only to be used for debugging performance.
@@ -144,9 +152,9 @@ WOLFSSL_API void wolfSSL_Debugging_OFF(void);
     WOLFSSL_API void WOLFSSL_END(int funcNum);
     WOLFSSL_API void WOLFSSL_TIME(int count);
 #else
-    #define WOLFSSL_START(n)
-    #define WOLFSSL_END(n)
-    #define WOLFSSL_TIME(n)
+    #define WOLFSSL_START(n) WC_DO_NOTHING
+    #define WOLFSSL_END(n)   WC_DO_NOTHING
+    #define WOLFSSL_TIME(n)  WC_DO_NOTHING
 #endif
 
 #if defined(DEBUG_WOLFSSL) && !defined(WOLFSSL_DEBUG_ERRORS_ONLY)
@@ -166,25 +174,59 @@ WOLFSSL_API void wolfSSL_Debugging_OFF(void);
     #define WOLFSSL_STUB(m) \
         WOLFSSL_MSG(WOLFSSL_LOG_CAT(wolfSSL Stub, m, not implemented))
     WOLFSSL_API int WOLFSSL_IS_DEBUG_ON(void);
-#if !defined(_WIN32) && defined(XVSNPRINTF)
+#if defined(XVSNPRINTF)
     WOLFSSL_API void WOLFSSL_MSG_EX(const char* fmt, ...);
     #define HAVE_WOLFSSL_MSG_EX
 #else
-    #define WOLFSSL_MSG_EX(...) do{} while(0)
+    #ifdef WOLF_NO_VARIADIC_MACROS
+        #define WOLFSSL_MSG_EX()    WC_DO_NOTHING
+    #else
+        #define WOLFSSL_MSG_EX(...) WC_DO_NOTHING
+    #endif
 #endif
     WOLFSSL_API void WOLFSSL_MSG(const char* msg);
+#ifdef WOLFSSL_DEBUG_CODEPOINTS
+    WOLFSSL_API void WOLFSSL_MSG2(
+        const char *file, int line, const char* msg);
+    WOLFSSL_API void WOLFSSL_ENTER2(
+        const char *file, int line, const char* msg);
+    WOLFSSL_API void WOLFSSL_LEAVE2(
+        const char *file, int line, const char* msg, int ret);
+    #define WOLFSSL_MSG(msg) WOLFSSL_MSG2(__FILE__, __LINE__, msg)
+    #define WOLFSSL_ENTER(msg) WOLFSSL_ENTER2(__FILE__, __LINE__, msg)
+    #define WOLFSSL_LEAVE(msg, ret) WOLFSSL_LEAVE2(__FILE__, __LINE__, msg, ret)
+    #ifdef XVSNPRINTF
+        WOLFSSL_API void WOLFSSL_MSG_EX2(
+            const char *file, int line, const char* fmt, ...);
+        #define WOLFSSL_MSG_EX(fmt, args...) \
+                WOLFSSL_MSG_EX2(__FILE__, __LINE__, fmt, ## args)
+    #else
+        #ifdef WOLF_NO_VARIADIC_MACROS
+            #define WOLFSSL_MSG_EX2() WC_DO_NOTHING
+        #else
+            #define WOLFSSL_MSG_EX2(...) WC_DO_NOTHING
+        #endif
+    #endif
+#endif
     WOLFSSL_API void WOLFSSL_BUFFER(const byte* buffer, word32 length);
 
 #else
 
-    #define WOLFSSL_ENTER(m)
-    #define WOLFSSL_LEAVE(m, r)
-    #define WOLFSSL_STUB(m)
+    #define WOLFSSL_ENTER(m)      WC_DO_NOTHING
+    #define WOLFSSL_LEAVE(m, r)   WC_DO_NOTHING
+    #define WOLFSSL_STUB(m)       WC_DO_NOTHING
     #define WOLFSSL_IS_DEBUG_ON() 0
 
-    #define WOLFSSL_MSG_EX(...)    do{} while(0)
-    #define WOLFSSL_MSG(m)            do{} while(0)
-    #define WOLFSSL_BUFFER(b, l)      do{} while(0)
+    #ifdef WOLF_NO_VARIADIC_MACROS
+        /* note, modern preprocessors will generate errors with this definition.
+         * "error: macro "WOLFSSL_MSG_EX" passed 2 arguments, but takes just 0"
+         */
+        #define WOLFSSL_MSG_EX()    WC_DO_NOTHING
+    #else
+        #define WOLFSSL_MSG_EX(...) WC_DO_NOTHING
+    #endif
+    #define WOLFSSL_MSG(m)        WC_DO_NOTHING
+    #define WOLFSSL_BUFFER(b, l)  WC_DO_NOTHING
 
 #endif /* DEBUG_WOLFSSL && !WOLFSSL_DEBUG_ERRORS_ONLY */
 
@@ -194,16 +236,21 @@ WOLFSSL_API void wolfSSL_Debugging_OFF(void);
     #ifdef WOLFSSL_HAVE_ERROR_QUEUE
         WOLFSSL_API void WOLFSSL_ERROR_LINE(int err, const char* func, unsigned int line,
             const char* file, void* ctx);
-        #define WOLFSSL_ERROR(x) \
-            WOLFSSL_ERROR_LINE((x), __func__, __LINE__, __FILE__, NULL)
+        #ifdef WOLF_C89
+            #define WOLFSSL_ERROR(x) \
+                WOLFSSL_ERROR_LINE((x), __FILE__, __LINE__, __FILE__, NULL)
+        #else
+            #define WOLFSSL_ERROR(x) \
+                WOLFSSL_ERROR_LINE((x), __func__, __LINE__, __FILE__, NULL)
+        #endif
     #else
         WOLFSSL_API void WOLFSSL_ERROR(int err);
     #endif /* WOLFSSL_HAVE_ERROR_QUEUE */
 
     WOLFSSL_API void WOLFSSL_ERROR_MSG(const char* msg);
 #else
-    #define WOLFSSL_ERROR(e)
-    #define WOLFSSL_ERROR_MSG(m)
+    #define WOLFSSL_ERROR(e) (void)(e)
+    #define WOLFSSL_ERROR_MSG(m) (void)(m)
 #endif /* DEBUG_WOLFSSL | OPENSSL_ALL || WOLFSSL_NGINX || WOLFSSL_HAPROXY ||
           OPENSSL_EXTRA */
 

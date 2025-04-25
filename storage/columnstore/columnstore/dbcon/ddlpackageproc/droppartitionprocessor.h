@@ -21,16 +21,11 @@
  *
  ***********************************************************************/
 /** @file */
-#ifndef DROPPARTITIONEPROCESSOR_H
-#define DROPPARTITIONEPROCESSOR_H
+#pragma once
 
 #include "ddlpackageprocessor.h"
 
-#if defined(_MSC_VER) && defined(DDLPKGPROC_DLLEXPORT)
-#define EXPORT __declspec(dllexport)
-#else
 #define EXPORT
-#endif
 
 namespace ddlpackageprocessor
 {
@@ -38,23 +33,21 @@ namespace ddlpackageprocessor
  * for interacting with the Write Engine to process
  * drop table ddl statements.
  */
-class DropPartitionProcessor : public DDLPackageProcessor
+class DropPartitionProcessor : public DDLPackageProcessor, FormatStatementString
 {
  public:
   DropPartitionProcessor(BRM::DBRM* aDbrm) : DDLPackageProcessor(aDbrm)
   {
   }
+
+ protected:
+ private:
   /** @brief process a drop table statement
    *
    *  @param dropTableStmt the drop table statement
    */
-  EXPORT DDLResult processPackage(ddlpackage::DropPartitionStatement& dropPartitionStmt);
-
- protected:
- private:
+  DDLResult processPackageInternal(ddlpackage::SqlStatement* dropPartitionStmt);
 };
 }  // namespace ddlpackageprocessor
 
 #undef EXPORT
-
-#endif  // DROPPARTITIONEPROCESSOR_H

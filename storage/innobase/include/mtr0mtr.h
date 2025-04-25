@@ -89,8 +89,9 @@ struct mtr_t {
   { auto s= m_memo.size(); rollback_to_savepoint(s - 1, s); }
 
   /** Commit a mini-transaction that is shrinking a tablespace.
-  @param space   tablespace that is being shrunk */
-  ATTRIBUTE_COLD void commit_shrink(fil_space_t &space);
+  @param space   tablespace that is being shrunk
+  @param size    new size in pages */
+  ATTRIBUTE_COLD void commit_shrink(fil_space_t &space, uint32_t size);
 
   /** Commit a mini-transaction that is deleting or renaming a file.
   @param space           tablespace that is being renamed or deleted
@@ -105,7 +106,7 @@ struct mtr_t {
   This is to be used at log_checkpoint().
   @param checkpoint_lsn   the log sequence number of a checkpoint, or 0
   @return current LSN */
-  lsn_t commit_files(lsn_t checkpoint_lsn= 0);
+  ATTRIBUTE_COLD lsn_t commit_files(lsn_t checkpoint_lsn= 0);
 
   /** @return mini-transaction savepoint (current size of m_memo) */
   ulint get_savepoint() const
@@ -308,27 +309,19 @@ public:
   @retval 0 if the transaction only modified temporary tablespaces */
   lsn_t commit_lsn() const { ut_ad(has_committed()); return m_commit_lsn; }
 
-  /** Note that we are inside the change buffer code. */
-  void enter_ibuf() { m_inside_ibuf= true; }
-
-  /** Note that we have exited from the change buffer code. */
-  void exit_ibuf() { m_inside_ibuf= false; }
-
-  /** @return true if we are inside the change buffer code */
-  bool is_inside_ibuf() const { return m_inside_ibuf; }
-
   /** Note that some pages have been freed */
   void set_trim_pages() { m_trim_pages= true; }
 
   /** Latch a buffer pool block.
   @param block    block to be latched
-  @param rw_latch RW_S_LATCH, RW_SX_LATCH, RW_X_LATCH, RW_NO_LATCH */
-  void page_lock(buf_block_t *block, ulint rw_latch);
+  @param rw_latch RW_S_LATCH, RW_SX_LATCH, RW_X_LATCH, RW_NO_LATCH
+  @return block */
+  buf_block_t *page_lock(buf_block_t *block, ulint rw_latch) noexcept;
 
   /** Acquire a latch on a buffer-fixed buffer pool block.
   @param savepoint   savepoint location of the buffer-fixed block
   @param rw_latch    latch to acquire */
-  void upgrade_buffer_fix(ulint savepoint, rw_lock_type_t rw_latch);
+  void upgrade_buffer_fix(ulint savepoint, rw_lock_type_t rw_latch) noexcept;
 
   /** Register a change to the page latch state. */
   void lock_register(ulint savepoint, mtr_memo_type_t type)
@@ -339,8 +332,10 @@ public:
     slot.type= type;
   }
 
-  /** Upgrade U locks on a block to X */
-  void page_lock_upgrade(const buf_block_t &block);
+  /** Upgrade U locks on a block to X
+  @param block   block on which to upgrade
+  @return &block */
+  buf_block_t *page_lock_upgrade(const buf_block_t &block) noexcept;
 
   /** Upgrade index U lock to X */
   ATTRIBUTE_COLD void index_lock_upgrade();
@@ -689,19 +684,45 @@ private:
 
   /** Write a FILE_MODIFY record when a non-predefined persistent
   tablespace was modified for the first time since fil_names_clear(). */
-  ATTRIBUTE_NOINLINE ATTRIBUTE_COLD void name_write();
+  ATTRIBUTE_NOINLINE ATTRIBUTE_COLD void name_write() noexcept;
 
   /** Encrypt the log */
   ATTRIBUTE_NOINLINE void encrypt();
+
+  /** Commit the mini-transaction log.
+  @tparam pmem log_sys.is_mmap()
+  @param mtr   mini-transaction
+  @param lsns  {start_lsn,flush_ahead} */
+  template<bool pmem>
+  static void commit_log(mtr_t *mtr, std::pair<lsn_t,page_flush_ahead> lsns);
 
   /** Append the redo log records to the redo log buffer.
   @return {start_lsn,flush_ahead} */
   std::pair<lsn_t,page_flush_ahead> do_write();
 
   /** Append the redo log records to the redo log buffer.
+  @tparam spin whether to use the spin-only log_sys.lock_lsn()
+  @tparam mmap log_sys.is_mmap()
+  @param mtr   mini-transaction
   @param len   number of bytes to write
   @return {start_lsn,flush_ahead} */
-  std::pair<lsn_t,page_flush_ahead> finish_write(size_t len);
+  template<bool spin,bool mmap> static
+  std::pair<lsn_t,page_flush_ahead> finish_writer(mtr_t *mtr, size_t len);
+
+  /** The applicable variant of commit_log() */
+  static void (*commit_logger)(mtr_t *, std::pair<lsn_t,page_flush_ahead>);
+  /** The applicable variant of finish_writer() */
+  static std::pair<lsn_t,page_flush_ahead> (*finisher)(mtr_t *, size_t);
+
+  std::pair<lsn_t,page_flush_ahead> finish_write(size_t len)
+  { return finisher(this, len); }
+public:
+  /** Poll interval in log_sys.lock_lsn(); 0 to use log_sys.lsn_lock.
+  Protected by LOCK_global_system_variables and log_sys.latch. */
+  static unsigned spin_wait_delay;
+  /** Update finisher when spin_wait_delay is changing to or from 0. */
+  static void finisher_update();
+private:
 
   /** Release all latches. */
   void release();
@@ -744,10 +765,6 @@ private:
 
   /** whether log_sys.latch is locked exclusively */
   uint16_t m_latch_ex:1;
-
-  /** whether change buffer is latched; only needed in non-debug builds
-  to suppress some read-ahead operations, @see ibuf_inside() */
-  uint16_t m_inside_ibuf:1;
 
   /** whether the pages has been trimmed */
   uint16_t m_trim_pages:1;

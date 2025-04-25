@@ -10,7 +10,9 @@ set GLOBAL sql_mode="";
 set LOCAL sql_mode="";
 SET @old_log_bin_trust_function_creators= @@global.log_bin_trust_function_creators;
 SET GLOBAL log_bin_trust_function_creators = 1;
+--disable_cursor_protocol
 select priv into @root_priv from mysql.global_priv where user='root' and host='localhost';
+--enable_cursor_protocol
 
 connect (master,localhost,root,,);
 connection master;
@@ -1824,6 +1826,13 @@ GRANT EXECUTE                 ON mysqltest_db1.* TO mysqltest_u1@localhost;
 GRANT FILE                    ON *.* TO mysqltest_u1@localhost;
 GRANT CREATE USER             ON *.* TO mysqltest_u1@localhost;
 GRANT PROCESS                 ON *.* TO mysqltest_u1@localhost;
+# Global privileges should be granted to all schemas, not individual DB
+--error ER_WRONG_USAGE
+GRANT RELOAD                  ON mysqltest_db1.* TO mysqltest_u1@localhost;
+# Select privilege is needed beside RELOAD privilege
+--replace_result $MASTER_MYSOCK MASTER_SOCKET $MASTER_MYPORT MASTER_PORT
+--error ER_DBACCESS_DENIED_ERROR
+--connect (con1, localhost, mysqltest_u1, ,db1)
 GRANT RELOAD                  ON *.* TO mysqltest_u1@localhost;
 GRANT REPLICATION CLIENT      ON *.* TO mysqltest_u1@localhost;
 GRANT REPLICATION SLAVE       ON *.* TO mysqltest_u1@localhost;

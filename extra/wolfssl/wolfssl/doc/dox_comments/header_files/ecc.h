@@ -572,8 +572,8 @@ int wc_ecc_init(ecc_key* key);
     \return MEMORY_E Returned if there is an error allocating memory
 
     \param key pointer to the ecc_key object to initialize
-    \param devId ID to use with async hardware
     \param heap pointer to a heap identifier
+    \param devId ID to use with crypto callbacks or async hardware. Set to INVALID_DEVID (-2) if not used
 
     _Example_
     \code
@@ -1722,7 +1722,7 @@ int wc_ecc_ctx_set_peer_salt(ecEncCtx* ctx, const byte* salt);
 
     \param ctx pointer to the ecEncCtx for which to set the salt
     \param salt pointer to salt buffer
-    \param len length salt in bytes
+    \param sz length salt in bytes
 
     _Example_
     \code
@@ -1742,7 +1742,7 @@ int wc_ecc_ctx_set_peer_salt(ecEncCtx* ctx, const byte* salt);
     \sa wc_ecc_ctx_get_peer_salt
 */
 
-int wc_ecc_ctx_set_kdf_salt(ecEncCtx* ctx, const byte* salt, word32 len);
+int wc_ecc_ctx_set_kdf_salt(ecEncCtx* ctx, const byte* salt, word32 sz);
 
 /*!
     \ingroup ECC
@@ -1968,7 +1968,7 @@ int wc_ecc_decrypt(ecc_key* privKey, ecc_key* pubKey, const byte* msg,
 /*!
     \ingroup ECC
 
-    \brief Enable ECC support for non-blocking operations. Supported for 
+    \brief Enable ECC support for non-blocking operations. Supported for
         Single Precision (SP) math with the following build options:
             WOLFSSL_SP_NONBLOCK
             WOLFSSL_SP_SMALL
@@ -1978,7 +1978,7 @@ int wc_ecc_decrypt(ecc_key* privKey, ecc_key* pubKey, const byte* msg,
     \return 0 Returned upon successfully setting the callback context the input message
 
     \param key pointer to the ecc_key object
-    \param ctx pointer to ecc_nb_ctx_t structure with stack data cache for SP 
+    \param ctx pointer to ecc_nb_ctx_t structure with stack data cache for SP
 
     _Example_
     \code
@@ -1998,7 +1998,7 @@ int wc_ecc_decrypt(ecc_key* privKey, ecc_key* pubKey, const byte* msg,
                     &key
                 );
 
-                // TODO: Real-time work can be called here 
+                // TODO: Real-time work can be called here
             } while (ret == FP_WOULDBLOCK);
         }
         wc_ecc_free(&key);
@@ -2006,3 +2006,29 @@ int wc_ecc_decrypt(ecc_key* privKey, ecc_key* pubKey, const byte* msg,
     \endcode
 */
 int wc_ecc_set_nonblock(ecc_key *key, ecc_nb_ctx_t* ctx);
+
+/*!
+    \ingroup ECC
+
+    \brief Compare a curve which has larger key than specified size or the curve matched curve ID,
+         set a curve with smaller key size to the key.
+
+    \return 0 Returned upon successfully setting the key
+
+    \param keysize Key size in bytes
+    \param curve_id Curve ID
+
+                                                                                                        _Example_
+    \code int ret;
+    ecc_key ecc;
+
+    ret = wc_ecc_init(&ecc);
+    if (ret != 0)
+        return ret;
+        ret = wc_ecc_set_curve(&ecc, 32, ECC_SECP256R1));
+        if (ret != 0)
+            return ret;
+
+    \endcode
+*/
+int wc_ecc_set_curve(ecc_key *key, int keysize, int curve_id);

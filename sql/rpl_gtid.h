@@ -26,6 +26,11 @@
 extern const LEX_CSTRING rpl_gtid_slave_state_table_name;
 
 class String;
+#ifdef MYSQL_SERVER
+struct TABLE;
+#endif
+struct slave_connection_state;
+
 #define PARAM_GTID(G) G.domain_id, G.server_id, G.seq_no
 
 #define GTID_MAX_STR_LENGTH (10+1+10+1+20)
@@ -296,8 +301,13 @@ struct rpl_slave_state
   to know where to start when a master is changed to a slave. As a side
   effect, it also allows to skip a hash lookup in the very common case of
   logging a new GTID with same server id as last GTID.
+
+  The base class rpl_binlog_state_base contains just be basic data operations
+  to insert/update GTIDs, and is used eg. from Gtid_index_*. The main class
+  rpl_binlog_state builds server logic on top of that like mutex locking,
+  gtid_strict_mode handling, etc.
 */
-struct rpl_binlog_state
+struct rpl_binlog_state_base
 {
   struct element {
     uint32 domain_id;
@@ -309,29 +319,45 @@ struct rpl_binlog_state
 
     int update_element(const rpl_gtid *gtid);
   };
+
   /* Mapping from domain_id to collection of elements. */
   HASH hash;
+  my_bool initialized;
+
+  rpl_binlog_state_base() : initialized(0) {}
+  ~rpl_binlog_state_base();
+  void init();
+  void reset_nolock();
+  void free();
+  bool load_nolock(struct rpl_gtid *list, uint32 count);
+  bool load_nolock(rpl_binlog_state_base *orig_state);
+  int update_nolock(const struct rpl_gtid *gtid);
+  int alloc_element_nolock(const rpl_gtid *gtid);
+  uint32 count_nolock();
+  int get_gtid_list_nolock(rpl_gtid *gtid_list, uint32 list_size);
+  rpl_gtid *find_nolock(uint32 domain_id, uint32 server_id);
+  bool is_before_pos(slave_connection_state *pos);
+};
+
+struct rpl_binlog_state : public rpl_binlog_state_base
+{
   /* Mutex protecting access to the state. */
   mysql_mutex_t LOCK_binlog_state;
-  my_bool initialized;
 
   /* Auxiliary buffer to sort gtid list. */
   DYNAMIC_ARRAY gtid_sort_array;
 
-   rpl_binlog_state() :initialized(0) {}
+  rpl_binlog_state() {}
   ~rpl_binlog_state();
 
   void init();
-  void reset_nolock();
   void reset();
   void free();
   bool load(struct rpl_gtid *list, uint32 count);
   bool load(rpl_slave_state *slave_pos);
-  int update_nolock(const struct rpl_gtid *gtid, bool strict);
   int update(const struct rpl_gtid *gtid, bool strict);
   int update_with_next_gtid(uint32 domain_id, uint32 server_id,
                              rpl_gtid *gtid);
-  int alloc_element_nolock(const rpl_gtid *gtid);
   bool check_strict_sequence(uint32 domain_id, uint32 server_id, uint64 seq_no,
                              bool no_error= false);
   int bump_seq_no_if_needed(uint32 domain_id, uint64 seq_no);
@@ -342,7 +368,6 @@ struct rpl_binlog_state
   int get_most_recent_gtid_list(rpl_gtid **list, uint32 *size);
   bool append_pos(String *str);
   bool append_state(String *str);
-  rpl_gtid *find_nolock(uint32 domain_id, uint32 server_id);
   rpl_gtid *find(uint32 domain_id, uint32 server_id);
   rpl_gtid *find_most_recent(uint32 domain_id);
   const char* drop_domain(DYNAMIC_ARRAY *ids, Gtid_list_log_event *glev, char*);
@@ -583,9 +608,9 @@ class Accept_all_gtid_filter : public Gtid_event_filter
 public:
   Accept_all_gtid_filter() {}
   ~Accept_all_gtid_filter() {}
-  my_bool exclude(rpl_gtid *gtid) { return FALSE; }
-  uint32 get_filter_type() { return ACCEPT_ALL_GTID_FILTER_TYPE; }
-  my_bool has_finished() { return FALSE; }
+  my_bool exclude(rpl_gtid *) override { return FALSE; }
+  uint32 get_filter_type() override { return ACCEPT_ALL_GTID_FILTER_TYPE; }
+  my_bool has_finished() override { return FALSE; }
 };
 
 /*
@@ -596,9 +621,9 @@ class Reject_all_gtid_filter : public Gtid_event_filter
 public:
   Reject_all_gtid_filter() {}
   ~Reject_all_gtid_filter() {}
-  my_bool exclude(rpl_gtid *gtid) { return TRUE; }
-  uint32 get_filter_type() { return REJECT_ALL_GTID_FILTER_TYPE; }
-  my_bool has_finished() { return FALSE; }
+  my_bool exclude(rpl_gtid *) override { return TRUE; }
+  uint32 get_filter_type() override { return REJECT_ALL_GTID_FILTER_TYPE; }
+  my_bool has_finished() override { return FALSE; }
 };
 
 /*
@@ -616,8 +641,8 @@ public:
   Window_gtid_event_filter();
   ~Window_gtid_event_filter() {}
 
-  my_bool exclude(rpl_gtid*);
-  my_bool has_finished();
+  my_bool exclude(rpl_gtid*) override;
+  my_bool has_finished() override;
 
   /*
     Set the GTID that begins this window (exclusive)
@@ -633,7 +658,7 @@ public:
   */
   int set_stop_gtid(rpl_gtid *stop);
 
-  uint32 get_filter_type() { return WINDOW_GTID_FILTER_TYPE; }
+  uint32 get_filter_type() override { return WINDOW_GTID_FILTER_TYPE; }
 
   /*
     Validates the underlying range is correct, and writes an error if not, i.e.
@@ -736,11 +761,11 @@ public:
   Id_delegating_gtid_event_filter();
   ~Id_delegating_gtid_event_filter();
 
-  my_bool exclude(rpl_gtid *gtid);
-  my_bool has_finished();
+  my_bool exclude(rpl_gtid *gtid) override;
+  my_bool has_finished() override;
   void set_default_filter(Gtid_event_filter *default_filter);
 
-  uint32 get_filter_type() { return DELEGATING_GTID_FILTER_TYPE; }
+  uint32 get_filter_type() override { return DELEGATING_GTID_FILTER_TYPE; }
 
   virtual T get_id_from_gtid(rpl_gtid *) = 0;
   virtual const char* get_id_type_name() = 0;
@@ -809,18 +834,18 @@ public:
   /*
     Returns the domain id of from the input GTID
   */
-  decltype(rpl_gtid::domain_id) get_id_from_gtid(rpl_gtid *gtid)
+  decltype(rpl_gtid::domain_id) get_id_from_gtid(rpl_gtid *gtid) override
   {
     return gtid->domain_id;
   }
 
-  const char* get_id_type_name() { return "domain"; }
+  const char* get_id_type_name() override { return "domain"; }
 
   /*
     Override Id_delegating_gtid_event_filter to extend with domain specific
     filtering logic
   */
-  my_bool exclude(rpl_gtid*);
+  my_bool exclude(rpl_gtid*) override;
 
   /*
     Validates that window filters with both a start and stop GTID satisfy
@@ -887,12 +912,12 @@ public:
   /*
     Returns the server id of from the input GTID
   */
-  decltype(rpl_gtid::server_id) get_id_from_gtid(rpl_gtid *gtid)
+  decltype(rpl_gtid::server_id) get_id_from_gtid(rpl_gtid *gtid) override
   {
     return gtid->server_id;
   }
 
-  const char* get_id_type_name() { return "server"; }
+  const char* get_id_type_name() override { return "server"; }
 };
 
 /*
@@ -910,16 +935,16 @@ public:
     Returns TRUE if any filers exclude the gtid, returns FALSE otherwise, i.e.
     all filters must allow the GTID.
   */
-  my_bool exclude(rpl_gtid *gtid);
+  my_bool exclude(rpl_gtid *gtid) override;
 
   /*
     Returns true if any filters have finished. To elaborate, as this filter
     performs an intersection, if any filter has finished, the result would
     be excluded regardless.
   */
-  my_bool has_finished();
+  my_bool has_finished() override;
 
-  uint32 get_filter_type() { return INTERSECTING_GTID_FILTER_TYPE; }
+  uint32 get_filter_type() override { return INTERSECTING_GTID_FILTER_TYPE; }
 
   /*
     Adds a new filter to the intersection

@@ -1,6 +1,6 @@
 /* sniffer_error.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -142,6 +142,8 @@
 #define SNIFFER_KEY_SETUP_STR 96
 #define UNSUPPORTED_TLS_VER_STR 97
 #define KEY_MISMATCH_STR 98
+
+#define KEYLOG_FILE_INVALID 99
 /* !!!! also add to msgTable in sniffer.c and .rc file !!!! */
 
 

@@ -21,16 +21,11 @@
  *
  ***********************************************************************/
 /** @file */
-#ifndef ALTERTABLEPROCESSOR_H
-#define ALTERTABLEPROCESSOR_H
+#pragma once
 
 #include "ddlpackageprocessor.h"
 
-#if defined(_MSC_VER) && defined(DDLPKGPROC_DLLEXPORT)
-#define EXPORT __declspec(dllexport)
-#else
 #define EXPORT
-#endif
 
 namespace ddlpackageprocessor
 {
@@ -44,11 +39,6 @@ class AlterTableProcessor : public DDLPackageProcessor
   AlterTableProcessor(BRM::DBRM* aDbrm) : DDLPackageProcessor(aDbrm)
   {
   }
-  /** @brief process an alter table statement
-   *
-   * @param alterTableStmt the AlterTableStatement
-   */
-  EXPORT DDLResult processPackage(ddlpackage::AlterTableStatement& alterTableStmt);
   /** @brief add a physical column file
    *
    * @param result the result of the operation
@@ -156,10 +146,13 @@ class AlterTableProcessor : public DDLPackageProcessor
                      uint64_t uniqueId);
 
  private:
+  /** @brief process an alter table statement
+   *
+   * @param alterTableStmt the AlterTableStatement
+   */
+  DDLResult processPackageInternal(ddlpackage::SqlStatement* alterTableStmt) override;
 };
 
 }  // namespace ddlpackageprocessor
 
 #undef EXPORT
-
-#endif  // ALTERTABLEPROCESSOR_H

@@ -30,6 +30,7 @@
 #define NUMBER_OF_FIELDS_TO_IDENTIFY_WORKER 2
 #include "slave.h"
 #include "rpl_mi.h"
+#include "rpl_constants.h"
 
 namespace
 {
@@ -70,7 +71,7 @@ static rpl_group_info* wsrep_relay_group_init(THD* thd, const char* log_fname)
   if (!rli->relay_log.description_event_for_exec)
   {
     rli->relay_log.description_event_for_exec=
-      new Format_description_log_event(4);
+      new Format_description_log_event(4, 0, BINLOG_CHECKSUM_ALG_OFF);
   }
 
   static LEX_CSTRING connection_name= { STRING_WITH_LEN("wsrep") };
@@ -123,14 +124,15 @@ static void wsrep_setup_uk_and_fk_checks(THD* thd)
 static int apply_events(THD*                       thd,
                         Relay_log_info*            rli,
                         const wsrep::const_buffer& data,
-                        wsrep::mutable_buffer&     err)
+                        wsrep::mutable_buffer&     err,
+                        bool const                 include_msg)
 {
   int const ret= wsrep_apply_events(thd, rli, data.data(), data.size());
   if (ret || wsrep_thd_has_ignored_error(thd))
   {
     if (ret)
     {
-      wsrep_store_error(thd, err);
+      wsrep_store_error(thd, err, include_msg);
     }
     wsrep_dump_rbr_buf_with_header(thd, data.data(), data.size());
   }
@@ -390,6 +392,18 @@ int Wsrep_high_priority_service::rollback(const wsrep::ws_handle& ws_handle,
               wsrep_thd_transaction_state_str(m_thd),
               m_thd->killed);
 
+#ifdef ENABLED_DEBUG_SYNC
+  DBUG_EXECUTE_IF("sync.wsrep_rollback_mdl_release",
+                  {
+                    const char act[]=
+                      "now "
+                      "SIGNAL sync.wsrep_rollback_mdl_release_reached "
+                      "WAIT_FOR signal.wsrep_rollback_mdl_release";
+                    DBUG_ASSERT(!debug_sync_set_action(m_thd,
+                                                       STRING_WITH_LEN(act)));
+                  };);
+#endif
+
   m_thd->release_transactional_locks();
 
   free_root(m_thd->mem_root, MYF(MY_KEEP_PREALLOC));
@@ -425,7 +439,8 @@ int Wsrep_high_priority_service::apply_toi(const wsrep::ws_meta& ws_meta,
                   };);
 #endif
 
-  int ret= apply_events(thd, m_rli, data, err);
+  thd->set_time();
+  int ret= apply_events(thd, m_rli, data, err, false);
   wsrep_thd_set_ignored_error(thd, false);
   trans_commit(thd);
 
@@ -569,6 +584,7 @@ int Wsrep_applier_service::apply_write_set(const wsrep::ws_meta& ws_meta,
   THD* thd= m_thd;
 
   thd->variables.option_bits |= OPTION_BEGIN;
+  thd->variables.option_bits |= OPTION_GTID_BEGIN;
   thd->variables.option_bits |= OPTION_NOT_AUTOCOMMIT;
   DBUG_ASSERT(thd->wsrep_trx().active());
   DBUG_ASSERT(thd->wsrep_trx().state() == wsrep::transaction::s_executing);
@@ -592,7 +608,7 @@ int Wsrep_applier_service::apply_write_set(const wsrep::ws_meta& ws_meta,
 #endif /* ENABLED_DEBUG_SYNC */
 
   wsrep_setup_uk_and_fk_checks(thd);
-  int ret= apply_events(thd, m_rli, data, err);
+  int ret= apply_events(thd, m_rli, data, err, true);
 
   thd->close_temporary_tables();
   if (!ret && !(ws_meta.flags() & wsrep::provider::flag::commit))
@@ -600,6 +616,8 @@ int Wsrep_applier_service::apply_write_set(const wsrep::ws_meta& ws_meta,
     thd->wsrep_cs().fragment_applied(ws_meta.seqno());
   }
   thd_proc_info(thd, "wsrep applied write set");
+
+  thd->variables.option_bits &= ~OPTION_GTID_BEGIN;
   DBUG_RETURN(ret);
 }
 
@@ -759,7 +777,7 @@ int Wsrep_replayer_service::apply_write_set(const wsrep::ws_meta& ws_meta,
                                           ws_meta,
                                           thd->wsrep_sr().fragments());
   }
-  ret= ret || apply_events(thd, m_rli, data, err);
+  ret= ret || apply_events(thd, m_rli, data, err, true);
   thd->close_temporary_tables();
   if (!ret && !(ws_meta.flags() & wsrep::provider::flag::commit))
   {

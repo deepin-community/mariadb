@@ -30,13 +30,12 @@
 #include "rpl_rli.h"
 #include "rpl_mi.h"
 
-extern "C" pthread_key(struct st_my_thread_var*, THR_KEY_mysys);
 
 static Wsrep_thd_queue* wsrep_rollback_queue= 0;
 static Atomic_counter<uint64_t> wsrep_bf_aborts_counter;
 
 
-int wsrep_show_bf_aborts (THD *thd, SHOW_VAR *var, char *buff,
+int wsrep_show_bf_aborts (THD *thd, SHOW_VAR *var, void *, system_status_var *,
                           enum enum_var_type scope)
 {
   wsrep_local_bf_aborts= wsrep_bf_aborts_counter;
@@ -162,7 +161,7 @@ static void wsrep_rollback_high_priority(THD *thd, THD *rollbacker)
 {
   WSREP_DEBUG("Rollbacker aborting SR applier thd (%llu %lu)",
               thd->thread_id, thd->real_id);
-  char* orig_thread_stack= thd->thread_stack;
+  void* orig_thread_stack= thd->thread_stack;
   thd->thread_stack= rollbacker->thread_stack;
   DBUG_ASSERT(thd->wsrep_cs().mode() == Wsrep_client_state::m_high_priority);
   /* Must be streaming and must have been removed from the
@@ -193,7 +192,7 @@ static void wsrep_rollback_local(THD *thd, THD *rollbacker)
 {
   WSREP_DEBUG("Rollbacker aborting local thd (%llu %lu)",
               thd->thread_id, thd->real_id);
-  char* orig_thread_stack= thd->thread_stack;
+  void* orig_thread_stack= thd->thread_stack;
   thd->thread_stack= rollbacker->thread_stack;
   if (thd->wsrep_trx().is_streaming())
   {
@@ -487,6 +486,7 @@ void wsrep_backup_kill_for_commit(THD *thd)
       thd->wsrep_trx().state() != wsrep::transaction::s_must_replay)
   {
     thd->wsrep_abort_by_kill= thd->killed;
+    my_free(thd->wsrep_abort_by_kill_err);
     thd->wsrep_abort_by_kill_err= thd->killed_err;
     thd->killed= NOT_KILLED;
     thd->killed_err= 0;
@@ -496,9 +496,10 @@ void wsrep_backup_kill_for_commit(THD *thd)
 
 void wsrep_restore_kill_after_commit(THD *thd)
 {
-  DBUG_ASSERT(WSREP(thd));
+  DBUG_ASSERT(wsrep_is_active(thd));
   mysql_mutex_assert_owner(&thd->LOCK_thd_kill);
   thd->killed= thd->wsrep_abort_by_kill;
+  my_free(thd->killed_err);
   thd->killed_err= thd->wsrep_abort_by_kill_err;
   thd->wsrep_abort_by_kill= NOT_KILLED;
   thd->wsrep_abort_by_kill_err= 0;
@@ -511,8 +512,8 @@ int wsrep_create_threadvars()
   {
     /* Caller should have called wsrep_reset_threadvars() before this
        method. */
-    DBUG_ASSERT(!pthread_getspecific(THR_KEY_mysys));
-    pthread_setspecific(THR_KEY_mysys, 0);
+    DBUG_ASSERT(!my_thread_var);
+    set_mysys_var(0);
     ret= my_thread_init();
   }
   return ret;
@@ -524,7 +525,7 @@ void wsrep_delete_threadvars()
   {
     /* The caller should have called wsrep_store_threadvars() before
        this method. */
-    DBUG_ASSERT(pthread_getspecific(THR_KEY_mysys));
+    DBUG_ASSERT(my_thread_var);
     /* Reset psi state to avoid deallocating applier thread
        psi_thread. */
 #ifdef HAVE_PSI_INTERFACE
@@ -536,7 +537,7 @@ void wsrep_delete_threadvars()
 #endif /* HAVE_PSI_INTERFACE */
     my_thread_end();
     PSI_CALL_set_thread(psi_thread);
-    pthread_setspecific(THR_KEY_mysys, 0);
+    set_mysys_var(0);
   }
 }
 
@@ -544,9 +545,7 @@ void wsrep_assign_from_threadvars(THD *thd)
 {
   if (thread_handling == SCHEDULER_TYPES_COUNT)
   {
-    st_my_thread_var *mysys_var= (st_my_thread_var *)pthread_getspecific(THR_KEY_mysys);
-    DBUG_ASSERT(mysys_var);
-    thd->set_mysys_var(mysys_var);
+    thd->set_mysys_var(my_thread_var);
   }
 }
 
@@ -554,21 +553,21 @@ Wsrep_threadvars wsrep_save_threadvars()
 {
   return Wsrep_threadvars{
     current_thd,
-    (st_my_thread_var*) pthread_getspecific(THR_KEY_mysys)
+    my_thread_var
   };
 }
 
 void wsrep_restore_threadvars(const Wsrep_threadvars& globals)
 {
   set_current_thd(globals.cur_thd);
-  pthread_setspecific(THR_KEY_mysys, globals.mysys_var);
+  set_mysys_var(globals.mysys_var);
 }
 
 void wsrep_store_threadvars(THD *thd)
 {
   if (thread_handling ==  SCHEDULER_TYPES_COUNT)
   {
-    pthread_setspecific(THR_KEY_mysys, thd->mysys_var);
+    set_mysys_var(thd->mysys_var);
   }
   thd->store_globals();
 }
@@ -577,7 +576,7 @@ void wsrep_reset_threadvars(THD *thd)
 {
   if (thread_handling == SCHEDULER_TYPES_COUNT)
   {
-    pthread_setspecific(THR_KEY_mysys, 0);
+    set_mysys_var(0);
   }
   else
   {

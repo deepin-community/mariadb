@@ -41,9 +41,6 @@ void BulkLoad::sleepMS(long ms)
 
   rm_ts.tv_sec = ms / 1000;
   rm_ts.tv_nsec = ms % 1000 * 1000000;
-#ifdef _MSC_VER
-  Sleep(ms);
-#else
   struct timespec abs_ts;
 
   do
@@ -52,7 +49,6 @@ void BulkLoad::sleepMS(long ms)
     abs_ts.tv_nsec = rm_ts.tv_nsec;
   } while (nanosleep(&abs_ts, &rm_ts) < 0);
 
-#endif
 }
 
 //------------------------------------------------------------------------------
@@ -99,16 +95,16 @@ void BulkLoad::read(int id)
 #ifdef PROFILE
       Stats::stopReadEvent(WE_STATS_WAIT_TO_SELECT_TBL);
 #endif
-      int rc = fTableInfo[tableId].readTableData();
+      int rc = fTableInfo[tableId]->readTableData();
 
       if (rc != NO_ERROR)
       {
         // Error occurred while reading the data, break out of loop.
         BulkStatus::setJobStatus(EXIT_FAILURE);
         ostringstream oss;
-        oss << "Bulkload Read (thread " << id << ") Failed for Table " << fTableInfo[tableId].getTableName()
+        oss << "Bulkload Read (thread " << id << ") Failed for Table " << fTableInfo[tableId]->getTableName()
             << ".  Terminating this job.";
-        fTableInfo[tableId].fBRMReporter.addToErrMsgEntry(oss.str());
+        fTableInfo[tableId]->fBRMReporter.addToErrMsgEntry(oss.str());
         fLog.logMsg(oss.str(), rc, MSGLVL_CRITICAL);
         break;
       }
@@ -121,7 +117,7 @@ void BulkLoad::read(int id)
 
     if (tableId != -1)
       oss << "Bulkload Read (thread " << id << ") Stopped reading Table "
-          << fTableInfo[tableId].getTableName() << ".  " << ex.what();
+          << fTableInfo[tableId]->getTableName() << ".  " << ex.what();
     else
       oss << "Bulkload Read (thread " << id << ") Stopped reading Tables. " << ex.what();
 
@@ -133,14 +129,14 @@ void BulkLoad::read(int id)
     ostringstream oss;
 
     if (tableId != -1)
-      oss << "Bulkload Read (thread " << id << ") Failed for Table " << fTableInfo[tableId].getTableName()
+      oss << "Bulkload Read (thread " << id << ") Failed for Table " << fTableInfo[tableId]->getTableName()
           << ".  " << ex.what() << ".  Terminating this job.";
     else
       oss << "Bulkload Read (thread " << id << ") Failed for Table. " << ex.what()
           << ".  Terminating this job.";
 
     if (tableId != -1)
-      fTableInfo[tableId].fBRMReporter.addToErrMsgEntry(oss.str());
+      fTableInfo[tableId]->fBRMReporter.addToErrMsgEntry(oss.str());
 
     fLog.logMsg(oss.str(), ERR_UNKNOWN, MSGLVL_CRITICAL);
   }
@@ -150,13 +146,13 @@ void BulkLoad::read(int id)
     ostringstream oss;
 
     if (tableId != -1)
-      oss << "Bulkload Read (thread " << id << ") Failed for Table " << fTableInfo[tableId].getTableName()
+      oss << "Bulkload Read (thread " << id << ") Failed for Table " << fTableInfo[tableId]->getTableName()
           << ".  Terminating this job.";
     else
       oss << "Bulkload Read (thread " << id << ") Failed for Table.  Terminating this job.";
 
     if (tableId != -1)
-      fTableInfo[tableId].fBRMReporter.addToErrMsgEntry(oss.str());
+      fTableInfo[tableId]->fBRMReporter.addToErrMsgEntry(oss.str());
 
     fLog.logMsg(oss.str(), ERR_UNKNOWN, MSGLVL_CRITICAL);
   }
@@ -174,7 +170,7 @@ int BulkLoad::lockTableForRead(int id)
 
   for (unsigned i = 0; i < fTableInfo.size(); ++i)
   {
-    if (fTableInfo[i].lockForRead(id))
+    if (fTableInfo[i]->lockForRead(id))
       return i;
   }
 
@@ -274,11 +270,7 @@ void BulkLoad::parse(int id)
                 << endl
                 << timeString << ": BulkLoad::parse(" << id << "); "
                 <<
-#ifdef _MSC_VER
-                " Worker Thread " << GetCurrentThreadId() <<
-#else
                 " Worker Thread " << pthread_self() <<
-#endif
                 ":" << endl
                 << "---------------------------------------"
                    "-------------------"
@@ -300,16 +292,16 @@ void BulkLoad::parse(int id)
       // Have obtained the table and column for parsing.
       // Start parsing the column data.
       double processingTime;
-      int rc = fTableInfo[tableId].parseColumn(columnId, myParseBuffer, processingTime);
+      int rc = fTableInfo[tableId]->parseColumn(columnId, myParseBuffer, processingTime);
 
       if (rc != NO_ERROR)
       {
         // Error occurred while parsing the data, break out of loop.
         BulkStatus::setJobStatus(EXIT_FAILURE);
         ostringstream oss;
-        oss << "Bulkload Parse (thread " << id << ") Failed for Table " << fTableInfo[tableId].getTableName()
+        oss << "Bulkload Parse (thread " << id << ") Failed for Table " << fTableInfo[tableId]->getTableName()
             << " during parsing.  Terminating this job.";
-        fTableInfo[tableId].fBRMReporter.addToErrMsgEntry(oss.str());
+        fTableInfo[tableId]->fBRMReporter.addToErrMsgEntry(oss.str());
         fLog.logMsg(oss.str(), rc, MSGLVL_CRITICAL);
 
         setParseErrorOnTable(tableId, true);
@@ -318,7 +310,7 @@ void BulkLoad::parse(int id)
 
       // Parsing is complete. Acquire the mutex and increment
       // the parsingComplete value for the buffer
-      if (fTableInfo[tableId].getStatusTI() != WriteEngine::ERR)
+      if (fTableInfo[tableId]->getStatusTI() != WriteEngine::ERR)
       {
 #ifdef PROFILE
         Stats::startParseEvent(WE_STATS_WAIT_TO_COMPLETE_PARSE);
@@ -328,15 +320,15 @@ void BulkLoad::parse(int id)
         Stats::stopParseEvent(WE_STATS_WAIT_TO_COMPLETE_PARSE);
         Stats::startParseEvent(WE_STATS_COMPLETING_PARSE);
 #endif
-        rc = fTableInfo[tableId].setParseComplete(columnId, myParseBuffer, processingTime);
+        rc = fTableInfo[tableId]->setParseComplete(columnId, myParseBuffer, processingTime);
 
         if (rc != NO_ERROR)
         {
           BulkStatus::setJobStatus(EXIT_FAILURE);
           ostringstream oss;
           oss << "Bulkload Parse (thread " << id << ") Failed for Table "
-              << fTableInfo[tableId].getTableName() << " during parse completion.  Terminating this job.";
-          fTableInfo[tableId].fBRMReporter.addToErrMsgEntry(oss.str());
+              << fTableInfo[tableId]->getTableName() << " during parse completion.  Terminating this job.";
+          fTableInfo[tableId]->fBRMReporter.addToErrMsgEntry(oss.str());
           fLog.logMsg(oss.str(), rc, MSGLVL_CRITICAL);
 
           setParseErrorOnTable(tableId, false);
@@ -357,7 +349,7 @@ void BulkLoad::parse(int id)
     if (tableId != -1)
     {
       oss << "Bulkload Parse (thread " << id << ") Stopped parsing Table "
-          << fTableInfo[tableId].getTableName() << ".  " << ex.what();
+          << fTableInfo[tableId]->getTableName() << ".  " << ex.what();
 
       setParseErrorOnTable(tableId, true);
     }
@@ -375,11 +367,11 @@ void BulkLoad::parse(int id)
 
     if (tableId != -1)
     {
-      oss << "Bulkload Parse (thread " << id << ") Failed for Table " << fTableInfo[tableId].getTableName()
+      oss << "Bulkload Parse (thread " << id << ") Failed for Table " << fTableInfo[tableId]->getTableName()
           << ".  " << ex.what() << ".  Terminating this job.";
 
       setParseErrorOnTable(tableId, true);
-      fTableInfo[tableId].fBRMReporter.addToErrMsgEntry(oss.str());
+      fTableInfo[tableId]->fBRMReporter.addToErrMsgEntry(oss.str());
     }
     else
     {
@@ -396,11 +388,11 @@ void BulkLoad::parse(int id)
 
     if (tableId != -1)
     {
-      oss << "Bulkload Parse (thread " << id << ") Failed for Table " << fTableInfo[tableId].getTableName()
+      oss << "Bulkload Parse (thread " << id << ") Failed for Table " << fTableInfo[tableId]->getTableName()
           << ".  Terminating this job.";
 
       setParseErrorOnTable(tableId, true);
-      fTableInfo[tableId].fBRMReporter.addToErrMsgEntry(oss.str());
+      fTableInfo[tableId]->fBRMReporter.addToErrMsgEntry(oss.str());
     }
     else
     {
@@ -429,10 +421,10 @@ bool BulkLoad::lockColumnForParse(int thrdId, int& tableId, int& columnId, int& 
 
   for (unsigned i = 0; i < fTableInfo.size(); ++i)
   {
-    if (fTableInfo[i].getStatusTI() == WriteEngine::PARSE_COMPLETE)
+    if (fTableInfo[i]->getStatusTI() == WriteEngine::PARSE_COMPLETE)
       continue;
 
-    int currentParseBuffer = fTableInfo[i].getCurrentParseBuffer();
+    int currentParseBuffer = fTableInfo[i]->getCurrentParseBuffer();
     myParseBuffer = currentParseBuffer;
 
     do
@@ -442,13 +434,9 @@ bool BulkLoad::lockColumnForParse(int thrdId, int& tableId, int& columnId, int& 
       {
         ostringstream oss;
         std::string bufStatusStr;
-        Status stat = fTableInfo[i].getStatusTI();
+        Status stat = fTableInfo[i]->getStatusTI();
         ColumnInfo::convertStatusToString(stat, bufStatusStr);
-#ifdef _MSC_VER
-        oss << " - " << GetCurrentThreadId() <<
-#else
         oss << " - " << pthread_self() <<
-#endif
             ":fTableInfo[" << i << "]" << bufStatusStr << " (" << stat << ")";
 
         if (stat != WriteEngine::PARSE_COMPLETE)
@@ -464,13 +452,13 @@ bool BulkLoad::lockColumnForParse(int thrdId, int& tableId, int& columnId, int& 
       // @bug2099-
 
       // get a buffer and column to parse if available.
-      if ((columnId = fTableInfo[i].getColumnForParse(thrdId, myParseBuffer, report)) != -1)
+      if ((columnId = fTableInfo[i]->getColumnForParse(thrdId, myParseBuffer, report)) != -1)
       {
         tableId = i;
         return true;
       }
 
-      myParseBuffer = (myParseBuffer + 1) % fTableInfo[i].getNumberOfBuffers();
+      myParseBuffer = (myParseBuffer + 1) % fTableInfo[i]->getNumberOfBuffers();
     } while (myParseBuffer != currentParseBuffer);
   }
 
@@ -491,10 +479,10 @@ bool BulkLoad::allTablesDone(Status status)
 {
   for (unsigned i = 0; i < fTableInfo.size(); ++i)
   {
-    if (fTableInfo[i].getStatusTI() == WriteEngine::ERR)
+    if (fTableInfo[i]->getStatusTI() == WriteEngine::ERR)
       return true;
 
-    if (fTableInfo[i].getStatusTI() != status)
+    if (fTableInfo[i]->getStatusTI() != status)
       return false;
   }
 
@@ -511,11 +499,11 @@ void BulkLoad::setParseErrorOnTable(int tableId, bool lockParseMutex)
   if (lockParseMutex)
   {
     boost::mutex::scoped_lock lock(fParseMutex);
-    fTableInfo[tableId].setParseError();
+    fTableInfo[tableId]->setParseError();
   }
   else
   {
-    fTableInfo[tableId].setParseError();
+    fTableInfo[tableId]->setParseError();
   }
 }
 

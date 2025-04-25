@@ -1,6 +1,6 @@
 /* port.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -24,6 +24,10 @@
     #include <config.h>
 #endif
 
+#ifdef __APPLE__
+    #include <AvailabilityMacros.h>
+#endif
+
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/types.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
@@ -36,14 +40,15 @@
     #include <wolfssl/wolfcrypt/async.h>
 #endif
 
-/* IPP header files for library initialization */
-#ifdef HAVE_FAST_RSA
-    #include <ipp.h>
-    #include <ippcp.h>
-#endif
-
 #ifdef FREESCALE_LTC_TFM
     #include <wolfssl/wolfcrypt/port/nxp/ksdk_port.h>
+#endif
+
+#if defined(WOLFSSL_MAX3266X) || defined(WOLFSSL_MAX3266X_OLD)
+    #include <wolfssl/wolfcrypt/port/maxim/max3266x.h>
+#ifdef WOLF_CRYPTO_CB
+    #include <wolfssl/wolfcrypt/port/maxim/max3266x-cryptocb.h>
+#endif
 #endif
 
 #ifdef WOLFSSL_PSOC6_CRYPTO
@@ -61,9 +66,8 @@
 #if defined(WOLFSSL_RENESAS_TSIP)
     #include <wolfssl/wolfcrypt/port/Renesas/renesas-tsip-crypt.h>
 #endif
-#if defined(WOLFSSL_RENESAS_SCEPROTECT) || \
-            defined(WOLFSSL_RENESAS_SCEPROTECT_CRYPTONLY)
-    #include <wolfssl/wolfcrypt/port/Renesas/renesas-sce-crypt.h>
+#if defined(WOLFSSL_RENESAS_FSPSM)
+    #include <wolfssl/wolfcrypt/port/Renesas/renesas-fspsm-crypt.h>
 #endif
 #if defined(WOLFSSL_RENESAS_RX64_HASH)
     #include <wolfssl/wolfcrypt/port/Renesas/renesas-rx64-hw-crypt.h>
@@ -84,6 +88,9 @@
 
 #if defined(WOLFSSL_CAAM)
     #include <wolfssl/wolfcrypt/port/caam/wolfcaam.h>
+#endif
+#if defined(HAVE_ARIA)
+    #include <wolfssl/wolfcrypt/port/aria/aria-cryptocb.h>
 #endif
 #if defined(WOLFSSL_DEVCRYPTO)
     #include <wolfssl/wolfcrypt/port/devcrypto/wc_devcrypto.h>
@@ -125,6 +132,23 @@
     #include <wolfssl/wolfcrypt/port/psa/psa.h>
 #endif
 
+#if defined(HAVE_LIBOQS)
+    #include <wolfssl/wolfcrypt/port/liboqs/liboqs.h>
+#endif
+
+#if defined(FREERTOS) && defined(WOLFSSL_ESPIDF)
+    #include <freertos/FreeRTOS.h>
+    #include <freertos/task.h>
+    /* The Espressif-specific platform include: */
+    #include <pthread.h>
+#endif
+
+#if defined(WOLFSSL_ZEPHYR)
+#if defined(CONFIG_BOARD_NATIVE_POSIX)
+#include "native_rtc.h"
+#define CONFIG_RTC
+#endif
+#endif
 
 /* prevent multiple mutex initializations */
 static volatile int initRefCount = 0;
@@ -171,7 +195,7 @@ int wolfCrypt_Init(void)
         }
     #endif
 
-    #if defined(WOLFSSL_RENESAS_TSIP_CRYPT)
+    #if defined(WOLFSSL_RENESAS_TSIP)
         ret = tsip_Open( );
         if( ret != TSIP_SUCCESS ) {
             WOLFSSL_MSG("RENESAS TSIP Open failed");
@@ -191,9 +215,8 @@ int wolfCrypt_Init(void)
     }
     #endif
 
-    #if defined(WOLFSSL_RENESAS_SCEPROTECT) || \
-            defined(WOLFSSL_RENESAS_SCEPROTECT_CRYPTONLY)
-        ret = wc_sce_Open( );
+    #if defined(WOLFSSL_RENESAS_FSPSM)
+        ret = wc_fspsm_Open( );
         if( ret != FSP_SUCCESS ) {
             WOLFSSL_MSG("RENESAS SCE Open failed");
             /* not return 1 since WOLFSSL_SUCCESS=1*/
@@ -227,25 +250,27 @@ int wolfCrypt_Init(void)
         }
     #endif
 
-    /* if defined have fast RSA then initialize Intel IPP */
-    #ifdef HAVE_FAST_RSA
-        WOLFSSL_MSG("Attempting to use optimized IPP Library");
-        if ((ret = ippInit()) != ippStsNoErr) {
-            /* possible to get a CPU feature support status on optimized IPP
-              library but still use default library and see competitive speeds */
-            WOLFSSL_MSG("Warning when trying to set up optimization");
-            WOLFSSL_MSG(ippGetStatusString(ret));
-            WOLFSSL_MSG("Using default fast IPP library");
-            ret = 0;
-            (void)ret; /* suppress not read warning */
-        }
-    #endif
-
     #if defined(FREESCALE_LTC_TFM) || defined(FREESCALE_LTC_ECC)
         ret = ksdk_port_init();
         if (ret != 0) {
             WOLFSSL_MSG("KSDK port init failed");
             return ret;
+        }
+    #endif
+
+    /* Crypto Callbacks only works on AES for MAX32666/5 HW */
+    #if defined(MAX3266X_AES) && defined(WOLF_CRYPTO_CB)
+        ret = wc_CryptoCb_RegisterDevice(WOLFSSL_MAX3266X_DEVID, wc_MxcCryptoCb,
+                                            NULL);
+        if(ret != 0) {
+            return ret;
+        }
+    #endif
+    #if defined(MAX3266X_RTC)
+        ret = wc_MXC_RTC_Init();
+        if (ret != 0) {
+            WOLFSSL_MSG("MXC RTC Init Failed");
+            return WC_HW_E;
         }
     #endif
 
@@ -340,6 +365,13 @@ int wolfCrypt_Init(void)
             return ret;
         }
     #endif
+    #if defined(HAVE_OID_ENCODING) && (!defined(HAVE_FIPS) || \
+            (defined(FIPS_VERSION_GE) && FIPS_VERSION_GE(6,0)))
+        if ((ret = wc_ecc_oid_cache_init()) != 0) {
+            WOLFSSL_MSG("Error creating ECC oid cache");
+            return ret;
+        }
+    #endif
 #endif
 
 #ifdef WOLFSSL_SCE
@@ -367,6 +399,12 @@ int wolfCrypt_Init(void)
         }
 #endif
 
+#if defined(HAVE_ARIA)
+        if ((ret = wc_AriaInit()) != 0) {
+            return ret;
+        }
+#endif
+
 #ifdef WOLFSSL_IMXRT_DCP
         if ((ret = wc_dcp_init()) != 0) {
             return ret;
@@ -379,13 +417,19 @@ int wolfCrypt_Init(void)
         }
         rpcmem_init();
 #endif
+
+#if defined(HAVE_LIBOQS)
+        if ((ret = wolfSSL_liboqsInit()) != 0) {
+            return ret;
+        }
+#endif
     }
     initRefCount++;
 
     return ret;
 }
 
-#ifdef WOLFSSL_TRACK_MEMORY_VERBOSE
+#if defined(WOLFSSL_TRACK_MEMORY_VERBOSE) && !defined(WOLFSSL_STATIC_MEMORY)
 long wolfCrypt_heap_peakAllocs_checkpoint(void) {
     long ret = ourMemStats.peakAllocsTripOdometer;
     ourMemStats.peakAllocsTripOdometer = ourMemStats.totalAllocs -
@@ -419,6 +463,10 @@ int wolfCrypt_Cleanup(void)
     #ifdef ECC_CACHE_CURVE
         wc_ecc_curve_cache_free();
     #endif
+    #if defined(HAVE_OID_ENCODING) && (!defined(HAVE_FIPS) || \
+            (defined(FIPS_VERSION_GE) && FIPS_VERSION_GE(6,0)))
+        wc_ecc_oid_cache_free();
+    #endif
 #endif /* HAVE_ECC */
 
     #if defined(OPENSSL_EXTRA) || defined(DEBUG_WOLFSSL_VERBOSE)
@@ -441,9 +489,8 @@ int wolfCrypt_Cleanup(void)
         rx64_hw_Close();
     #endif
 
-    #if defined(WOLFSSL_RENESAS_SCEPROTECT) || \
-        defined(WOLFSSL_RENESAS_SCEPROTECT_CRYPTONLY)
-        wc_sce_Close();
+    #if defined(WOLFSSL_RENESAS_FSPSM)
+        wc_fspsm_Close();
     #endif
 
     #ifdef WOLFSSL_SCE
@@ -459,7 +506,7 @@ int wolfCrypt_Cleanup(void)
     #ifdef WOLFSSL_SILABS_SE_ACCEL
         ret = sl_se_deinit();
     #endif
-    #if defined(WOLFSSL_RENESAS_TSIP_CRYPT)
+    #if defined(WOLFSSL_RENESAS_TSIP)
         tsip_Close();
     #endif
     #if defined(WOLFSSL_DEVCRYPTO)
@@ -477,7 +524,11 @@ int wolfCrypt_Cleanup(void)
         Entropy_Final();
     #endif
 
-    #ifdef WOLFSSL_MEM_FAIL_COUNT
+    #ifdef WOLF_CRYPTO_CB
+        wc_CryptoCb_Cleanup();
+    #endif
+
+    #if defined(WOLFSSL_MEM_FAIL_COUNT) && defined(WOLFCRYPT_ONLY)
         wc_MemFailCount_Free();
     #endif
     #ifdef WOLFSSL_CHECK_MEM_ZERO
@@ -486,6 +537,10 @@ int wolfCrypt_Cleanup(void)
         wc_MemZero_Free();
     #endif
     }
+
+#if defined(HAVE_LIBOQS)
+    wolfSSL_liboqsClose();
+#endif
 
     return ret;
 }
@@ -963,6 +1018,7 @@ XFILE z_fs_open(const char* filename, const char* mode)
 
     file = (XFILE)XMALLOC(sizeof(*file), NULL, DYNAMIC_TYPE_FILE);
     if (file != NULL) {
+        fs_file_t_init(file);
         if (fs_open(file, filename, flags) != 0) {
             XFREE(file, NULL, DYNAMIC_TYPE_FILE);
             file = NULL;
@@ -1130,10 +1186,10 @@ int wc_strcasecmp(const char *s1, const char *s2)
     for (;;++s1, ++s2) {
         c1 = *s1;
         if ((c1 >= 'a') && (c1 <= 'z'))
-            c1 -= ('a' - 'A');
+            c1 = (char)(c1 - ('a' - 'A'));
         c2 = *s2;
         if ((c2 >= 'a') && (c2 <= 'z'))
-            c2 -= ('a' - 'A');
+            c2 = (char)(c2 - ('a' - 'A'));
         if ((c1 != c2) || (c1 == 0))
             break;
     }
@@ -1148,10 +1204,10 @@ int wc_strncasecmp(const char *s1, const char *s2, size_t n)
     for (c1 = 0, c2 = 0; n > 0; --n, ++s1, ++s2) {
         c1 = *s1;
         if ((c1 >= 'a') && (c1 <= 'z'))
-            c1 -= ('a' - 'A');
+            c1 = (char)(c1 - ('a' - 'A'));
         c2 = *s2;
         if ((c2 >= 'a') && (c2 <= 'z'))
-            c2 -= ('a' - 'A');
+            c2 = (char)(c2 - ('a' - 'A'));
         if ((c1 != c2) || (c1 == 0))
             break;
     }
@@ -1159,7 +1215,24 @@ int wc_strncasecmp(const char *s1, const char *s2, size_t n)
 }
 #endif /* USE_WOLF_STRNCASECMP */
 
-#ifdef WOLFSSL_ATOMIC_OPS
+#ifdef USE_WOLF_STRDUP
+char* wc_strdup_ex(const char *src, int memType) {
+    char *ret = NULL;
+    word32 len = 0;
+
+    if (src) {
+        len = (word32)XSTRLEN(src) + 1; /* Add one for null terminator */
+        ret = (char*)XMALLOC(len, NULL, memType);
+        if (ret != NULL) {
+            XMEMCPY(ret, src, len);
+        }
+    }
+
+    return ret;
+}
+#endif
+
+#if defined(WOLFSSL_ATOMIC_OPS) && !defined(SINGLE_THREADED)
 
 #ifdef HAVE_C___ATOMIC
 /* Atomic ops using standard C lib */
@@ -1219,8 +1292,9 @@ int wolfSSL_Atomic_Int_FetchSub(wolfSSL_Atomic_Int* c, int i)
 
 #endif /* WOLFSSL_ATOMIC_OPS */
 
-#if !defined(SINGLE_THREADED) && !defined(WOLFSSL_ATOMIC_OPS)
-void wolfSSL_RefInit(wolfSSL_Ref* ref, int* err)
+#if !defined(SINGLE_THREADED)
+
+void wolfSSL_RefWithMutexInit(wolfSSL_RefWithMutex* ref, int* err)
 {
     int ret = wc_InitMutex(&ref->mutex);
     if (ret != 0) {
@@ -1231,14 +1305,14 @@ void wolfSSL_RefInit(wolfSSL_Ref* ref, int* err)
     *err = ret;
 }
 
-void wolfSSL_RefFree(wolfSSL_Ref* ref)
+void wolfSSL_RefWithMutexFree(wolfSSL_RefWithMutex* ref)
 {
     if (wc_FreeMutex(&ref->mutex) != 0) {
         WOLFSSL_MSG("Failed to free mutex of reference counting!");
     }
 }
 
-void wolfSSL_RefInc(wolfSSL_Ref* ref, int* err)
+void wolfSSL_RefWithMutexInc(wolfSSL_RefWithMutex* ref, int* err)
 {
     int ret = wc_LockMutex(&ref->mutex);
     if (ret != 0) {
@@ -1251,7 +1325,17 @@ void wolfSSL_RefInc(wolfSSL_Ref* ref, int* err)
     *err = ret;
 }
 
-void wolfSSL_RefDec(wolfSSL_Ref* ref, int* isZero, int* err)
+int wolfSSL_RefWithMutexLock(wolfSSL_RefWithMutex* ref)
+{
+    return wc_LockMutex(&ref->mutex);
+}
+
+int wolfSSL_RefWithMutexUnlock(wolfSSL_RefWithMutex* ref)
+{
+    return wc_UnLockMutex(&ref->mutex);
+}
+
+void wolfSSL_RefWithMutexDec(wolfSSL_RefWithMutex* ref, int* isZero, int* err)
 {
     int ret = wc_LockMutex(&ref->mutex);
     if (ret != 0) {
@@ -1268,29 +1352,32 @@ void wolfSSL_RefDec(wolfSSL_Ref* ref, int* isZero, int* err)
     }
     *err = ret;
 }
-#endif
+#endif /* ! SINGLE_THREADED */
 
 #if WOLFSSL_CRYPT_HW_MUTEX
 /* Mutex for protection of cryptography hardware */
-static wolfSSL_Mutex wcCryptHwMutex;
+static wolfSSL_Mutex wcCryptHwMutex WOLFSSL_MUTEX_INITIALIZER_CLAUSE(wcCryptHwMutex);
+#ifndef WOLFSSL_MUTEX_INITIALIZER
 static int wcCryptHwMutexInit = 0;
+#endif
 
 int wolfSSL_CryptHwMutexInit(void)
 {
     int ret = 0;
+#ifndef WOLFSSL_MUTEX_INITIALIZER
     if (wcCryptHwMutexInit == 0) {
         ret = wc_InitMutex(&wcCryptHwMutex);
         if (ret == 0) {
             wcCryptHwMutexInit = 1;
         }
     }
+#endif
     return ret;
 }
 int wolfSSL_CryptHwMutexLock(void)
 {
-    int ret = BAD_MUTEX_E;
     /* Make sure HW Mutex has been initialized */
-    ret = wolfSSL_CryptHwMutexInit();
+    int ret = wolfSSL_CryptHwMutexInit();
     if (ret == 0) {
         ret = wc_LockMutex(&wcCryptHwMutex);
     }
@@ -1298,14 +1385,205 @@ int wolfSSL_CryptHwMutexLock(void)
 }
 int wolfSSL_CryptHwMutexUnLock(void)
 {
-    int ret = BAD_MUTEX_E;
     if (wcCryptHwMutexInit) {
-        ret = wc_UnLockMutex(&wcCryptHwMutex);
+        return wc_UnLockMutex(&wcCryptHwMutex);
     }
-    return ret;
+    else {
+        return BAD_MUTEX_E;
+    }
 }
 #endif /* WOLFSSL_CRYPT_HW_MUTEX */
 
+
+#if WOLFSSL_CRYPT_HW_MUTEX && defined(WOLFSSL_ALGO_HW_MUTEX)
+/* Mutex for protection of cryptography hardware */
+#ifndef NO_RNG_MUTEX
+static wolfSSL_Mutex wcCryptHwRngMutex \
+                        WOLFSSL_MUTEX_INITIALIZER_CLAUSE(wcCryptHwRngMutex);
+#endif /* NO_RNG_MUTEX */
+#ifndef NO_AES_MUTEX
+static wolfSSL_Mutex wcCryptHwAesMutex \
+                        WOLFSSL_MUTEX_INITIALIZER_CLAUSE(wcCryptHwAesMutex);
+#endif /* NO_AES_MUTEX */
+#ifndef NO_HASH_MUTEX
+static wolfSSL_Mutex wcCryptHwHashMutex \
+                        WOLFSSL_MUTEX_INITIALIZER_CLAUSE(wcCryptHwHashMutex);
+#endif /* NO_HASH_MUTEX */
+#ifndef NO_PK_MUTEX
+static wolfSSL_Mutex wcCryptHwPkMutex \
+                        WOLFSSL_MUTEX_INITIALIZER_CLAUSE(wcCryptHwPkMutex);
+#endif /* NO_PK_MUTEX */
+
+#ifndef WOLFSSL_MUTEX_INITIALIZER
+#ifndef NO_RNG_MUTEX
+static int wcCryptHwRngMutexInit = 0;
+#endif /* NO_RNG_MUTEX */
+#ifndef NO_AES_MUTEX
+static int wcCryptHwAesMutexInit = 0;
+#endif /* NO_AES_MUTEX */
+#ifndef NO_HASH_MUTEX
+static int wcCryptHwHashMutexInit = 0;
+#endif /* NO_HASH_MUTEX */
+#ifndef NO_PK_MUTEX
+static int wcCryptHwPkMutexInit = 0;
+#endif /* NO_PK_MUTEX */
+#endif /* WOLFSSL_MUTEX_INITIALIZER */
+
+
+/* Allows ability to switch to different mutex based on enum type */
+/* hw_mutex_algo, expects the dereferenced Ptrs to be set to NULL */
+static int hwAlgoPtrSet(hw_mutex_algo hwAlgo, wolfSSL_Mutex** wcHwAlgoMutexPtr,
+                                int** wcHwAlgoInitPtr)
+{
+    if (*wcHwAlgoMutexPtr != NULL || *wcHwAlgoInitPtr != NULL) {
+        return BAD_FUNC_ARG;
+    }
+    switch (hwAlgo) {
+        #ifndef NO_RNG_MUTEX
+        case rng_mutex:
+            *wcHwAlgoMutexPtr = &wcCryptHwRngMutex;
+            *wcHwAlgoInitPtr = &wcCryptHwRngMutexInit;
+            break;
+        #endif
+        #ifndef NO_AES_MUTEX
+        case aes_mutex:
+            *wcHwAlgoMutexPtr = &wcCryptHwAesMutex;
+            *wcHwAlgoInitPtr = &wcCryptHwAesMutexInit;
+            break;
+        #endif
+        #ifndef NO_HASH_MUTEX
+        case hash_mutex:
+            *wcHwAlgoMutexPtr = &wcCryptHwHashMutex;
+            *wcHwAlgoInitPtr = &wcCryptHwHashMutexInit;
+            break;
+        #endif
+        #ifndef NO_PK_MUTEX
+        case pk_mutex:
+            *wcHwAlgoMutexPtr = &wcCryptHwPkMutex;
+            *wcHwAlgoInitPtr = &wcCryptHwPkMutexInit;
+            break;
+        #endif
+        default:
+            return BAD_FUNC_ARG;
+    }
+    return 0;
+}
+
+static int hwAlgoMutexInit(hw_mutex_algo hwAlgo)
+{
+    int ret = 0;
+#ifndef WOLFSSL_MUTEX_INITIALIZER
+    wolfSSL_Mutex* wcHwAlgoMutexPtr = NULL;
+    int* wcHwAlgoInitPtr = NULL;
+    ret = hwAlgoPtrSet(hwAlgo, &wcHwAlgoMutexPtr, &wcHwAlgoInitPtr);
+    if (ret != 0) {
+        return ret;
+    }
+    if (*wcHwAlgoInitPtr == 0) {
+        ret = wc_InitMutex(wcHwAlgoMutexPtr);
+        if (ret == 0) {
+            *wcHwAlgoInitPtr = 1;
+        }
+    }
+#endif
+    return ret;
+}
+
+static int hwAlgoMutexLock(hw_mutex_algo hwAlgo)
+{
+    /* Make sure HW Mutex has been initialized */
+    int ret = 0;
+    wolfSSL_Mutex* wcHwAlgoMutexPtr = NULL;
+    int* wcHwAlgoInitPtr = NULL;
+    ret = hwAlgoPtrSet(hwAlgo, &wcHwAlgoMutexPtr, &wcHwAlgoInitPtr);
+    if (ret != 0) {
+        return ret;
+    }
+    ret = hwAlgoMutexInit(hwAlgo);
+    if (ret == 0) {
+        ret = wc_LockMutex(wcHwAlgoMutexPtr);
+    }
+    return ret;
+}
+
+static int hwAlgoMutexUnLock(hw_mutex_algo hwAlgo)
+{
+    wolfSSL_Mutex* wcHwAlgoMutexPtr = NULL;
+    int* wcHwAlgoInitPtr = NULL;
+    if (hwAlgoPtrSet(hwAlgo, &wcHwAlgoMutexPtr, &wcHwAlgoInitPtr) != 0) {
+        return BAD_FUNC_ARG;
+    }
+    if (*wcHwAlgoInitPtr) {
+        return wc_UnLockMutex(wcHwAlgoMutexPtr);
+    }
+    else {
+        return BAD_MUTEX_E;
+    }
+}
+
+/* Wrap around generic hwAlgo* functions and use correct */
+/* global mutex to determine if it can be unlocked/locked */
+#ifndef NO_RNG_MUTEX
+int wolfSSL_HwRngMutexInit(void)
+{
+    return hwAlgoMutexInit(rng_mutex);
+}
+int wolfSSL_HwRngMutexLock(void)
+{
+    return hwAlgoMutexLock(rng_mutex);
+}
+int wolfSSL_HwRngMutexUnLock(void)
+{
+    return hwAlgoMutexUnLock(rng_mutex);
+}
+#endif /* NO_RNG_MUTEX */
+
+#ifndef NO_AES_MUTEX
+int wolfSSL_HwAesMutexInit(void)
+{
+    return hwAlgoMutexInit(aes_mutex);
+}
+int wolfSSL_HwAesMutexLock(void)
+{
+    return hwAlgoMutexLock(aes_mutex);
+}
+int wolfSSL_HwAesMutexUnLock(void)
+{
+    return hwAlgoMutexUnLock(aes_mutex);
+}
+#endif /* NO_AES_MUTEX */
+
+#ifndef NO_HASH_MUTEX
+int wolfSSL_HwHashMutexInit(void)
+{
+    return hwAlgoMutexInit(hash_mutex);
+}
+int wolfSSL_HwHashMutexLock(void)
+{
+    return hwAlgoMutexLock(hash_mutex);
+}
+int wolfSSL_HwHashMutexUnLock(void)
+{
+    return hwAlgoMutexUnLock(hash_mutex);
+}
+#endif /* NO_HASH_MUTEX */
+
+#ifndef NO_PK_MUTEX
+int wolfSSL_HwPkMutexInit(void)
+{
+    return hwAlgoMutexInit(pk_mutex);
+}
+int wolfSSL_HwPkMutexLock(void)
+{
+    return hwAlgoMutexLock(pk_mutex);
+}
+int wolfSSL_HwPkMutexUnLock(void)
+{
+    return hwAlgoMutexUnLock(pk_mutex);
+}
+#endif /* NO_PK_MUTEX */
+
+#endif /* WOLFSSL_CRYPT_HW_MUTEX && defined(WOLFSSL_ALGO_HW_MUTEX) */
 
 /* ---------------------------------------------------------------------------*/
 /* Mutex Ports */
@@ -1341,6 +1619,14 @@ int wolfSSL_CryptHwMutexUnLock(void)
     {
         compat_mutex_cb = cb;
         return 0;
+    }
+
+    /* Gets the current callback function in use for locking/unlocking mutex
+     *
+     */
+    mutex_cb* wc_GetMutexCb(void)
+    {
+        return compat_mutex_cb;
     }
 #endif /* defined(OPENSSL_EXTRA) || defined(HAVE_WEBSERVER) */
 #ifdef SINGLE_THREADED
@@ -1470,7 +1756,7 @@ int wolfSSL_CryptHwMutexUnLock(void)
         return 0;
     }
 
-#elif defined(USE_WINDOWS_API)
+#elif defined(USE_WINDOWS_API) && !defined(WOLFSSL_PTHREADS)
 
     int wc_InitMutex(wolfSSL_Mutex* m)
     {
@@ -1507,7 +1793,7 @@ int wolfSSL_CryptHwMutexUnLock(void)
     static void destruct_key(void *buf)
     {
         if (buf != NULL) {
-            free(buf);
+            XFREE(buf, NULL, DYNAMIC_TYPE_OS_BUF);
         }
     }
 
@@ -1636,7 +1922,7 @@ int wolfSSL_CryptHwMutexUnLock(void)
 
         key_ptr = pthread_getspecific(key_own_hw_mutex);
         if (key_ptr == NULL) {
-            key_ptr = malloc(sizeof(int));
+            key_ptr = XMALLOC(sizeof(int), NULL, DYNAMIC_TYPE_OS_BUF);
             if (key_ptr == NULL) {
                 return MEMORY_E;
             }
@@ -1676,9 +1962,8 @@ int wolfSSL_CryptHwMutexUnLock(void)
 
     int maxq_CryptHwMutexTryLock()
     {
-        int ret = BAD_MUTEX_E;
         /* Make sure HW Mutex has been initialized */
-        ret = wolfSSL_CryptHwMutexInit();
+        int ret = wolfSSL_CryptHwMutexInit();
         if (ret == 0) {
             ret = maxq_LockMutex(&wcCryptHwMutex, 1);
         }
@@ -1721,7 +2006,7 @@ int wolfSSL_CryptHwMutexUnLock(void)
     #ifdef WOLFSSL_USE_RWLOCK
         int wc_InitRwLock(wolfSSL_RwLock* m)
         {
-            if (pthread_rwlock_init(m, 0) == 0)
+            if (pthread_rwlock_init(m, NULL) == 0)
                 return 0;
             else
                 return BAD_MUTEX_E;
@@ -1762,7 +2047,7 @@ int wolfSSL_CryptHwMutexUnLock(void)
 
     int wc_InitMutex(wolfSSL_Mutex* m)
     {
-        if (pthread_mutex_init(m, 0) == 0)
+        if (pthread_mutex_init(m, NULL) == 0)
             return 0;
         else
             return BAD_MUTEX_E;
@@ -2031,7 +2316,7 @@ int wolfSSL_CryptHwMutexUnLock(void)
     }
 
 #elif defined(EBSNET)
-
+    #if (defined(RTPLATFORM) && (RTPLATFORM != 0))
     int wc_InitMutex(wolfSSL_Mutex* m)
     {
         if (rtp_sig_mutex_alloc(m, "wolfSSL Mutex") == -1)
@@ -2071,6 +2356,66 @@ int wolfSSL_CryptHwMutexUnLock(void)
             retval =  -1;
 
         return(retval);
+    }
+    #else
+    static int rtip_semaphore_build(wolfSSL_Mutex *m)
+    {
+        KS_SEMAPHORE_BUILD(m)
+        return(RTP_TRUE);
+    }
+
+    int wc_InitMutex(wolfSSL_Mutex* m)
+    {
+        if (rtip_semaphore_build(m) == RTP_FALSE)
+            return BAD_MUTEX_E;
+        else
+            return 0;
+    }
+
+    int wc_FreeMutex(wolfSSL_Mutex* m)
+    {
+        KS_SEMAPHORE_FREE(*m);
+        return 0;
+    }
+
+    int wc_LockMutex(wolfSSL_Mutex* m)
+    {
+        if (KS_SEMAPHORE_GET(*m))
+            return 0;
+        else
+            return BAD_MUTEX_E;
+    }
+
+    int wc_UnLockMutex(wolfSSL_Mutex* m)
+    {
+        KS_SEMAPHORE_GIVE(*m);
+        return 0;
+    }
+    #endif
+    int ebsnet_fseek(int a, long b, int c)
+    {
+        int retval;
+
+        retval = (int)vf_lseek(a, b, c);
+        if (retval > 0)
+            retval = 0;
+        else
+            retval =  -1;
+
+        return(retval);
+    }
+
+    int strcasecmp(const char *s1, const char *s2)
+    {
+        while (rtp_tolower(*s1) == rtp_tolower(*s2)) {
+            if (*s1 == '\0' || *s2 == '\0')
+                break;
+            s1++;
+            s2++;
+        }
+
+        return rtp_tolower(*(unsigned char *) s1) -
+               rtp_tolower(*(unsigned char *) s2);
     }
 
 #elif defined(FREESCALE_MQX) || defined(FREESCALE_KSDK_MQX)
@@ -2730,6 +3075,35 @@ int wolfSSL_CryptHwMutexUnLock(void)
         return 0;
     }
 
+#elif defined(NETOS)
+
+    int wc_InitMutex(wolfSSL_Mutex* m)
+    {
+        if (tx_mutex_create(&ready->mutex, "wolfSSL Lock", TX_INHERIT)
+                == TX_SUCCESS)
+            return 0;
+        else
+            return BAD_MUTEX_E;
+    }
+
+    int wc_FreeMutex(wolfSSL_Mutex* m)
+    {
+        if (tx_mutex_delete(&ready->mutex) == TX_SUCCESS)
+            return 0;
+        else
+            return BAD_MUTEX_E;
+    }
+
+    int wc_LockMutex(wolfSSL_Mutex* m)
+    {
+
+    }
+
+    int wc_UnLockMutex(wolfSSL_Mutex* m)
+    {
+
+    }
+
 #elif defined(WOLFSSL_USER_MUTEX)
 
     /* Use user own mutex */
@@ -2814,7 +3188,7 @@ time_t mynewt_time(time_t* timer)
 #endif /* WOLFSSL_APACHE_MYNEWT */
 
 #if defined(WOLFSSL_GMTIME)
-struct tm* gmtime(const time_t* timer)
+struct tm* gmtime_r(const time_t* timer, struct tm *ret)
 {
     #define YEAR0          1900
     #define EPOCH_YEAR     1970
@@ -2828,8 +3202,6 @@ struct tm* gmtime(const time_t* timer)
         {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
     };
 
-    static struct tm st_time;
-    struct tm* ret = &st_time;
     time_t secs = *timer;
     unsigned long dayclock, dayno;
     int year = EPOCH_YEAR;
@@ -2863,6 +3235,12 @@ struct tm* gmtime(const time_t* timer)
 
     return ret;
 }
+
+struct tm* gmtime(const time_t* timer) {
+    static struct tm st_time;
+    return gmtime_r(timer, &st_time);
+}
+
 #endif /* WOLFSSL_GMTIME */
 
 
@@ -3006,6 +3384,9 @@ time_t mqx_time(time_t* timer)
 
 #endif /* FREESCALE_MQX || FREESCALE_KSDK_MQX */
 
+#if defined(MAX3266X_RTC)
+    #define XTIME wc_MXC_RTC_Time
+#endif
 
 #if defined(WOLFSSL_TIRTOS) && defined(USER_TIME)
 
@@ -3056,6 +3437,46 @@ time_t z_time(time_t * timer)
 {
     struct timespec ts;
 
+    #if defined(CONFIG_RTC) && \
+        (defined(CONFIG_PICOLIBC) || defined(CONFIG_NEWLIB_LIBC))
+
+    #if defined(CONFIG_BOARD_NATIVE_POSIX)
+
+    /* When using native sim, get time from simulator rtc */
+    uint32_t nsec = 0;
+    uint64_t sec = 0;
+    native_rtc_gettime(RTC_CLOCK_PSEUDOHOSTREALTIME, &nsec, &sec);
+
+    if (timer != NULL)
+        *timer = sec;
+
+    return sec;
+
+    #else
+
+    /* Try to obtain the actual time from an RTC */
+    static const struct device *rtc = DEVICE_DT_GET(DT_NODELABEL(rtc));
+
+    if (device_is_ready(rtc)) {
+        struct rtc_time rtc_time;
+        struct tm *tm_time = rtc_time_to_tm(&rtc_time);
+
+        int ret = rtc_get_time(rtc, &rtc_time);
+
+        if (ret == 0) {
+            time_t epochTime = mktime(tm_time);
+
+            if (timer != NULL)
+                *timer = epochTime;
+
+            return epochTime;
+        }
+    }
+    #endif /* defined(CONFIG_BOARD_NATIVE_POSIX) */
+    #endif
+
+    /* Fallback to uptime since boot. This works for relative times, but
+     * not for ASN.1 date validation */
     if (clock_gettime(CLOCK_REALTIME, &ts) == 0)
         if (timer != NULL)
             *timer = ts.tv_sec;
@@ -3176,8 +3597,10 @@ time_t stm32_hal_time(time_t *t1)
     HAL_RTC_GetTime(&hrtc, &time, FORMAT_BIN);
     HAL_RTC_GetDate(&hrtc, &date, FORMAT_BIN);
 
-    tm_time.tm_year  = date.Year;
-    tm_time.tm_mon   = date.Month - 1;          /* gm starts at 0 */
+    /* RTC year is 0-99 and "struct tm" is 1900+, so assume after year 2000 */
+    tm_time.tm_year  = date.Year + 100;
+    /* RTC month is 1-12 and "struct tm" is 0-12, so subtract 1 */
+    tm_time.tm_mon   = date.Month - 1;
     tm_time.tm_mday  = date.Date;
     tm_time.tm_hour  = time.Hours;
     tm_time.tm_min   = time.Minutes;
@@ -3192,7 +3615,8 @@ time_t stm32_hal_time(time_t *t1)
 
 #endif /* !NO_ASN_TIME */
 
-#if !defined(WOLFSSL_LEANPSK) && !defined(STRING_USER)
+#if (!defined(WOLFSSL_LEANPSK) && !defined(STRING_USER)) || \
+    defined(USE_WOLF_STRNSTR)
 char* mystrnstr(const char* s1, const char* s2, unsigned int n)
 {
     unsigned int s2_len = (unsigned int)XSTRLEN(s2);
@@ -3211,6 +3635,7 @@ char* mystrnstr(const char* s1, const char* s2, unsigned int n)
     return NULL;
 }
 #endif
+
 
 /* custom memory wrappers */
 #ifdef WOLFSSL_NUCLEUS_1_2
@@ -3283,4 +3708,559 @@ char* mystrnstr(const char* s1, const char* s2, unsigned int n)
         #define WOLFSSL_CRYPTOCELL_HASH_C
         #include <wolfcrypt/src/port/arm/cryptoCellHash.c> /* sha256 */
     #endif
+#endif
+
+
+#ifndef SINGLE_THREADED
+
+/* Environment-specific multi-thread implementation check  */
+#if defined(USE_WINDOWS_API) && !defined(WOLFSSL_PTHREADS) && \
+    !defined(_WIN32_WCE)
+    int wolfSSL_NewThread(THREAD_TYPE* thread,
+        THREAD_CB cb, void* arg)
+    {
+        if (thread == NULL || cb == NULL)
+            return BAD_FUNC_ARG;
+
+        /* Use _beginthreadex instead of _beginthread because of:
+         *   _beginthreadex is safer to use than _beginthread. If the thread
+         *   that's generated by _beginthread exits quickly, the handle that's
+         *   returned to the caller of _beginthread might be invalid or point
+         *   to another thread. However, the handle that's returned by
+         *   _beginthreadex has to be closed by the caller of _beginthreadex,
+         *   so it's guaranteed to be a valid handle if _beginthreadex didn't
+         *   return an error.*/
+        *thread = _beginthreadex(NULL, 0, cb, arg, 0, NULL);
+        if (*thread == 0) {
+            *thread = INVALID_THREAD_VAL;
+            return MEMORY_E;
+        }
+
+        return 0;
+    }
+
+#ifdef WOLFSSL_THREAD_NO_JOIN
+    int wolfSSL_NewThreadNoJoin(THREAD_CB_NOJOIN cb, void* arg)
+    {
+        THREAD_TYPE thread;
+
+        if (cb == NULL)
+            return BAD_FUNC_ARG;
+
+        thread = _beginthread(cb, 0, arg);
+        if (thread == -1L) {
+            return MEMORY_E;
+        }
+
+        return 0;
+    }
+#endif
+
+    int wolfSSL_JoinThread(THREAD_TYPE thread)
+    {
+        int ret = 0;
+
+        if (thread == INVALID_THREAD_VAL)
+            return BAD_FUNC_ARG;
+
+        /* We still want to attempt to close the thread handle even on error */
+        if (WaitForSingleObject((HANDLE)thread, INFINITE) == WAIT_FAILED)
+            ret = MEMORY_E;
+
+        if (CloseHandle((HANDLE)thread) == 0)
+            ret = MEMORY_E;
+
+        return ret;
+    }
+
+#ifdef WOLFSSL_COND
+    int wolfSSL_CondInit(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        cond->cond = CreateEventA(NULL, FALSE, FALSE, NULL);
+        if (cond->cond == NULL)
+            return MEMORY_E;
+
+        if (wc_InitMutex(&cond->mutex) != 0) {
+            if (CloseHandle(cond->cond) == 0)
+                return MEMORY_E;
+            return MEMORY_E;
+        }
+
+        return 0;
+    }
+
+    int wolfSSL_CondFree(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (CloseHandle(cond->cond) == 0)
+            return MEMORY_E;
+
+        return 0;
+    }
+
+    int wolfSSL_CondStart(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (wc_LockMutex(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        return 0;
+    }
+
+    int wolfSSL_CondSignal(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (wc_UnLockMutex(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        if (SetEvent(cond->cond) == 0)
+            return MEMORY_E;
+
+        if (wc_LockMutex(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        return 0;
+    }
+
+    int wolfSSL_CondWait(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (wc_UnLockMutex(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        if (WaitForSingleObject(cond->cond, INFINITE) == WAIT_FAILED)
+            return MEMORY_E;
+
+        if (wc_LockMutex(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        return 0;
+    }
+
+    int wolfSSL_CondEnd(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (wc_UnLockMutex(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        return 0;
+    }
+#endif /* WOLFSSL_COND */
+
+#elif defined(WOLFSSL_TIRTOS)
+
+    int wolfSSL_NewThread(THREAD_TYPE* thread,
+        THREAD_CB cb, void* arg)
+    {
+        /* Initialize the defaults and set the parameters. */
+        Task_Params taskParams;
+        Task_Params_init(&taskParams);
+        taskParams.arg0 = (UArg)arg;
+        taskParams.stackSize = 65535;
+        *thread = Task_create((Task_FuncPtr)cb, &taskParams, NULL);
+        if (*thread == NULL) {
+            return MEMORY_E;
+        }
+        Task_yield();
+        return 0;
+    }
+
+    int wolfSSL_JoinThread(THREAD_TYPE thread)
+    {
+        while(1) {
+            if (Task_getMode(thread) == Task_Mode_TERMINATED) {
+                Task_sleep(5);
+                break;
+            }
+            Task_yield();
+        }
+        return 0;
+    }
+
+#elif defined(NETOS)
+
+    int wolfSSL_NewThread(THREAD_TYPE* thread,
+        THREAD_CB cb, void* arg)
+    {
+        /* For backwards compatibility allow using this declaration as well. */
+        #ifdef TESTSUITE_THREAD_STACK_SZ
+            #define WOLFSSL_NETOS_STACK_SZ TESTSUITE_THREAD_STACK_SZ
+        #endif
+        /* This can be adjusted by defining in user_settings.h, will default to
+         * 65k in the event it is undefined */
+        #ifndef WOLFSSL_NETOS_STACK_SZ
+            #define WOLFSSL_NETOS_STACK_SZ 65535
+        #endif
+        int result;
+
+        if (thread == NULL || cb == NULL)
+            return BAD_FUNC_ARG;
+
+        XMEMSET(thread, 0, sizeof(*thread));
+
+        thread->threadStack = (void *)XMALLOC(WOLFSSL_NETOS_STACK_SZ, NULL,
+                DYNAMIC_TYPE_OS_BUF);
+        if (thread->threadStack == NULL)
+            return MEMORY_E;
+
+
+        /* first create the idle thread:
+         * ARGS:
+         * Param1: pointer to thread
+         * Param2: name
+         * Param3 and 4: entry function and input
+         * Param5: pointer to thread stack
+         * Param6: stack size
+         * Param7 and 8: priority level and preempt threshold
+         * Param9 and 10: time slice and auto-start indicator */
+        result = tx_thread_create(&thread->tid,
+                           "wolfSSL thread",
+                           (entry_functionType)cb, (ULONG)arg,
+                           thread->threadStack,
+                           WOLFSSL_NETOS_STACK_SZ,
+                           2, 2,
+                           1, TX_AUTO_START);
+        if (result != TX_SUCCESS) {
+            XFREE(thread->threadStack, NULL, DYNAMIC_TYPE_OS_BUF);
+            thread->threadStack = NULL;
+            return MEMORY_E;
+        }
+
+        return 0;
+    }
+
+    int wolfSSL_JoinThread(THREAD_TYPE thread)
+    {
+        /* TODO: maybe have to use tx_thread_delete? */
+        XFREE(thread.threadStack, NULL, DYNAMIC_TYPE_OS_BUF);
+        thread.threadStack = NULL;
+        return 0;
+    }
+
+#elif defined(WOLFSSL_ZEPHYR)
+
+    void* wolfsslThreadHeapHint = NULL;
+
+    int wolfSSL_NewThread(THREAD_TYPE* thread,
+        THREAD_CB cb, void* arg)
+    {
+        #ifndef WOLFSSL_ZEPHYR_STACK_SZ
+            #define WOLFSSL_ZEPHYR_STACK_SZ (48*1024)
+        #endif
+
+        if (thread == NULL || cb == NULL)
+            return BAD_FUNC_ARG;
+
+        XMEMSET(thread, 0, sizeof(*thread));
+
+        thread->tid = (struct k_thread*)XMALLOC(
+                Z_KERNEL_STACK_SIZE_ADJUST(sizeof(struct k_thread)),
+                wolfsslThreadHeapHint, DYNAMIC_TYPE_TMP_BUFFER);
+        if (thread->tid == NULL) {
+            WOLFSSL_MSG("error: XMALLOC thread->tid failed");
+            return MEMORY_E;
+        }
+
+        /* TODO: Use the following once k_thread_stack_alloc makes it into a
+         * release.
+         * thread->threadStack = k_thread_stack_alloc(WOLFSSL_ZEPHYR_STACK_SZ,
+         *                                            0);
+         */
+        thread->threadStack = (void*)XMALLOC(
+                Z_KERNEL_STACK_SIZE_ADJUST(WOLFSSL_ZEPHYR_STACK_SZ),
+                wolfsslThreadHeapHint, DYNAMIC_TYPE_TMP_BUFFER);
+        if (thread->threadStack == NULL) {
+            XFREE(thread->tid, wolfsslThreadHeapHint,
+                    DYNAMIC_TYPE_TMP_BUFFER);
+            thread->tid = NULL;
+
+            WOLFSSL_MSG("error: XMALLOC thread->threadStack failed");
+            return MEMORY_E;
+        }
+
+        /* k_thread_create does not return any error codes */
+        /* Casting to k_thread_entry_t should be fine since we just ignore the
+         * extra arguments being passed in */
+        k_thread_create(thread->tid, thread->threadStack,
+                WOLFSSL_ZEPHYR_STACK_SZ, (k_thread_entry_t)cb, arg, NULL, NULL,
+                5, 0, K_NO_WAIT);
+
+        return 0;
+    }
+
+    int wolfSSL_JoinThread(THREAD_TYPE thread)
+    {
+        int ret = 0;
+        int err;
+
+        err = k_thread_join(thread.tid, K_FOREVER);
+        if (err != 0)
+            ret = MEMORY_E;
+
+        XFREE(thread.tid, wolfsslThreadHeapHint,
+                DYNAMIC_TYPE_TMP_BUFFER);
+        thread.tid = NULL;
+
+        /* TODO: Use the following once k_thread_stack_free makes it into a
+         * release.
+         * err = k_thread_stack_free(thread.threadStack);
+         * if (err != 0)
+         *     ret = MEMORY_E;
+         */
+        XFREE(thread.threadStack, wolfsslThreadHeapHint,
+                DYNAMIC_TYPE_TMP_BUFFER);
+        thread.threadStack = NULL;
+
+        /* No thread resources to free. Everything is stored in thread.tid */
+
+        return ret;
+    }
+
+#ifdef WOLFSSL_COND
+    /* Use the pthreads translation layer for signaling */
+
+#endif /* WOLFSSL_COND */
+
+#elif defined(WOLFSSL_PTHREADS) || \
+     (defined(FREERTOS) && defined(WOLFSSL_ESPIDF))
+
+    int wolfSSL_NewThread(THREAD_TYPE* thread,
+        THREAD_CB cb, void* arg)
+    {
+        if (thread == NULL || cb == NULL)
+            return BAD_FUNC_ARG;
+
+        if (pthread_create(thread, NULL, cb, arg) != 0)
+            return MEMORY_E;
+
+        return 0;
+    }
+
+    #ifdef WOLFSSL_THREAD_NO_JOIN
+        int wolfSSL_NewThreadNoJoin(THREAD_CB_NOJOIN cb, void* arg)
+        {
+            THREAD_TYPE thread;
+            int ret;
+            XMEMSET(&thread, 0, sizeof(thread));
+            ret = wolfSSL_NewThread(&thread, cb, arg);
+            if (ret == 0)
+                ret = pthread_detach(thread);
+            return ret;
+        }
+    #endif
+
+    int wolfSSL_JoinThread(THREAD_TYPE thread)
+    {
+        if (thread == INVALID_THREAD_VAL)
+            return BAD_FUNC_ARG;
+
+        if (pthread_join(thread, NULL) != 0)
+            return MEMORY_E;
+
+        return 0;
+    }
+
+#ifdef WOLFSSL_COND
+    #if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED >= 1060 \
+        && !defined(__ppc__)
+    /* Apple style dispatch semaphore */
+    int wolfSSL_CondInit(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        /* dispatch_release() fails hard, with Trace/BPT trap signal, if the
+         * sem's internal count is less than the value passed in with
+         * dispatch_semaphore_create().  work around this by initing
+         * with 0, then incrementing it afterwards.
+         */
+        cond->cond = dispatch_semaphore_create(0);
+        if (cond->cond == NULL)
+            return MEMORY_E;
+
+        if (wc_InitMutex(&cond->mutex) != 0) {
+            dispatch_release(cond->cond);
+            return MEMORY_E;
+        }
+
+        return 0;
+    }
+
+    int wolfSSL_CondFree(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        dispatch_release(cond->cond);
+        cond->cond = NULL;
+
+        if (wc_FreeMutex(&cond->mutex) != 0) {
+            return MEMORY_E;
+        }
+
+        return 0;
+    }
+
+    int wolfSSL_CondStart(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (wc_LockMutex(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        return 0;
+    }
+
+    int wolfSSL_CondSignal(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (wc_UnLockMutex(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        dispatch_semaphore_signal(cond->cond);
+
+        if (wc_LockMutex(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        return 0;
+    }
+
+    int wolfSSL_CondWait(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (wc_UnLockMutex(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        dispatch_semaphore_wait(cond->cond, DISPATCH_TIME_FOREVER);
+
+        if (wc_LockMutex(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        return 0;
+    }
+
+    int wolfSSL_CondEnd(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (wc_UnLockMutex(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        return 0;
+    }
+
+    #else /* Generic POSIX conditional */
+
+    int wolfSSL_CondInit(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (pthread_mutex_init(&cond->mutex, NULL) != 0)
+            return MEMORY_E;
+
+        if (pthread_cond_init(&cond->cond, NULL) != 0) {
+            /* Keep compilers happy that we are using the return code */
+            if (pthread_mutex_destroy(&cond->mutex) != 0)
+                return MEMORY_E;
+            return MEMORY_E;
+        }
+
+        return 0;
+    }
+
+    int wolfSSL_CondFree(COND_TYPE* cond)
+    {
+        int ret = 0;
+
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (pthread_mutex_destroy(&cond->mutex) != 0)
+            ret = MEMORY_E;
+
+        if (pthread_cond_destroy(&cond->cond) != 0)
+            ret = MEMORY_E;
+
+        return ret;
+    }
+
+    int wolfSSL_CondStart(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (pthread_mutex_lock(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        return 0;
+    }
+
+    int wolfSSL_CondSignal(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (pthread_cond_signal(&cond->cond) != 0)
+            return MEMORY_E;
+
+        return 0;
+    }
+
+    int wolfSSL_CondWait(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (pthread_cond_wait(&cond->cond, &cond->mutex) != 0)
+            return MEMORY_E;
+
+        return 0;
+    }
+
+    int wolfSSL_CondEnd(COND_TYPE* cond)
+    {
+        if (cond == NULL)
+            return BAD_FUNC_ARG;
+
+        if (pthread_mutex_unlock(&cond->mutex) != 0)
+            return BAD_MUTEX_E;
+
+        return 0;
+    }
+
+    #endif /* __MACH__ */
+#endif /* WOLFSSL_COND */
+
+#endif /* Environment check */
+
+#endif /* not SINGLE_THREADED */
+
+#if defined(WOLFSSL_LINUXKM) && defined(CONFIG_ARM64) && \
+    defined(USE_WOLFSSL_LINUXKM_PIE_REDIRECT_TABLE)
+noinstr void my__alt_cb_patch_nops(struct alt_instr *alt, __le32 *origptr,
+                                   __le32 *updptr, int nr_inst)
+{
+    return (wolfssl_linuxkm_get_pie_redirect_table()->
+            alt_cb_patch_nops)(alt, origptr, updptr, nr_inst);
+}
 #endif

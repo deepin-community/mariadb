@@ -17,10 +17,6 @@
 #ifndef _SP_RCONTEXT_H_
 #define _SP_RCONTEXT_H_
 
-#ifdef USE_PRAGMA_INTERFACE
-#pragma interface			/* gcc class implementation */
-#endif
-
 #include "sql_class.h"                    // select_result_interceptor
 #include "sp_pcontext.h"                  // sp_condition_value
 
@@ -71,7 +67,7 @@ public:
   ///
   /// @return valid sp_rcontext object or NULL in case of OOM-error.
   static sp_rcontext *create(THD *thd,
-                             const sp_head *owner,
+                             sp_head *owner,
                              const sp_pcontext *root_parsing_ctx,
                              Field *return_value_fld,
                              Row_definition_list &defs);
@@ -79,7 +75,7 @@ public:
   ~sp_rcontext();
 
 private:
-  sp_rcontext(const sp_head *owner,
+  sp_rcontext(sp_head *owner,
               const sp_pcontext *root_parsing_ctx,
               Field *return_value_fld,
               bool in_sub_stmt);
@@ -169,7 +165,7 @@ public:
   /// checking if correct runtime context is used for variable handling,
   /// and to access the package run-time context.
   /// Also used by slow log.
-  const sp_head *m_sp;
+  sp_head *m_sp;
 
   /////////////////////////////////////////////////////////////////////////
   // SP-variables.
@@ -213,6 +209,14 @@ public:
 
   bool is_return_value_set() const
   { return m_return_value_set; }
+
+  /////////////////////////////////////////////////////////////////////////
+  // Parameters.
+  /////////////////////////////////////////////////////////////////////////
+  uint get_inited_param_count() const
+  { return m_inited_params_count; }
+  void set_inited_param_count(uint count)
+  { m_inited_params_count= count; }
 
   /////////////////////////////////////////////////////////////////////////
   // SQL-handlers.
@@ -405,6 +409,10 @@ private:
 
   /// Array of CASE expression holders.
   Bounds_checked_array<Item_cache *> m_case_expr_holders;
+
+  /// Number of parameters initialized by the callee. This is used to
+  /// determine which parameters should be initialized with the default value.
+  uint m_inited_params_count;
 }; // class sp_rcontext : public Sql_alloc
 
 #endif /* _SP_RCONTEXT_H_ */

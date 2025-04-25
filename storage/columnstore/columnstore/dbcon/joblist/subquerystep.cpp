@@ -19,12 +19,12 @@
 //  $Id: subquerystep.cpp 6370 2010-03-18 02:58:09Z xlou $
 
 #include <iostream>
-//#define NDEBUG
+// #define NDEBUG
 #include <cassert>
 using namespace std;
 
 #include <boost/scoped_array.hpp>
-#include <boost/shared_array.hpp>
+
 #include <boost/scoped_ptr.hpp>
 #include <boost/shared_ptr.hpp>
 #include <boost/thread.hpp>
@@ -147,6 +147,7 @@ SubAdapterStep::SubAdapterStep(SJSTEP& s, const JobInfo& jobInfo)
  , fOutputIterator(0)
  , fRunner(0)
 {
+  fExtendedInfo = "SAS: ";
   fAlias = s->alias();
   fView = s->view();
   fInputJobStepAssociation = s->outputAssociation();
@@ -533,4 +534,3 @@ void SubAdapterStep::formatMiniStats()
 }
 
 }  // namespace joblist
-// vim:ts=4 sw=4:

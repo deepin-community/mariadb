@@ -482,12 +482,12 @@ enum json_num_states {
 
 static int json_num_states[NS_NUM_STATES][N_NUM_CLASSES]=
 {
-/*         -        +       0        1..9    POINT    E       END_OK   ERROR */
+/*         -        +       0         1..9    POINT    E       END_OK   ERROR */
 /*OK*/   { JE_SYN,  JE_SYN, JE_SYN,   JE_SYN, JE_SYN,  JE_SYN, JE_SYN, JE_BAD_CHR },
 /*GO*/   { NS_GO1,  JE_SYN, NS_Z,     NS_INT, JE_SYN,  JE_SYN, JE_SYN, JE_BAD_CHR },
 /*GO1*/  { JE_SYN,  JE_SYN, NS_Z1,    NS_INT, JE_SYN,  JE_SYN, JE_SYN, JE_BAD_CHR },
-/*ZERO*/ { JE_SYN,  JE_SYN, JE_SYN,   JE_SYN, NS_FRAC, JE_SYN, NS_OK,  JE_BAD_CHR },
-/*ZE1*/  { JE_SYN,  JE_SYN, JE_SYN,   JE_SYN, NS_FRAC, JE_SYN, NS_OK,  JE_BAD_CHR },
+/*ZERO*/ { JE_SYN,  JE_SYN, JE_SYN,   JE_SYN, NS_FRAC, NS_EX,  NS_OK,  JE_BAD_CHR },
+/*ZE1*/  { JE_SYN,  JE_SYN, JE_SYN,   JE_SYN, NS_FRAC, NS_EX,  NS_OK,  JE_BAD_CHR },
 /*INT*/  { JE_SYN,  JE_SYN, NS_INT,   NS_INT, NS_FRAC, NS_EX,  NS_OK,  JE_BAD_CHR },
 /*FRAC*/ { JE_SYN,  JE_SYN, NS_FRAC,  NS_FRAC,JE_SYN,  NS_EX,  NS_OK,  JE_BAD_CHR },
 /*EX*/   { NS_EX,   NS_EX,  NS_EX1,   NS_EX1, JE_SYN,  JE_SYN, JE_SYN, JE_BAD_CHR }, 
@@ -1093,7 +1093,7 @@ static int json_path_transitions[N_PATH_STATES][N_PATH_CLASSES]=
 /* AS */  { JE_EOS, JE_SYN, JE_SYN, JE_SYN, PS_T, PS_PT, JE_SYN, PS_NEG,
             PS_Z, PS_INT, PS_LAST, PS_AS, JE_SYN, JE_SYN, JE_SYN,
             JE_NOT_JSON_CHR, JE_BAD_CHR},
-/* KEY */ { JE_EOS, PS_KNM, PS_KWD, JE_SYN, PS_KNM, PS_KNM, JE_SYN, JE_SYN,
+/* KEY */ { JE_EOS, PS_KNM, PS_KWD, JE_SYN, PS_KNM, PS_KNM, JE_SYN, PS_KNM,
             PS_KNM, PS_KNM, PS_KNM, PS_KNM, PS_KNM, JE_SYN, PS_KEYX, PS_KNM,
             JE_NOT_JSON_CHR, JE_BAD_CHR},
 /* KNM */ { PS_KOK, PS_KNM, PS_AST, PS_EAR, PS_KNM, PS_KNM, PS_EKY, PS_KNM,
@@ -2021,7 +2021,43 @@ enum json_types json_get_object_nkey(const char *js __attribute__((unused)),
                                      const char **value __attribute__((unused)),
                                      int *value_len __attribute__((unused)))
 {
-  return JSV_NOTHING;
+  json_engine_t je;
+  int keys_found= 0;
+
+  json_scan_start(&je, &my_charset_utf8mb4_bin,(const uchar *) js,
+                  (const uchar *) js_end);
+
+  if (json_read_value(&je) ||
+      je.value_type != JSON_VALUE_OBJECT)
+    goto err_return;
+
+  while (!json_scan_next(&je))
+  {
+    switch (je.state)
+    {
+    case JST_KEY:
+      if (nkey == keys_found)
+      {
+        *keyname= (char *) je.s.c_str;
+        while (json_read_keyname_chr(&je) == 0)
+          *keyname_end= (char *) je.s.c_str;
+
+        return smart_read_value(&je, value, value_len);
+      }
+
+      keys_found++;
+      if (json_skip_key(&je))
+        goto err_return;
+
+      break;
+
+    case JST_OBJ_END:
+      return JSV_NOTHING;
+    }
+  }
+
+err_return:
+  return JSV_BAD_JSON;
 }
 
 

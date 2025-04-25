@@ -1,8 +1,5 @@
---disable_warnings
-DROP TABLE IF EXISTS t1, t2;
---enable_warnings
+--source include/test_db_charset_latin1.inc
 
---disable_ps2_protocol
 --echo #
 --echo # Bug#31663 FIELDS TERMINATED BY special character
 --echo #
@@ -133,12 +130,12 @@ INSERT INTO t1 VALUES (1, 'ABC-АБВ', 'DEF-ÂÃÄ'), (2, NULL, NULL);
 --echo # Error on multi-character ENCLOSED/ESCAPED BY
 
 --replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
---error 1083
+--error ER_WRONG_FIELD_TERMINATORS
 --eval SELECT * FROM t1 INTO OUTFILE '$file' FIELDS ENCLOSED BY '12345'
 --remove_file $file
 
 --replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
---error 1083
+--error ER_WRONG_FIELD_TERMINATORS
 --eval SELECT * FROM t1 INTO OUTFILE '$file' FIELDS ESCAPED BY '12345'
 --remove_file $file
 
@@ -149,14 +146,14 @@ INSERT INTO t1 VALUES (1, 'ABC-АБВ', 'DEF-ÂÃÄ'), (2, NULL, NULL);
 --replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
 --eval SELECT * INTO OUTFILE '$file' FIELDS ENCLOSED BY 'ъ' FROM t1
 --replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
---error 1083 # backward compatibility
+--error ER_WRONG_FIELD_TERMINATORS # backward compatibility
 --eval LOAD DATA INFILE '$file' INTO TABLE t2 CHARACTER SET binary FIELDS ENCLOSED BY 'ъ'
 --remove_file $file
 
 --replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
 --eval SELECT * INTO OUTFILE '$file' FIELDS ESCAPED BY 'ъ' FROM t1
 --replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
---error 1083 # backward compatibility
+--error ER_WRONG_FIELD_TERMINATORS # backward compatibility
 --eval LOAD DATA INFILE '$file' INTO TABLE t2 CHARACTER SET binary FIELDS ESCAPED BY 'ъ'
 --remove_file $file
 
@@ -291,7 +288,8 @@ SELECT LENGTH(a) FROM t2;
 DROP TABLE t1, t2;
 
 --disable_prepare_warnings
---enable_ps2_protocol
 
 ###########################################################################
 --echo # End of 5.1 tests.
+
+--source include/test_db_charset_restore.inc

@@ -67,7 +67,7 @@ SCSEP SelectSubQuery::transform()
   csep->subType(CalpontSelectExecutionPlan::SELECT_SUBS);
 
   // gwi for the sub query
-  gp_walk_info gwi(fGwip.timeZone);
+  gp_walk_info gwi(fGwip.timeZone, fGwip.subQueriesChain);
   gwi.thd = fGwip.thd;
   gwi.subQuery = this;
 
@@ -84,7 +84,7 @@ SCSEP SelectSubQuery::transform()
     if (!gwi.fatalParseError)
     {
       fGwip.fatalParseError = true;
-      fGwip.parseErrorText = "Error occured in SelectSubQuery::transform()";
+      fGwip.parseErrorText = "Error occurred in SelectSubQuery::transform()";
     }
     else
     {

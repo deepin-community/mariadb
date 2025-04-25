@@ -42,6 +42,8 @@ Created 3/26/1996 Heikki Tuuri
 extern mysql_pfs_key_t trx_sys_mutex_key;
 #endif
 
+extern bool trx_rollback_is_active;
+
 /** Checks if a page address is the trx sys header page.
 @param[in]	page_id	page id
 @return true if trx sys header page */
@@ -437,10 +439,10 @@ class rw_trx_hash_t
     not accessible by concurrent threads.
   */
 
-  static void rw_trx_hash_initializer(LF_HASH *,
-                                      rw_trx_hash_element_t *element,
-                                      trx_t *trx)
+  static void rw_trx_hash_initializer(LF_HASH *, void *el, const void *t)
   {
+    rw_trx_hash_element_t *element= static_cast<rw_trx_hash_element_t*>(el);
+    trx_t *trx= static_cast<trx_t*>(const_cast<void*>(t));
     ut_ad(element->trx == 0);
     element->trx= trx;
     element->id= trx->id;
@@ -454,7 +456,7 @@ class rw_trx_hash_t
 
     Pins are used to protect object from being destroyed or reused. They are
     normally stored in trx object for quick access. If caller doesn't have trx
-    available, we try to get it using currnet_trx(). If caller doesn't have trx
+    available, we try to get it using current_trx(). If caller doesn't have trx
     at all, temporary pins are allocated.
   */
 
@@ -480,9 +482,10 @@ class rw_trx_hash_t
 
 
   template <typename T>
-  static my_bool eliminate_duplicates(rw_trx_hash_element_t *element,
-                                      eliminate_duplicates_arg<T> *arg)
+  static my_bool eliminate_duplicates(void *el, void *a)
   {
+    rw_trx_hash_element_t *element= static_cast<rw_trx_hash_element_t*>(el);
+    auto arg= static_cast<eliminate_duplicates_arg<T>*>(a);
     for (trx_ids_t::iterator it= arg->ids.begin(); it != arg->ids.end(); it++)
     {
       if (*it == element->id)
@@ -494,31 +497,20 @@ class rw_trx_hash_t
 
 
 #ifdef UNIV_DEBUG
-  static void validate_element(trx_t *trx)
-  {
-    ut_ad(!trx->read_only || !trx->rsegs.m_redo.rseg);
-    ut_ad(!trx->is_autocommit_non_locking());
-    /* trx->state can be anything except TRX_STATE_NOT_STARTED */
-    ut_d(trx->mutex_lock());
-    ut_ad(trx_state_eq(trx, TRX_STATE_ACTIVE) ||
-          trx_state_eq(trx, TRX_STATE_COMMITTED_IN_MEMORY) ||
-          trx_state_eq(trx, TRX_STATE_PREPARED_RECOVERED) ||
-          trx_state_eq(trx, TRX_STATE_PREPARED));
-    ut_d(trx->mutex_unlock());
-  }
+  static void validate_element(trx_t *trx);
 
 
-  template <typename T> struct debug_iterator_arg
+  struct debug_iterator_arg
   {
-    walk_action<T> *action;
-    T *argument;
+    my_hash_walk_action action;
+    void *argument;
   };
 
 
-  template <typename T>
-  static my_bool debug_iterator(rw_trx_hash_element_t *element,
-                                debug_iterator_arg<T> *arg)
+  static my_bool debug_iterator(void *el, void *a)
   {
+    rw_trx_hash_element_t *element= static_cast<rw_trx_hash_element_t*>(el);
+    debug_iterator_arg *arg= static_cast<debug_iterator_arg*>(a);
     element->mutex.wr_lock();
     if (element->trx)
       validate_element(element->trx);
@@ -589,8 +581,7 @@ public:
 
     So we take more expensive approach: get trx through current_thd()->ha_data.
     Some threads don't have trx attached to THD, and at least server
-    initialisation thread, fts_optimize_thread, srv_master_thread,
-    dict_stats_thread, srv_monitor_thread, btr_defragment_thread don't even
+    initialisation thread doesn't even
     have THD at all. For such cases we allocate pins only for duration of
     search and free them immediately.
 
@@ -726,7 +717,7 @@ public:
 
     @param caller_trx  used to get/set pins
     @param action      called for every element in hash
-    @param argument    opque argument passed to action
+    @param argument    opaque argument passed to action
 
     May return the same element multiple times if hash is under contention.
     If caller doesn't like to see the same transaction multiple times, it has
@@ -749,28 +740,24 @@ public:
       @retval 1 iteration was interrupted (action returned 1)
   */
 
-  template <typename T>
-  int iterate(trx_t *caller_trx, walk_action<T> *action, T *argument= nullptr)
+  int iterate(trx_t *caller_trx, my_hash_walk_action action,
+              void *argument= nullptr)
   {
     LF_PINS *pins= caller_trx ? get_pins(caller_trx) : lf_hash_get_pins(&hash);
     ut_a(pins);
 #ifdef UNIV_DEBUG
-    debug_iterator_arg<T> debug_arg= { action, argument };
-    action= reinterpret_cast<decltype(action)>(debug_iterator<T>);
-    argument= reinterpret_cast<T*>(&debug_arg);
+    debug_iterator_arg debug_arg= { action, argument };
+    action= debug_iterator;
+    argument= reinterpret_cast<void*>(&debug_arg);
 #endif
-    int res= lf_hash_iterate(&hash, pins,
-                             reinterpret_cast<my_hash_walk_action>(action),
-                             const_cast<void*>(static_cast<const void*>
-                             (argument)));
+    int res= lf_hash_iterate(&hash, pins, action, argument);
     if (!caller_trx)
       lf_hash_put_pins(pins);
     return res;
   }
 
 
-  template <typename T>
-  int iterate(walk_action<T> *action, T *argument= nullptr)
+  int iterate(my_hash_walk_action action, void *argument= nullptr)
   {
     return iterate(current_trx(), action, argument);
   }
@@ -824,6 +811,21 @@ public:
     mysql_mutex_lock(&mutex);
     trx_list.remove(trx);
     mysql_mutex_unlock(&mutex);
+  }
+
+  template <typename Callable> bool find_first(Callable &&callback) const
+  {
+    mysql_mutex_lock(&mutex);
+    for (trx_t &trx : trx_list)
+    {
+      if (callback(trx))
+      {
+        mysql_mutex_unlock(&mutex);
+        return true;
+      }
+    }
+    mysql_mutex_unlock(&mutex);
+    return false;
   }
 
   template <typename Callable> void for_each(Callable &&callback) const
@@ -902,8 +904,8 @@ public:
   uint64_t recovered_binlog_offset;
   /** Latest recovered binlog file name */
   char recovered_binlog_filename[TRX_SYS_MYSQL_LOG_NAME_LEN];
-  /** FIL_PAGE_LSN of the page with the latest recovered binlog metadata */
-  lsn_t recovered_binlog_lsn;
+  /** Set when latest position is from pre-version 10.3.5 TRX_SYS. */
+  bool recovered_binlog_is_legacy_pos;
 
 
   /**
@@ -950,16 +952,63 @@ public:
     @return whether any transaction not newer than id might be active
   */
 
-  bool find_same_or_older(trx_t *trx, trx_id_t id)
+  bool find_same_or_older_low(trx_t *trx, trx_id_t id) noexcept;
+
+  /**
+    Determine if the specified transaction or any older one might be active.
+
+    @param trx         transaction whose max_inactive_id will be consulted
+    @param id          identifier of another transaction
+    @return whether any transaction not newer than id might be active
+  */
+
+  bool find_same_or_older(trx_t *trx, trx_id_t id) noexcept
   {
     if (trx->max_inactive_id >= id)
       return false;
-    bool found= rw_trx_hash.iterate(trx, find_same_or_older_callback, &id);
+    const bool found{find_same_or_older_low(trx, id)};
     if (!found)
       trx->max_inactive_id= id;
     return found;
   }
 
+  /**
+    Determine if the specified transaction or any older one might be active.
+
+    @param trx         purge_sys.query->trx (may be used by multiple threads)
+    @param id          transaction identifier to check
+    @return whether any transaction not newer than id might be active
+  */
+
+  bool find_same_or_older_in_purge(trx_t *trx, trx_id_t id) noexcept
+  {
+#if SIZEOF_SIZE_T < 8 && !defined __i386__
+    /* On systems that lack native 64-bit loads and stores,
+    it should be more efficient to acquire a futex-backed mutex
+    earlier than to invoke a loop or a complex library function.
+
+    Our IA-32 target is not "i386" but at least "i686", that is, at least
+    Pentium MMX, which has a 64-bit data bus and 64-bit XMM registers. */
+    bool hot= false;
+    trx->mutex_lock();
+    trx_id_t &max_inactive_id= trx->max_inactive_id;
+    if (max_inactive_id >= id);
+    else if (!find_same_or_older_low(trx, id))
+      max_inactive_id= id;
+    else
+      hot= true;
+#else
+    Atomic_relaxed<trx_id_t> &max_inactive_id= trx->max_inactive_id_atomic;
+    if (max_inactive_id >= id)
+      return false;
+    trx->mutex_lock();
+    const bool hot{find_same_or_older_low(trx, id)};
+    if (!hot)
+      max_inactive_id= id;
+#endif
+    trx->mutex_unlock();
+    return hot;
+  }
 
   /**
     Determines the maximum transaction id.
@@ -1076,6 +1125,10 @@ public:
   /** @return total number of active (non-prepared) transactions */
   size_t any_active_transactions(size_t *prepared= nullptr);
 
+#ifndef EMBEDDED_LIBRARY
+  /** @return true if any active (non-prepared) transactions is recovered */
+  bool any_active_transaction_recovered();
+#endif
 
   /**
     Determine the rollback segment identifier.
@@ -1191,6 +1244,11 @@ public:
     return count;
   }
 
+  /** Disable further allocation of transactions in a rollback segment
+  that are subject to innodb_undo_log_truncate=ON
+  @param space   undo tablespace that will be truncated */
+  inline void undo_truncate_start(fil_space_t &space);
+
   /** Set the undo log empty value */
   void set_undo_non_empty(bool val)
   {
@@ -1201,16 +1259,15 @@ public:
   /** Get the undo log empty value */
   bool is_undo_empty() const { return !undo_log_nonempty; }
 
+  /** @return whether XA transaction is in PREPARED state */
+  static bool is_xa_exist() noexcept;
+
   /* Reset the trx_sys page and retain the dblwr information,
   system rollback segment header page
   @return error code */
   inline dberr_t reset_page(mtr_t *mtr);
 private:
-  static my_bool find_same_or_older_callback(rw_trx_hash_element_t *element,
-                                             trx_id_t *id)
-  {
-    return element->id <= *id;
-  }
+  static my_bool find_same_or_older_callback(void *el, void *i) noexcept;
 
 
   struct snapshot_ids_arg
@@ -1222,9 +1279,10 @@ private:
   };
 
 
-  static my_bool copy_one_id(rw_trx_hash_element_t *element,
-                             snapshot_ids_arg *arg)
+  static my_bool copy_one_id(void* el, void *a)
   {
+    auto element= static_cast<const rw_trx_hash_element_t *>(el);
+    auto arg= static_cast<snapshot_ids_arg*>(a);
     if (element->id < arg->m_id)
     {
       trx_id_t no= element->no;

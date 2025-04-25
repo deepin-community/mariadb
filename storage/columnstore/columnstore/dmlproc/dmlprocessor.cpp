@@ -67,7 +67,7 @@ extern boost::condition_variable cond;
 
 namespace
 {
-const std::string myname = "DMLProc";
+[[maybe_unused]] const std::string myname = "DMLProc";
 }
 
 namespace dmlprocessor
@@ -263,7 +263,7 @@ struct CancellationThread
         // If there are any abandonded transactions without locks
         // release them.
         int len;
-        boost::shared_array<BRM::SIDTIDEntry> activeTxns = sessionManager.SIDTIDMap(len);
+        std::shared_ptr<BRM::SIDTIDEntry[]> activeTxns = sessionManager.SIDTIDMap(len);
 
         for (int i = 0; i < len; i++)
         {
@@ -541,6 +541,25 @@ int PackageHandler::clearTableAccess()
   return 1;
 }
 
+CalpontSystemCatalog::ROPair PackageHandler::getTableRID(
+    boost::shared_ptr<execplan::CalpontSystemCatalog> fcsc,
+    execplan::CalpontSystemCatalog::TableName& tableName)
+{
+  execplan::CalpontSystemCatalog::ROPair roPair;
+  try
+  {
+    roPair = fcsc->tableRID(tableName);
+  }
+  catch (...)
+  {
+    if (setupDec())
+      throw;
+    roPair = fcsc->tableRID(tableName);
+  }
+
+  return roPair;
+}
+
 void PackageHandler::run()
 {
   ResourceManager* frm = ResourceManager::instance();
@@ -577,7 +596,7 @@ void PackageHandler::run()
             CalpontSystemCatalog::TableName tableName;
             tableName.schema = insertPkg.get_Table()->get_SchemaName();
             tableName.table = insertPkg.get_Table()->get_TableName();
-            CalpontSystemCatalog::ROPair roPair = fcsc->tableRID(tableName);
+            CalpontSystemCatalog::ROPair roPair = getTableRID(fcsc, tableName);
             fTableOid = roPair.objnum;
           }
           synchTable.setPackage(this, &insertPkg);  // Blocks if another DML thread is using this fTableOid
@@ -839,7 +858,7 @@ void PackageHandler::run()
             }
             else
             {
-              // error occured. Receive all outstanding messages before erroring out.
+              // error occurred. Receive all outstanding messages before erroring out.
               batchProcessor->receiveOutstandingMsg();
               batchProcessor->sendlastBatch();  // needs to flush files
               batchProcessor->receiveAllMsg();
@@ -976,7 +995,7 @@ void PackageHandler::run()
             CalpontSystemCatalog::TableName tableName;
             tableName.schema = updatePkg->get_Table()->get_SchemaName();
             tableName.table = updatePkg->get_Table()->get_TableName();
-            CalpontSystemCatalog::ROPair roPair = fcsc->tableRID(tableName);
+            CalpontSystemCatalog::ROPair roPair = getTableRID(fcsc, tableName);
             fTableOid = roPair.objnum;
           }
           synchTable.setPackage(this,
@@ -1036,7 +1055,7 @@ void PackageHandler::run()
             CalpontSystemCatalog::TableName tableName;
             tableName.schema = deletePkg->get_Table()->get_SchemaName();
             tableName.table = deletePkg->get_Table()->get_TableName();
-            CalpontSystemCatalog::ROPair roPair = fcsc->tableRID(tableName);
+            CalpontSystemCatalog::ROPair roPair = getTableRID(fcsc, tableName);
             fTableOid = roPair.objnum;
           }
           synchTable.setPackage(this,
@@ -1297,7 +1316,10 @@ int DMLServer::start()
   }
 }
 
-DMLProcessor::DMLProcessor(messageqcpp::IOSocket ios, BRM::DBRM* aDbrm) : fIos(ios), fDbrm(aDbrm)
+DMLProcessor::DMLProcessor(messageqcpp::IOSocket ios, BRM::DBRM* aDbrm)
+  : fIos(ios)
+  , fDbrm(aDbrm)
+  , fConcurrentSupport(false)
 {
   csc = CalpontSystemCatalog::makeCalpontSystemCatalog();
   csc->identity(CalpontSystemCatalog::EC);
@@ -1340,12 +1362,10 @@ void DMLProcessor::operator()()
         fConcurrentSupport = false;
     }
 
-#ifndef _MSC_VER
     struct sigaction ign;
     memset(&ign, 0, sizeof(ign));
     ign.sa_handler = added_a_pm;
     sigaction(SIGHUP, &ign, 0);
-#endif
     fEC->Open();
 
     for (;;)
@@ -1389,7 +1409,7 @@ void DMLProcessor::operator()()
           0)  // > 0 implies succesful retrieval. It doesn't imply anything about the contents
       {
         messageqcpp::ByteStream results;
-        const char* responseMsg = 0;
+        std::string responseMsg;
         bool bReject = false;
 
         // Check to see if we're in write suspended mode
@@ -1433,6 +1453,14 @@ void DMLProcessor::operator()()
               status = DMLPackageProcessor::NOT_ACCEPTING_PACKAGES;
               bReject = true;
             }
+          }
+
+          // MCOL-4988 Check if DBRM is in READ ONLY mode
+          if (fDbrm->isReadWrite() == BRM::ERR_READONLY)
+          {
+            BRM::errString(BRM::ERR_READONLY, responseMsg);
+            status = DMLPackageProcessor::DBRM_READ_ONLY;
+            bReject = true;
           }
 
           if (bReject)
@@ -1626,9 +1654,6 @@ void DMLProcessor::operator()()
           {
             for (; i < numTries; i++)
             {
-#ifdef _MSC_VER
-              Sleep(rm_ts.tv_sec * 1000);
-#else
               struct timespec abs_ts;
 
               // cout << "session " << sessionID << " nanosleep on package type " << (int)packageType << endl;
@@ -1638,7 +1663,6 @@ void DMLProcessor::operator()()
                 abs_ts.tv_nsec = rm_ts.tv_nsec;
               } while (nanosleep(&abs_ts, &rm_ts) < 0);
 
-#endif
               anyOtherActiveTransaction =
                   sessionManager.checkActiveTransaction(sessionID, bIsDbrmUp, blockingsid);
 
@@ -2001,4 +2025,3 @@ void DMLProcessor::log(const std::string& msg, logging::LOG_TYPE level)
 }
 
 }  // namespace dmlprocessor
-// vim:ts=4 sw=4:

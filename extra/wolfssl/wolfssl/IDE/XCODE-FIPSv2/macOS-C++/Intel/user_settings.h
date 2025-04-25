@@ -1,6 +1,6 @@
 /* user_settings.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -194,7 +194,7 @@ extern "C" {
         #else
             #undef  ALT_ECC_SIZE
             #define ALT_ECC_SIZE
-            /* wolfSSL will compute the FP_MAX_BITS_ECC, but it can be overriden */
+            /* wolfSSL will compute the FP_MAX_BITS_ECC, but it can be overridden */
             //#undef  FP_MAX_BITS_ECC
             //#define FP_MAX_BITS_ECC (256 * 2)
         #endif
@@ -407,6 +407,7 @@ extern "C" {
 
     /* prototypes for user heap override functions */
     /* Note: Realloc only required for normal math */
+    /* Note2: XFREE(NULL) must be properly handled */
     #include <stddef.h>  /* for size_t */
     extern void *myMalloc(size_t n, void* heap, int type);
     extern void myFree(void *p, void* heap, int type);

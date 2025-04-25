@@ -65,12 +65,13 @@ ExtentStripeAlloc::~ExtentStripeAlloc()
 // Add a column to be associated with the "stripe" allocations for "this"
 // ExtentStripeAlloc object.
 //------------------------------------------------------------------------------
-void ExtentStripeAlloc::addColumn(OID colOID, int colWidth)
+void ExtentStripeAlloc::addColumn(OID colOID, int colWidth, datatypes::SystemCatalog::ColDataType colDataType)
 {
   boost::mutex::scoped_lock lock(fMapMutex);
 
   fColOIDs.push_back(colOID);
   fColWidths.push_back(colWidth);
+  fColDataTypes.push_back(colDataType);
 }
 
 //------------------------------------------------------------------------------
@@ -139,7 +140,7 @@ int ExtentStripeAlloc::allocateExtent(OID oid, uint16_t dbRoot,
     startLbid = extentEntryIter->second.fStartLbid;
     allocSize = extentEntryIter->second.fAllocSize;
     hwm = extentEntryIter->second.fHwm;
-    errMsg = extentEntryIter->second.fStatusMsg;
+    errMsg = *extentEntryIter->second.fStatusMsg;
     retStatus = extentEntryIter->second.fStatus;
 
     fMap.erase(extentEntryIter);
@@ -161,6 +162,7 @@ int ExtentStripeAlloc::allocateExtent(OID oid, uint16_t dbRoot,
       BRM::CreateStripeColumnExtentsArgIn colEntry;
       colEntry.oid = fColOIDs[j];
       colEntry.width = fColWidths[j];
+      colEntry.colDataType = fColDataTypes[j];
       cols.push_back(colEntry);
     }
 
@@ -272,7 +274,7 @@ void ExtentStripeAlloc::print()
           << "; seg: " << iter->second.fSegNum << "; lbid: " << iter->second.fStartLbid
           << "; size: " << iter->second.fAllocSize << "; hwm: " << iter->second.fHwm
           << "; stripe: " << iter->second.fStripeKey << "; stat: " << iter->second.fStatus
-          << "; msg: " << iter->second.fStatusMsg;
+          << "; msg: " << *iter->second.fStatusMsg;
     }
   }
   else

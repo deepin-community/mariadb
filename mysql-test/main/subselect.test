@@ -7,10 +7,7 @@
 #       as possible.
 #
 # Initialise
---disable_warnings
-drop table if exists t1,t2,t3,t4,t5,t6,t7,t8,t11,t12;
-drop view if exists v2;
---enable_warnings
+--source include/have_sequence.inc
 
 call mtr.add_suppression("Sort aborted.*");
 
@@ -75,10 +72,13 @@ SELECT ROW(1,2,3) = (SELECT 1,2,3);
 SELECT ROW(1,2,3) = (SELECT 1,2,1);
 SELECT ROW(1,2,3) < (SELECT 1,2,1);
 SELECT ROW(1,2,3) > (SELECT 1,2,1);
+#enable after fix MDEV-31728
+--disable_cursor_protocol
 #enable after fix MDEV-28585
 --disable_view_protocol
 SELECT ROW(1,2,3) = (SELECT 1,2,NULL);
 --enable_view_protocol
+--enable_cursor_protocol
 SELECT (SELECT 1.5,2,'a') = ROW(1.5,2,'a') AS m;
 SELECT (SELECT 1.5,2,'a') = ROW(1.5,2,'b') AS m;
 SELECT (SELECT 1.5,2,'a') = ROW('1.5b',2,'b') AS m;
@@ -342,7 +342,10 @@ CREATE TABLE `t1` (
 SELECT (SELECT numeropost FROM t1 HAVING numreponse=a),numreponse FROM (SELECT * FROM t1) as a;
 -- error ER_BAD_FIELD_ERROR
 SELECT numreponse, (SELECT numeropost FROM t1 HAVING numreponse=a) FROM (SELECT * FROM t1) as a;
+#Enable after fix MDEV-31937
+--disable_ps2_protocol
 SELECT numreponse, (SELECT numeropost FROM t1 HAVING numreponse=1) FROM (SELECT * FROM t1) as a;
+--enable_ps2_protocol
 INSERT INTO t1 (numeropost,numreponse,pseudo) VALUES (1,1,'joce'),(1,2,'joce'),(1,3,'test');
 -- error ER_SUBQUERY_NO_1_ROW
 EXPLAIN EXTENDED SELECT numreponse FROM t1 WHERE numeropost='1' AND numreponse=(SELECT 1 FROM t1 WHERE numeropost='1');
@@ -398,8 +401,13 @@ insert into t12 values (33, 10),(22, 11),(2, 12);
 insert into t2 values (1, 21),(2, 12),(3, 23);
 select * from t11;
 select * from t12;
--- error ER_UPDATE_TABLE_USED
 delete t11.*, t12.* from t11,t12 where t11.a = t12.a and t11.b = (select b from t12 where t11.a = t12.a);
+select * from t11;
+select * from t12;
+delete from t11;
+delete from t12;
+insert into t11 values (0, 10),(1, 11),(2, 12);
+insert into t12 values (33, 10),(22, 11),(2, 12);
 -- error ER_SUBQUERY_NO_1_ROW
 delete t11.*, t12.* from t11,t12 where t11.a = t12.a and t11.b = (select b from t2);
 delete t11.*, t12.* from t11,t12 where t11.a = t12.a and t11.b = (select b from t2 where t11.a = t2.a);
@@ -512,8 +520,11 @@ select 1 IN (SELECT * from t1);
 select 3 IN (SELECT * from t1);
 select 10 IN (SELECT * from t1);
 select 1 > ALL (SELECT * from t1);
+#enable after fix MDEV-31728
+--disable_cursor_protocol
 select 10 > ALL (SELECT * from t1);
 select 1 > ANY (SELECT * from t1);
+--enable_cursor_protocol
 select 10 > ANY (SELECT * from t1);
 drop table t1;
 create table t1 (a varchar(20));
@@ -526,8 +537,11 @@ select 'A' IN (SELECT * from t1);
 select 'DEF' IN (SELECT * from t1);
 select 'XYZS' IN (SELECT * from t1);
 select 'A' > ALL (SELECT * from t1);
+#enable after fix MDEV-31728
+--disable_cursor_protocol
 select 'XYZS' > ALL (SELECT * from t1);
 select 'A' > ANY (SELECT * from t1);
+--enable_cursor_protocol
 select 'XYZS' > ANY (SELECT * from t1);
 drop table t1;
 create table t1 (a float);
@@ -540,15 +554,21 @@ select 1.5 IN (SELECT * from t1);
 select 3.5 IN (SELECT * from t1);
 select 10.5 IN (SELECT * from t1);
 select 1.5 > ALL (SELECT * from t1);
+#enable after fix MDEV-31728
+--disable_cursor_protocol
 select 10.5 > ALL (SELECT * from t1);
 select 1.5 > ANY (SELECT * from t1);
+--enable_cursor_protocol
 update t1 set a=NULL where a=2.5;
 select 1.5 IN (SELECT * from t1);
 select 3.5 IN (SELECT * from t1);
 select 10.5 IN (SELECT * from t1);
 select 1.5 > ALL (SELECT * from t1);
+#enable after fix MDEV-31728
+--disable_cursor_protocol
 select 10.5 > ALL (SELECT * from t1);
 select 1.5 > ANY (SELECT * from t1);
+--enable_cursor_protocol
 select 10.5 > ANY (SELECT * from t1);
 --enable_prepare_warnings
 --enable_view_protocol
@@ -559,9 +579,9 @@ explain extended select (select a+1) from t1;
 select (select a+1) from t1;
 drop table t1;
 
-#
-# Null with keys
-#
+--echo #
+--echo # Null with keys
+--echo #
 
 CREATE TABLE t1 (a int(11) NOT NULL default '0', PRIMARY KEY  (a));
 CREATE TABLE t2 (a int(11) default '0', INDEX (a));
@@ -928,9 +948,9 @@ drop table if exists t1;
 
 (SELECT 1 as a) UNION (SELECT 1) ORDER BY (SELECT a+0);
 
-#
-# IN subselect optimization test
-#
+--echo #
+--echo # IN subselect optimization test
+--echo #
 create table t1 (a int not null, b int, primary key (a));
 create table t2 (a int not null, primary key (a));
 create table t3 (a int not null, b int, primary key (a));
@@ -952,20 +972,20 @@ insert into t1 values (1,10), (2,20), (3,30), (4,40);
 create table t0(a int);
 insert into t0 values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
 insert into t1
-select rand()*100000+200,rand()*100000 from t0 A, t0 B, t0 C, t0 D;
+select rand()*100000+200,rand(1)*100000 from t0 A, t0 B, t0 C, t0 D;
 
 insert into t2 values (2), (3), (4), (5);
 insert into t3 values (10,3), (20,4), (30,5);
-select * from t2 where t2.a in (select a from t1);
 explain extended select * from t2 where t2.a in (select a from t1);
-select * from t2 where t2.a in (select a from t1 where t1.b <> 30);
+select * from t2 where t2.a in (select a from t1);
 explain extended select * from t2 where t2.a in (select a from t1 where t1.b <> 30);
-select * from t2 where t2.a in (select t1.a from t1,t3 where t1.b=t3.a);
+select * from t2 where t2.a in (select a from t1 where t1.b <> 30);
 explain extended select * from t2 where t2.a in (select t1.a from t1,t3 where t1.b=t3.a);
+select * from t2 where t2.a in (select t1.a from t1,t3 where t1.b=t3.a);
 insert into t1 values (3,31);
+explain extended select * from t2 where t2.a in (select a from t1 where t1.b <> 30);
 select * from t2 where t2.a in (select a from t1 where t1.b <> 30);
 select * from t2 where t2.a in (select a from t1 where t1.b <> 30 and t1.b <> 31);
-explain extended select * from t2 where t2.a in (select a from t1 where t1.b <> 30);
 drop table t0, t1, t2, t3;
 
 #
@@ -1036,13 +1056,14 @@ explain extended (select * from t1);
 (select * from t1);
 drop table t1;
 
-#
-# IN optimisation test results
-#
-create table t1 (s1 char(5), index s1(s1));
-create table t2 (s1 char(5), index s1(s1));
+--echo #
+--echo # IN optimisation test results
+--echo #
+create table t1 (s1 char(5), index s1(s1)) charset=latin1;
+create table t2 (s1 char(5), index s1(s1)) charset=latin1;
 insert into t1 values ('a1'),('a2'),('a3');
 insert into t2 values ('a1'),('a2');
+
 select s1, s1 NOT IN (SELECT s1 FROM t2) from t1;
 select s1, s1 = ANY (SELECT s1 FROM t2) from t1;
 select s1, s1 <> ALL (SELECT s1 FROM t2) from t1;
@@ -1175,20 +1196,20 @@ DROP TABLE t1;
 #
 
 --disable_service_connection
---disable_ps2_protocol
 create table t1 (a int, b decimal(13, 3));
 insert into t1 values (1, 0.123);
 let $outfile_abs= $MYSQLTEST_VARDIR/tmp/subselect.out.file.1;
 let $outfile_rel= ../../tmp/subselect.out.file.1;
+--disable_warnings
 --error 0,1
 --remove_file $outfile_abs
+--enable_warnings
 eval select a, (select max(b) from t1) into outfile "$outfile_rel" from t1;
 delete from t1;
 eval load data infile "$outfile_rel" into table t1;
 --remove_file $outfile_abs
 select * from t1;
 drop table t1;
---enable_ps2_protocol
 --enable_service_connection
 
 #
@@ -1469,15 +1490,16 @@ SELECT a FROM t1 WHERE a <> ALL (SELECT a FROM t1 WHERE b = '2');
 DROP TABLE t1;
 
 
-#
-# SELECT(EXISTS * ...)optimisation
-#
+--echo #
+--echo # SELECT(EXISTS * ...)optimisation
+--echo #
 #--view-protocol is disabled because view gives another query plan
 --disable_view_protocol
 create table t1 (a int, b int);
-insert into t1 values (1,2),(3,4);
-select * from t1 up where exists (select * from t1 where t1.a=up.a);
-explain extended select * from t1 up where exists (select * from t1 where t1.a=up.a);
+insert into t1 values (1,2),(3,4),(5,6),(7,8);
+insert into t1 select seq,seq from seq_20_to_40;
+select sum(a+b) from t1 up where exists (select * from t1 where t1.a=up.a);
+explain extended select sum(a+b) from t1 up where exists (select * from t1 where t1.a=up.a);
 drop table t1;
 --enable_view_protocol
 
@@ -1950,8 +1972,8 @@ drop table t1;
 set @tmp11867_optimizer_switch=@@optimizer_switch;
 set optimizer_switch='semijoin_with_cache=off';
 
-CREATE TABLE t1 (one int, two int, flag char(1));
-CREATE TABLE t2 (one int, two int, flag char(1));
+CREATE TABLE t1 (one int, two int, flag char(1)) CHARSET=latin1;
+CREATE TABLE t2 (one int, two int, flag char(1)) CHARSET=latin1;
 INSERT INTO t1 VALUES(1,2,'Y'),(2,3,'Y'),(3,4,'Y'),(5,6,'N'),(7,8,'N');
 INSERT INTO t2 VALUES(1,2,'Y'),(2,3,'Y'),(3,4,'Y'),(5,6,'N'),(7,8,'N');
 
@@ -2062,7 +2084,7 @@ create table t1 (
   statusID   int(10) unsigned NOT NULL,
   changed    datetime NOT NULL,
   UNIQUE KEY retailerID (retailerID, statusID, changed)
-);
+) CHARSET=latin1;
 
 INSERT INTO t1 VALUES("0026", "1", "2005-12-06 12:18:56");
 INSERT INTO t1 VALUES("0026", "2", "2006-01-06 12:25:53");
@@ -2078,14 +2100,14 @@ select * from t1 r1
 drop table t1;
 
 
-#
-# Bug#21180 Subselect with index for both WHERE and ORDER BY
-#           produces empty result
-#
+--echo #
+--echo # Bug#21180 Subselect with index for both WHERE and ORDER BY
+--echo #           produces empty result
+--echo #
 create table t1(a int, primary key (a));
 insert into t1 values (10);
 
-create table t2 (a int primary key, b varchar(32), c int, unique key b(c, b));
+create table t2 (a int primary key, b varchar(32), c int, unique key cb(c, b)) charset=latin1;
 insert into t2(a, c, b) values (1,10,'359'), (2,10,'35988'), (3,10,'35989');
 insert into t2(a, c, b) values (4,10,'360'), (5,10,'35998'), (6,10,'35999');
 analyze table t1;
@@ -2488,7 +2510,7 @@ DROP TABLE t1,t2,t3;
 # Test for Bug#16603 GROUP BY in a row subquery with a quantifier
 #                    when an index is defined on the grouping field
 
-CREATE TABLE t1 (a varchar(5), b varchar(10));
+CREATE TABLE t1 (a varchar(5), b varchar(10)) CHARSET=latin1;
 INSERT INTO t1 VALUES
   ('AAA', 5), ('BBB', 4), ('BBB', 1), ('CCC', 2),
   ('CCC', 7), ('AAA', 2), ('AAA', 4), ('BBB', 3), ('AAA', 8);
@@ -3006,10 +3028,13 @@ SELECT a, AVG(b),
   (SELECT t.c FROM t1 AS t WHERE t1.a=t.a AND t.b=AVG(t1.b)) AS test
   FROM t1 WHERE t1.d=0 GROUP BY a;
 
+# Enable after fix MDEV-32038
+--disable_ps2_protocol
 SELECT tt.a,
  (SELECT (SELECT c FROM t1 as t WHERE t1.a=t.a AND t.d=MAX(t1.b + tt.a)
   LIMIT 1) FROM t1 WHERE t1.a=tt.a GROUP BY a LIMIT 1) as test
   FROM t1 as tt;
+--enable_ps2_protocol
 
 SELECT tt.a,
  (SELECT (SELECT t.c FROM t1 AS t WHERE t1.a=t.a AND t.d=MAX(t1.b + tt.a)
@@ -3103,6 +3128,7 @@ INSERT INTO t1 VALUES
 CREATE TABLE t2 (id int NOT NULL, INDEX idx(id));
 INSERT INTO t2 VALUES (7), (5), (1), (3);
 
+--sorted_result
 SELECT id, st FROM t1
   WHERE st IN ('GA','FL') AND EXISTS(SELECT 1 FROM t2 WHERE t2.id=t1.id);
 SELECT id, st FROM t1
@@ -3141,10 +3167,10 @@ CREATE TABLE t1 (
   a varchar(255) default NULL,
   b timestamp NOT NULL default CURRENT_TIMESTAMP on update CURRENT_TIMESTAMP,
   INDEX idx(a,b)
-);
+) CHARSET=latin1;
 CREATE TABLE t2 (
   a varchar(255) default NULL
-);
+) CHARSET=latin1;
 
 INSERT INTO t1 VALUES ('abcdefghijk','2007-05-07 06:00:24');
 INSERT INTO t1 SELECT * FROM t1;
@@ -3271,9 +3297,9 @@ DROP TABLE t1, t2;
 #--enable_query_log
 #drop table t1;
 
-#
-# Bug#28076 inconsistent binary/varbinary comparison
-#
+--echo #
+--echo # Bug#28076 inconsistent binary/varbinary comparison
+--echo #
 
 CREATE TABLE t1 (s1 BINARY(5), s2 VARBINARY(5));
 INSERT INTO t1 VALUES (0x41,0x41), (0x42,0x42), (0x43,0x43);
@@ -3322,7 +3348,7 @@ SET @save_optimizer_switch=@@optimizer_switch;
 SET optimizer_switch='semijoin_with_cache=off';
 SET optimizer_switch='materialization=off';
 
-CREATE TABLE t1 (a CHAR(1), b VARCHAR(10));
+CREATE TABLE t1 (a CHAR(1), b VARCHAR(10)) CHARSET=latin1;
 INSERT INTO t1 VALUES ('a', 'aa');
 INSERT INTO t1 VALUES ('a', 'aaa');
 SELECT a,b FROM t1 WHERE b IN (SELECT a FROM t1);
@@ -3331,7 +3357,7 @@ CREATE INDEX I2 ON t1 (b);
 EXPLAIN SELECT a,b FROM t1 WHERE b IN (SELECT a FROM t1);
 SELECT a,b FROM t1 WHERE b IN (SELECT a FROM t1);
 
-CREATE TABLE t2 (a VARCHAR(1), b VARCHAR(10));
+CREATE TABLE t2 (a VARCHAR(1), b VARCHAR(10)) CHARSET=latin1;
 INSERT INTO t2 SELECT * FROM t1;
 CREATE INDEX I1 ON t2 (a);
 CREATE INDEX I2 ON t2 (b);
@@ -3375,15 +3401,15 @@ GROUP BY a;
 DROP TABLE t1;
 
 
-#
-# Bug#32036 EXISTS within a WHERE clause with a UNION crashes MySQL 5.122
-#
+--echo #
+--echo # Bug#32036 EXISTS within a WHERE clause with a UNION crashes MySQL 5.122
+--echo #
 
 CREATE TABLE t1 (a INT);
 CREATE TABLE t2 (a INT);
 
-INSERT INTO t1 VALUES (1),(2);
-INSERT INTO t2 VALUES (1),(2);
+INSERT INTO t1 VALUES (1),(2),(3),(4);
+INSERT INTO t2 VALUES (1),(2),(1000);
 
 SELECT 2 FROM t1 WHERE EXISTS ((SELECT 1 FROM t2 WHERE t1.a=t2.a));
 EXPLAIN EXTENDED
@@ -4852,7 +4878,8 @@ CREATE TABLE t1 (a int) ;
 INSERT INTO t1 VALUES (NULL), (1), (NULL), (2);
 
 CREATE TABLE t2 (a int, INDEX idx(a)) ;
-INSERT INTO t2 VALUES (NULL), (1), (NULL);
+INSERT INTO t2 VALUES (NULL), (1), (NULL),(1000);
+insert into t2 select seq from seq_3_to_500;
 
 SELECT * FROM t1
   WHERE EXISTS (SELECT a FROM t2 USE INDEX () WHERE t2.a = t1.a);
@@ -5079,10 +5106,10 @@ DROP TABLE t1;
 --echo # (duplicate of LP bug #888456)
 --echo #
 
-CREATE TABLE t1 (f1 varchar(1));
+CREATE TABLE t1 (f1 varchar(1)) CHARSET=latin1;
 INSERT INTO t1 VALUES ('v'),('s');
 
-CREATE TABLE t2 (f1_key varchar(1), KEY (f1_key));
+CREATE TABLE t2 (f1_key varchar(1), KEY (f1_key)) CHARSET=latin1;
 INSERT INTO t2 VALUES ('j'),('v'),('c'),('m'),('d'),
 ('d'),('y'),('t'),('d'),('s');
 
@@ -5105,14 +5132,14 @@ DROP TABLE t1,t2;
 CREATE TABLE ot (
   col_int_nokey int(11), 
   col_varchar_nokey varchar(1)
-) ;
+) CHARSET=latin1;
 INSERT INTO ot VALUES (1,'x');
 
 CREATE TABLE it1(
   col_int_key int(11), 
   col_varchar_key varchar(1), 
   KEY idx_cvk_cik (col_varchar_key,col_int_key)
-);
+) CHARSET=latin1;
 INSERT INTO it1 VALUES (NULL,'x'), (NULL,'f');
 
 CREATE TABLE it2 (
@@ -5121,7 +5148,7 @@ CREATE TABLE it2 (
    col_varchar_key2 varchar(1),
    KEY idx_cvk_cvk2_cik (col_varchar_key, col_varchar_key2, col_int_key),
    KEY idx_cvk_cik (col_varchar_key, col_int_key)
-);
+) CHARSET=latin1;
 INSERT INTO it2 VALUES (NULL,'x','x'), (NULL,'f','f');
 
 EXPLAIN
@@ -5375,10 +5402,10 @@ DROP TABLE t1, t2;
 --echo # BUG#12616253 - WRONG RESULT WITH EXISTS(SUBQUERY) (MISSING ROWS)
 --echo #
 
-CREATE TABLE t1 (f1 varchar(1));
+CREATE TABLE t1 (f1 varchar(1)) CHARSET=latin1;
 INSERT INTO t1 VALUES ('v'),('s');
 
-CREATE TABLE t2 (f1_key varchar(1), KEY (f1_key));
+CREATE TABLE t2 (f1_key varchar(1), KEY (f1_key)) CHARSET=latin1;
 INSERT INTO t2 VALUES ('j'),('v'),('c'),('m'),('d'),
 ('d'),('y'),('t'),('d'),('s');
 
@@ -5429,7 +5456,7 @@ DROP TABLE t1,t2,t3;
  
 CREATE TABLE t1(a1 int);
 INSERT INTO t1 VALUES (1),(2);
- 
+
 SELECT @@session.sql_mode INTO @old_sql_mode;
 SET SESSION sql_mode='ONLY_FULL_GROUP_BY';
  
@@ -5772,9 +5799,12 @@ DROP TABLE t1;
 CREATE TABLE t1 (f1 char(2), PRIMARY KEY (f1)) ENGINE=MyISAM;
 INSERT INTO t1 VALUES ('u1'),('u2');
 
+#Check and enable after fix MDEV-34895
+--disable_ps2_protocol
 SELECT a.* FROM t1 a WHERE ( SELECT EXISTS ( SELECT 1 FROM t1 b WHERE b.f1 = a.f1 ) );
 FLUSH TABLES;
 SELECT a.* FROM t1 a WHERE ( SELECT EXISTS ( SELECT 1 FROM t1 b WHERE b.f1 = a.f1 ) );
+--enable_ps2_protocol
 
 # Cleanup
 DROP TABLE t1;
@@ -5787,7 +5817,7 @@ set optimizer_switch=@subselect_tmp;
 --echo # precomputed and thus not part of optimization
 --echo #
 
-CREATE TABLE t1 ( a VARCHAR(16), KEY (a) );
+CREATE TABLE t1 ( a VARCHAR(16), KEY (a) ) CHARSET=latin1;
 INSERT INTO t1 VALUES ('Abilene'),('Akron'),('Albany'),('Albuquerque'),('Alexandria'),('Allentown'),
 ('Amarillo'),('Anaheim'),('Anchorage'),('Ann Arbor'),('Arden-Arcade');
 
@@ -5856,11 +5886,14 @@ FROM t2 alias1, t1 alias2, t1 alias3;
 
 --disable_ps2_protocol
 flush status;
+flush global status;
 
+--disable_cursor_protocol
 SELECT
   (SELECT MIN(b) FROM t1, t2
      WHERE b = a AND (b = alias1.b OR EXISTS (SELECT * FROM t3))) AS m
 FROM t2 alias1, t1 alias2, t1 alias3;
+--enable_cursor_protocol
 
 show status like "subquery_cache%";
 show status like '%Handler_read%';
@@ -5874,11 +5907,14 @@ SELECT
 FROM t2 alias1, t1 alias2, t1 alias3;
 
 flush status;
+flush global status;
 
+--disable_cursor_protocol
 SELECT
   (SELECT MIN(b) FROM t1, t2
      WHERE b = a AND (b = alias1.b OR EXISTS (SELECT * FROM t3))) AS m
 FROM t2 alias1, t1 alias2, t1 alias3;
+--enable_cursor_protocol
 
 show status like "subquery_cache%";
 show status like '%Handler_read%';
@@ -5934,7 +5970,9 @@ WHERE SLEEP(0.1) OR c < 'p' OR b = ( SELECT MIN(b) FROM t2 );
 --enable_ps2_protocol
 
 --echo # The following shows that t2 was indeed scanned with a full scan.
-show table_statistics;
+--sorted_result 
+select TABLE_SCHEMA, TABLE_NAME, ROWS_READ, ROWS_CHANGED, ROWS_CHANGED_X_INDEXES, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED, KEY_READ_HITS, KEY_READ_MISSES from information_schema.table_statistics;
+--sorted_result
 show index_statistics;
 set global userstat=@tmp_mdev410;
 
@@ -6000,24 +6038,28 @@ drop table t1;
 --echo #
 --echo # MDEV-7565: Server crash with Signal 6 (part 2)
 --echo #
+
+create table t1 (id int not null primary key);
 Select 
-  (Select Sum(`TestCase`.Revenue) From mysql.slow_log E           
-    Where TestCase.TemplateID not in (Select 1 from mysql.slow_log where 2=2)
+  (Select Sum(`TestCase`.Revenue) From t1 E
+    Where TestCase.TemplateID not in (Select 1 from t1 where 2=2)
   ) As `ControlRev`
 From 
 (Select  3 as Revenue, 4 as TemplateID) As `TestCase` 
 Group By  TestCase.Revenue, TestCase.TemplateID;
+drop table t1;
 
 --echo #
 --echo # MDEV-7445:Server crash with Signal 6
 --echo #
 
+create table t1 (id int not null primary key);
 --delimiter |
 CREATE PROCEDURE procedure2()
 BEGIN
   Select 
-    (Select Sum(`TestCase`.Revenue) From mysql.slow_log E           
-      Where TestCase.TemplateID not in (Select 1 from mysql.slow_log where 2=2)
+    (Select Sum(`TestCase`.Revenue) From t1 E           
+      Where TestCase.TemplateID not in (Select 1 from t1 where 2=2)
      ) As `ControlRev`
   From 
   (Select  3 as Revenue, 4 as TemplateID) As `TestCase` 
@@ -6029,6 +6071,7 @@ call procedure2();
 call procedure2();
 
 drop procedure procedure2;
+drop table t1;
 
 
 --echo #
@@ -6351,6 +6394,50 @@ SELECT ROW(1,2) = 1 IN (SELECT 1 UNION SELECT 2);
 SELECT ROW(1,2) = (1 = ANY (SELECT 1 UNION SELECT 2));
 
 --echo #
+--echo # MDEV-29070 SIGSEGV in my_decimal::operator= and Assertion `0' failed
+--echo # in Item_type_holder::val_decimal on SELECT
+--echo #
+
+CREATE TABLE t1(a INT UNIQUE);
+INSERT INTO t1(a) VALUES (1);
+
+SELECT a FROM t1 WHERE (SELECT a, a UNION SELECT 1, a FROM t1) IN (SELECT 1, 1);
+
+SELECT a FROM t1 WHERE (SELECT a, a UNION SELECT 1, a FROM t1) IN (SELECT a, a);
+
+UPDATE t1 SET a = 0
+  WHERE (SELECT a, a WHERE a < 0 INTERSECT
+         SELECT +1 / +1, a FROM t1 WHERE a > -0+1) IN (SELECT a, a);
+
+SELECT a FROM t1 WHERE (SELECT a, a WHERE a < 0 INTERSECT
+                        SELECT + 1 / + 1, a FROM t1
+  WHERE a > -0 + 1) IN (SELECT a, a);
+
+CREATE TABLE x (x INT);
+INSERT INTO x (x) VALUES (1);
+UPDATE x SET x = 1 WHERE x = 1;
+INSERT INTO x (x) VALUES (1), (1);
+let $q= WITH RECURSIVE x (x) AS (
+  SELECT 1 INTERSECT
+  SELECT -(SELECT 1.000000 AS x
+           UNION
+           SELECT 1.000000 ORDER BY NOT x < 'x',
+                                    -(SELECT 1 + x/1.000000 IN (1, 1) FROM x
+                                    WHERE x ORDER BY 1 - x) DESC LIMIT 1 OFFSET 1
+           ) + 1 FROM x
+  )
+  SELECT DISTINCT x, 1, NULL, 1.000000
+  FROM x
+  WHERE (SELECT (SELECT x WHERE x IN (SELECT x FROM x))) >
+        (SELECT (SELECT x ORDER BY x = x OR (x = 1 AND x = 1) DESC))
+        ORDER BY x ASC, x DESC, x;
+
+--error ER_NOT_STANDARD_COMPLIANT_RECURSIVE
+eval $q;
+
+DROP TABLE t1, x;
+
+--echo #
 --echo # End of 10.4 tests
 --echo #
 
@@ -6379,4 +6466,40 @@ drop table t1, t2, t3;
 
 --echo #
 --echo # End of 10.6 tests
+--echo #
+
+--echo #
+--echo # MDEV-32656: ASAN errors in base_list_iterator::next /
+--echo # setup_table_map upon 2nd execution of PS
+--echo # (10.10 part)
+--echo #
+
+CREATE TABLE t1 (id BIGINT);
+INSERT INTO t1 VALUES (1),(2);
+CREATE VIEW v1 AS SELECT * FROM t1;
+
+CREATE TABLE t2 (a INT);
+INSERT INTO t2 VALUES (2),(3);
+
+CREATE TABLE t3 (b INT);
+INSERT INTO t3 VALUES (3),(4);
+
+PREPARE stmt FROM "UPDATE t2 SET a = 1 WHERE (select 1 where ('e','e') IN (SELECT v1.id, v1.id FROM v1 JOIN t3)) <> 0";
+EXECUTE stmt;
+EXECUTE stmt;
+
+PREPARE stmt FROM "UPDATE t2 SET a = 1 WHERE ('e') IN (SELECT v1.id FROM v1 JOIN t3)";
+EXECUTE stmt;
+EXECUTE stmt;
+
+PREPARE stmt FROM "UPDATE t2 SET a = 1 WHERE ('e','e') IN (SELECT v1.id, v1.id FROM v1 JOIN t3)";
+EXECUTE stmt;
+EXECUTE stmt;
+
+# Cleanup
+DROP VIEW v1;
+DROP TABLE t1, t2, t3;
+
+--echo #
+--echo # End of 10.10 tests
 --echo #

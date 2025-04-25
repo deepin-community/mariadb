@@ -20,10 +20,6 @@
 #ifndef _opt_range_h
 #define _opt_range_h
 
-#ifdef USE_PRAGMA_INTERFACE
-#pragma interface			/* gcc class implementation */
-#endif
-
 #include "records.h"                            /* READ_RECORD */
 #include "queues.h"                             /* QUEUE */
 #include "filesort.h"                           /* SORT_INFO */
@@ -302,6 +298,7 @@ class SEL_ARG :public Sql_alloc
 {
   static int sel_cmp(Field *field, uchar *a, uchar *b, uint8 a_flag,
                      uint8 b_flag);
+  bool min_max_are_equal() const;
 public:
   uint8 min_flag,max_flag,maybe_flag;
   uint8 part;					// Which key part
@@ -401,6 +398,7 @@ public:
       return false;
     return true;
   }
+  int number_of_eq_groups(uint group_key_parts) const;
   inline void merge_flags(SEL_ARG *arg) { maybe_flag|=arg->maybe_flag; }
   inline void maybe_smaller() { maybe_flag=1; }
   /* Return true iff it's a single-point null interval */
@@ -889,7 +887,10 @@ public:
   */
   bool remove_false_where_parts;
 
-  bool note_unusable_keys;        // Give SQL notes for unusable keys
+  /*
+    Which functions should give SQL notes for unusable keys.
+  */
+  Item_func::Bitmap note_unusable_keys;
 
   /*
     used_key_no -> table_key_no translation table. Only makes sense if
@@ -914,7 +915,6 @@ public:
   {
     return
       thd->killed ||
-      thd->is_fatal_error ||
       thd->is_error() ||
       alloced_sel_args > thd->variables.optimizer_max_sel_args;
   }
@@ -1110,6 +1110,13 @@ public:
     For QUICK_GROUP_MIN_MAX_SELECT it includes MIN/MAX argument keyparts.
   */
   uint used_key_parts;
+
+  /*
+    Set to 1 if we used group by optimization to calculate number of rows
+    in the result, stored in table->opt_range_condition_rows.
+    This is only used for asserts.
+  */
+  bool group_by_optimization_used;
 
   QUICK_SELECT_I();
   virtual ~QUICK_SELECT_I() = default;;
@@ -1340,28 +1347,28 @@ public:
     { return new QUICK_RANGE_SELECT(thd, head, index, no_alloc, parent_alloc,
                                     create_error); }
   
-  void need_sorted_output();
-  int init();
-  int reset(void);
-  int get_next();
-  void range_end();
+  void need_sorted_output() override;
+  int init() override;
+  int reset(void) override;
+  int get_next() override;
+  void range_end() override;
   int get_next_prefix(uint prefix_length, uint group_key_parts, 
                       uchar *cur_prefix);
-  bool reverse_sorted() { return 0; }
-  bool unique_key_range();
-  int init_ror_merged_scan(bool reuse_handler, MEM_ROOT *alloc);
-  void save_last_pos()
+  bool reverse_sorted() override { return 0; }
+  bool unique_key_range() override;
+  int init_ror_merged_scan(bool reuse_handler, MEM_ROOT *alloc) override;
+  void save_last_pos() override
   { file->position(record); }
-  int get_type() { return QS_TYPE_RANGE; }
-  void add_keys_and_lengths(String *key_names, String *used_lengths);
-  Explain_quick_select *get_explain(MEM_ROOT *alloc);
+  int get_type() override { return QS_TYPE_RANGE; }
+  void add_keys_and_lengths(String *key_names, String *used_lengths) override;
+  Explain_quick_select *get_explain(MEM_ROOT *alloc) override;
 #ifndef DBUG_OFF
-  void dbug_dump(int indent, bool verbose);
+  void dbug_dump(int indent, bool verbose) override;
 #endif
-  virtual void replace_handler(handler *new_file) { file= new_file; }
-  QUICK_SELECT_I *make_reverse(uint used_key_parts_arg);
+  void replace_handler(handler *new_file) override { file= new_file; }
+  QUICK_SELECT_I *make_reverse(uint used_key_parts_arg) override;
 
-  virtual void add_used_key_part_to_set();
+  void add_used_key_part_to_set() override;
 
 private:
   /* Default copy ctor used by QUICK_SELECT_DESC */
@@ -1409,13 +1416,13 @@ public:
     :QUICK_RANGE_SELECT(thd, table, index_arg, no_alloc, parent_alloc,
     create_err)
     {};
-  virtual QUICK_RANGE_SELECT *clone(bool *create_error)
+  QUICK_RANGE_SELECT *clone(bool *create_error) override
     {
       DBUG_ASSERT(0);
       return new QUICK_RANGE_SELECT_GEOM(thd, head, index, no_alloc,
                                          parent_alloc, create_error);
     }
-  virtual int get_next();
+  int get_next() override;
 };
 
 
@@ -1491,16 +1498,16 @@ public:
   QUICK_INDEX_SORT_SELECT(THD *thd, TABLE *table);
   ~QUICK_INDEX_SORT_SELECT();
 
-  int  init();
-  void need_sorted_output() { DBUG_ASSERT(0); /* Can't do it */ }
-  int  reset(void);
-  bool reverse_sorted() { return false; }
-  bool unique_key_range() { return false; }
-  bool is_keys_used(const MY_BITMAP *fields);
+  int  init() override;
+  void need_sorted_output() override { DBUG_ASSERT(0); /* Can't do it */ }
+  int  reset(void) override;
+  bool reverse_sorted() override { return false; }
+  bool unique_key_range() override { return false; }
+  bool is_keys_used(const MY_BITMAP *fields) override;
 #ifndef DBUG_OFF
-  void dbug_dump(int indent, bool verbose);
+  void dbug_dump(int indent, bool verbose) override;
 #endif
-  Explain_quick_select *get_explain(MEM_ROOT *alloc);
+  Explain_quick_select *get_explain(MEM_ROOT *alloc) override;
 
   bool push_quick_back(QUICK_RANGE_SELECT *quick_sel_range);
 
@@ -1512,7 +1519,7 @@ public:
 
   MEM_ROOT alloc;
   THD *thd;
-  virtual bool is_valid()
+  bool is_valid() override
   {
     List_iterator_fast<QUICK_RANGE_SELECT> it(quick_selects);
     QUICK_RANGE_SELECT *quick;
@@ -1531,7 +1538,7 @@ public:
   /* used to get rows collected in Unique */
   READ_RECORD read_record;
 
-  virtual void add_used_key_part_to_set();
+  void add_used_key_part_to_set() override;
 };
 
 
@@ -1542,31 +1549,31 @@ private:
   /* true if this select is currently doing a clustered PK scan */
   bool  doing_pk_scan;
 protected:
-  int read_keys_and_merge();
+  int read_keys_and_merge() override;
 
 public:
   QUICK_INDEX_MERGE_SELECT(THD *thd_arg, TABLE *table)
     :QUICK_INDEX_SORT_SELECT(thd_arg, table) {}
 
-  int get_next();
-  int get_type() { return QS_TYPE_INDEX_MERGE; }
-  void add_keys_and_lengths(String *key_names, String *used_lengths);
+  int get_next() override;
+  int get_type() override { return QS_TYPE_INDEX_MERGE; }
+  void add_keys_and_lengths(String *key_names, String *used_lengths) override;
 };
 
 class QUICK_INDEX_INTERSECT_SELECT : public QUICK_INDEX_SORT_SELECT
 {
 protected:
-  int read_keys_and_merge();
+  int read_keys_and_merge() override;
 
 public:
   QUICK_INDEX_INTERSECT_SELECT(THD *thd_arg, TABLE *table)
     :QUICK_INDEX_SORT_SELECT(thd_arg, table) {}
 
   key_map filtered_scans;
-  int get_next();
-  int get_type() { return QS_TYPE_INDEX_INTERSECT; }
-  void add_keys_and_lengths(String *key_names, String *used_lengths);
-  Explain_quick_select *get_explain(MEM_ROOT *alloc);
+  int get_next() override;
+  int get_type() override { return QS_TYPE_INDEX_INTERSECT; }
+  void add_keys_and_lengths(String *key_names, String *used_lengths) override;
+  Explain_quick_select *get_explain(MEM_ROOT *alloc) override;
 };
 
 
@@ -1596,21 +1603,21 @@ public:
                              MEM_ROOT *parent_alloc);
   ~QUICK_ROR_INTERSECT_SELECT();
 
-  int  init();
-  void need_sorted_output() { DBUG_ASSERT(0); /* Can't do it */ }
-  int  reset(void);
-  int  get_next();
-  bool reverse_sorted() { return false; }
-  bool unique_key_range() { return false; }
-  int get_type() { return QS_TYPE_ROR_INTERSECT; }
-  void add_keys_and_lengths(String *key_names, String *used_lengths);
-  Explain_quick_select *get_explain(MEM_ROOT *alloc);
-  bool is_keys_used(const MY_BITMAP *fields);
-  void add_used_key_part_to_set();
+  int  init() override;
+  void need_sorted_output() override { DBUG_ASSERT(0); /* Can't do it */ }
+  int  reset(void) override;
+  int  get_next() override;
+  bool reverse_sorted() override { return false; }
+  bool unique_key_range() override { return false; }
+  int get_type() override { return QS_TYPE_ROR_INTERSECT; }
+  void add_keys_and_lengths(String *key_names, String *used_lengths) override;
+  Explain_quick_select *get_explain(MEM_ROOT *alloc) override;
+  bool is_keys_used(const MY_BITMAP *fields) override;
+  void add_used_key_part_to_set() override;
 #ifndef DBUG_OFF
-  void dbug_dump(int indent, bool verbose);
+  void dbug_dump(int indent, bool verbose) override;
 #endif
-  int init_ror_merged_scan(bool reuse_handler, MEM_ROOT *alloc);
+  int init_ror_merged_scan(bool reuse_handler, MEM_ROOT *alloc) override;
   bool push_quick_back(MEM_ROOT *alloc, QUICK_RANGE_SELECT *quick_sel_range);
 
   class QUICK_SELECT_WITH_RECORD : public Sql_alloc
@@ -1627,7 +1634,7 @@ public:
   */
   List<QUICK_SELECT_WITH_RECORD> quick_selects;
 
-  virtual bool is_valid()
+  bool is_valid() override
   {
     List_iterator_fast<QUICK_SELECT_WITH_RECORD> it(quick_selects);
     QUICK_SELECT_WITH_RECORD *quick;
@@ -1676,26 +1683,26 @@ public:
   QUICK_ROR_UNION_SELECT(THD *thd, TABLE *table);
   ~QUICK_ROR_UNION_SELECT();
 
-  int  init();
-  void need_sorted_output() { DBUG_ASSERT(0); /* Can't do it */ }
-  int  reset(void);
-  int  get_next();
-  bool reverse_sorted() { return false; }
-  bool unique_key_range() { return false; }
-  int get_type() { return QS_TYPE_ROR_UNION; }
-  void add_keys_and_lengths(String *key_names, String *used_lengths);
-  Explain_quick_select *get_explain(MEM_ROOT *alloc);
-  bool is_keys_used(const MY_BITMAP *fields);
-  void add_used_key_part_to_set();
+  int  init() override;
+  void need_sorted_output() override { DBUG_ASSERT(0); /* Can't do it */ }
+  int  reset(void) override;
+  int  get_next() override;
+  bool reverse_sorted() override { return false; }
+  bool unique_key_range() override { return false; }
+  int get_type() override { return QS_TYPE_ROR_UNION; }
+  void add_keys_and_lengths(String *key_names, String *used_lengths) override;
+  Explain_quick_select *get_explain(MEM_ROOT *alloc) override;
+  bool is_keys_used(const MY_BITMAP *fields) override;
+  void add_used_key_part_to_set() override;
 #ifndef DBUG_OFF
-  void dbug_dump(int indent, bool verbose);
+  void dbug_dump(int indent, bool verbose) override;
 #endif
 
   bool push_quick_back(QUICK_SELECT_I *quick_sel_range);
 
   List<QUICK_SELECT_I> quick_selects; /* Merged quick selects */
 
-  virtual bool is_valid()
+  bool is_valid() override
   {
     List_iterator_fast<QUICK_SELECT_I> it(quick_selects);
     QUICK_SELECT_I *quick;
@@ -1768,7 +1775,6 @@ private:
   uchar *group_prefix;    /* Key prefix consisting of the GROUP fields. */
   const uint group_prefix_len; /* Length of the group prefix. */
   uint group_key_parts;  /* A number of keyparts in the group prefix */
-  uchar *last_prefix;     /* Prefix of the last group for detecting EOF. */
   bool have_min;         /* Specify whether we are computing */
   bool have_max;         /*   a MIN, a MAX, or both.         */
   bool have_agg_distinct;/*   aggregate_function(DISTINCT ...).  */
@@ -1822,21 +1828,21 @@ public:
   void update_key_stat();
   void adjust_prefix_ranges();
   bool alloc_buffers();
-  int init();
-  void need_sorted_output() { /* always do it */ }
-  int reset();
-  int get_next();
-  bool reverse_sorted() { return false; }
-  bool unique_key_range() { return false; }
-  int get_type() { return QS_TYPE_GROUP_MIN_MAX; }
-  void add_keys_and_lengths(String *key_names, String *used_lengths);
-  void add_used_key_part_to_set();
+  int init() override;
+  void need_sorted_output() override { /* always do it */ }
+  int reset() override;
+  int get_next() override;
+  bool reverse_sorted() override { return false; }
+  bool unique_key_range() override { return false; }
+  int get_type() override { return QS_TYPE_GROUP_MIN_MAX; }
+  void add_keys_and_lengths(String *key_names, String *used_lengths) override;
+  void add_used_key_part_to_set() override;
 #ifndef DBUG_OFF
-  void dbug_dump(int indent, bool verbose);
+  void dbug_dump(int indent, bool verbose) override;
 #endif
   bool is_agg_distinct() { return have_agg_distinct; }
   bool loose_scan_is_scanning() { return is_index_scan; }
-  Explain_quick_select *get_explain(MEM_ROOT *alloc);
+  Explain_quick_select *get_explain(MEM_ROOT *alloc) override;
 };
 
 
@@ -1844,18 +1850,18 @@ class QUICK_SELECT_DESC: public QUICK_RANGE_SELECT
 {
 public:
   QUICK_SELECT_DESC(QUICK_RANGE_SELECT *q, uint used_key_parts);
-  virtual QUICK_RANGE_SELECT *clone(bool *create_error)
+  QUICK_RANGE_SELECT *clone(bool *create_error) override
     { DBUG_ASSERT(0); return new QUICK_SELECT_DESC(this, used_key_parts); }
-  int get_next();
-  bool reverse_sorted() { return 1; }
-  int get_type() { return QS_TYPE_RANGE_DESC; }
-  QUICK_SELECT_I *make_reverse(uint used_key_parts_arg)
+  int get_next() override;
+  bool reverse_sorted() override { return 1; }
+  int get_type() override { return QS_TYPE_RANGE_DESC; }
+  QUICK_SELECT_I *make_reverse(uint used_key_parts_arg) override
   {
     return this; // is already reverse sorted
   }
 private:
   bool range_reads_after_key(QUICK_RANGE *range);
-  int reset(void) { rev_it.rewind(); return QUICK_RANGE_SELECT::reset(); }
+  int reset(void) override { rev_it.rewind(); return QUICK_RANGE_SELECT::reset(); }
   List<QUICK_RANGE> rev_ranges;
   List_iterator<QUICK_RANGE> rev_it;
   uint used_key_parts;
@@ -1873,12 +1879,13 @@ class SQL_SELECT :public Sql_alloc {
     In other cases, NULL.
   */
   Item *pre_idx_push_select_cond;
-  TABLE	*head;
-  IO_CACHE file;		// Positions to used records
-  ha_rows records;		// Records in use if read from file
-  double read_time;		// Time to read rows
-  key_map quick_keys;		// Possible quick keys
-  key_map needed_reg;		// Possible quick keys after prev tables.
+  TABLE *head;
+  IO_CACHE file;                // Positions to used records
+  ha_rows records;              // Records in use if read from file
+  ALL_READ_COST read_cost;      // Cost of reading rows
+  double read_time;             // Time to read rows (from read_cost)
+  key_map quick_keys;           // Possible quick keys
+  key_map needed_reg;           // Possible quick keys after prev tables.
   table_map const_tables,read_tables;
   /* See PARAM::possible_keys */
   key_map possible_keys;
@@ -1894,23 +1901,25 @@ class SQL_SELECT :public Sql_alloc {
       true  - for ERROR and IMPOSSIBLE_RANGE
       false   - Ok
   */
-  bool check_quick(THD *thd, bool force_quick_range, ha_rows limit)
+  bool check_quick(THD *thd, bool force_quick_range, ha_rows limit,
+                   Item_func::Bitmap note_unusable_keys)
   {
     key_map tmp;
     tmp.set_all();
     return test_quick_select(thd, tmp, 0, limit, force_quick_range,
-                             FALSE, FALSE, FALSE) != OK;
+                             FALSE, FALSE, FALSE,
+                             note_unusable_keys) != OK;
   }
 
   /* 
     RETURN
-      0   if record must be skipped <-> (cond && cond->val_int() == 0)
+      0   if record must be skipped <-> (cond && cond->val_bool() == false)
      -1   if error
       1   otherwise
   */   
   inline int skip_record(THD *thd)
   {
-    int rc= MY_TEST(!cond || cond->val_int());
+    int rc= MY_TEST(!cond || cond->val_bool());
     if (thd->is_error())
       rc= -1;
     return rc;
@@ -1929,7 +1938,7 @@ class SQL_SELECT :public Sql_alloc {
                     bool ordered_output,
                     bool remove_false_parts_of_where,
                     bool only_single_index_range_scan,
-                    bool suppress_unusable_key_notes = 0);
+                    Item_func::Bitmap note_unusable_keys);
 };
 
 typedef enum SQL_SELECT::quick_select_return_type quick_select_return;
@@ -1974,12 +1983,12 @@ public:
       QUICK_RANGE_SELECT (thd, table, key, 1, NULL, create_err) 
   { (void) init(); }
   ~FT_SELECT() { file->ft_end(); }
-  virtual QUICK_RANGE_SELECT *clone(bool *create_error)
+  QUICK_RANGE_SELECT *clone(bool *create_error) override
     { DBUG_ASSERT(0); return new FT_SELECT(thd, head, index, create_error); }
-  int init() { return file->ft_init(); }
-  int reset() { return 0; }
-  int get_next() { return file->ha_ft_read(record); }
-  int get_type() { return QS_TYPE_FULLTEXT; }
+  int init() override { return file->ft_init(); }
+  int reset() override { return 0; }
+  int get_next() override { return file->ha_ft_read(record); }
+  int get_type() override { return QS_TYPE_FULLTEXT; }
 };
 
 FT_SELECT *get_ft_select(THD *thd, TABLE *table, uint key);

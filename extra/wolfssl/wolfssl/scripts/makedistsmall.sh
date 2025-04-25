@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #set -v
 
 # Script to produce a small source/header only package (with CMake support)
@@ -9,6 +9,7 @@
 if [ "$1" == "keep" ]; then KEEP="yes"; else KEEP="no"; fi
 
 WOLFSSL_TEMPDIR=$(mktemp -d) || exit $?
+WOLFSSL_BRANCH=$(git symbolic-ref --short HEAD)
 
 function cleanup_on_exit() {
     if [ "$KEEP" == "no" ];
@@ -34,15 +35,13 @@ fi
 echo "Setting up work directory..."
 git clone -q -n --shared . "$WOLFSSL_TEMPDIR" || exit $?
 pushd "$WOLFSSL_TEMPDIR" >/dev/null || exit $?
-git checkout -q master || exit $?
+git checkout -q "$WOLFSSL_BRANCH"
 
 # cleanup example directories
 echo "Removing files not needed..."
 rm -rf -- ./.git*
 rm -rf ./build-aux
 rm -rf ./certs
-rm -rf ./ctaocrypt
-rm -rf ./cyassl
 rm -rf ./doc
 rm -rf ./Docker
 # these use test.h, which are not portable
@@ -63,7 +62,6 @@ rm -rf ./swig
 rm -rf ./tests
 rm -rf ./testsuite
 rm -rf ./tirtos
-rm -rf ./wolfcrypt/user-crypto
 rm -rf ./wrapper
 rm -f -- *.rc *.supp *.ac *.am *.conf *.sh *.cproject *.project *.pl
 rm -f Vagrantfile SCRIPTS-LIST quit input resource.h
@@ -73,7 +71,7 @@ find . -name "*.vcxproj" -delete
 find . -name "*.vcproj" -delete
 find . -name "*.sln" -delete
 
-# TLS/Compatiblity layer
+# TLS/Compatibility layer
 #rm -rf ./src
 #rm -rf ./wolfssl/openssl
 

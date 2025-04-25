@@ -424,7 +424,7 @@ SCSEP FromSubQuery::transform()
   csep->subType(CalpontSelectExecutionPlan::FROM_SUBS);
 
   // gwi for the sub query
-  gp_walk_info gwi(fGwip.timeZone);
+  gp_walk_info gwi(fGwip.timeZone, fGwip.subQueriesChain);
   gwi.thd = fGwip.thd;
   gwi.subQuery = this;
   gwi.viewName = fGwip.viewName;
@@ -438,7 +438,7 @@ SCSEP FromSubQuery::transform()
     if (!gwi.parseErrorText.empty())
       fGwip.parseErrorText = gwi.parseErrorText;
     else
-      fGwip.parseErrorText = "Error occured in FromSubQuery::transform()";
+      fGwip.parseErrorText = "Error occurred in FromSubQuery::transform()";
 
     csep.reset();
     return csep;

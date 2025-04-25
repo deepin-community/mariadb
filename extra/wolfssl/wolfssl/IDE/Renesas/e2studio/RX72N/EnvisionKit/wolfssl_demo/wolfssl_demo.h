@@ -1,6 +1,6 @@
 /* wolfssl_demo.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -45,7 +45,7 @@
     #define LIBRARY_LOG_LEVEL    LOG_INFO
 #endif
 #include "logging_stack.h"
-
+#include "wolfssl/ssl.h"
 
 /* Enable wolfcrypt test demo */
 /*#define CRYPT_TEST */

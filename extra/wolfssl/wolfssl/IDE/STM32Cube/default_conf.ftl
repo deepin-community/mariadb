@@ -33,9 +33,9 @@
 [#list SWIPdatas as SWIP]
 [#-- Global variables --]
 [#if SWIP.variables??]
-	[#list SWIP.variables as variable]
+    [#list SWIP.variables as variable]
 extern ${variable.value} ${variable.name};
-	[/#list]
+    [/#list]
 [/#if]
 
 [#-- Global variables --]
@@ -45,16 +45,16 @@ extern ${variable.value} ${variable.name};
 [#assign version = SWIP.version]
 
 /**
-	MiddleWare name : ${instName}
-	MiddleWare fileName : ${fileName}
-	MiddleWare version : ${version}
+    MiddleWare name : ${instName}
+    MiddleWare fileName : ${fileName}
+    MiddleWare version : ${version}
 */
 [#if SWIP.defines??]
-	[#list SWIP.defines as definition]
+    [#list SWIP.defines as definition]
 /*---------- [#if definition.comments??]${definition.comments}[/#if] -----------*/
 #define ${definition.name} #t#t ${definition.value}
 [#if definition.description??]${definition.description} [/#if]
-	[/#list]
+    [/#list]
 [/#if]
 
 
@@ -76,6 +76,11 @@ extern ${variable.value} ${variable.name};
     #define WOLFSSL_STM32_PKA
     #undef  NO_STM32_CRYPTO
     #define HAL_CONSOLE_UART huart1
+#elif defined(STM32WL55xx)
+    #define WOLFSSL_STM32WL
+    #define WOLFSSL_STM32_PKA
+    #undef  NO_STM32_CRYPTO
+    #define HAL_CONSOLE_UART huart2
 #elif defined(STM32F407xx)
     #define WOLFSSL_STM32F4
     #define HAL_CONSOLE_UART huart2
@@ -102,7 +107,7 @@ extern ${variable.value} ${variable.name};
     #undef  NO_STM32_HASH
     #undef  NO_STM32_CRYPTO
     #define HAL_CONSOLE_UART huart3
-#elif defined(STM32H723xx)
+#elif defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H743xx)
     #define WOLFSSL_STM32H7
     #define HAL_CONSOLE_UART huart3
 #elif defined(STM32L4A6xx)
@@ -143,11 +148,14 @@ extern ${variable.value} ${variable.name};
     #define HAL_CONSOLE_UART huart2
     #define NO_STM32_RNG
     #define WOLFSSL_GENSEED_FORTEST /* no HW RNG is available use test seed */
-#elif defined(STM32U575xx) || defined(STM32U585xx)
+#elif defined(STM32G491xx)
+    #define WOLFSSL_STM32G4
+    #define HAL_CONSOLE_UART hlpuart1
+#elif defined(STM32U575xx) || defined(STM32U585xx) || defined(STM32U5A9xx)
     #define HAL_CONSOLE_UART huart1
     #define WOLFSSL_STM32U5
     #define STM32_HAL_V2
-    #ifdef STM32U585xx
+    #if defined(STM32U585xx) || defined(STM32U5A9xx)
         #undef  NO_STM32_HASH
         #undef  NO_STM32_CRYPTO
         #define WOLFSSL_STM32_PKA
@@ -157,14 +165,22 @@ extern ${variable.value} ${variable.name};
     #define HAL_CONSOLE_UART huart3
     #define STM32_HAL_V2
     #undef  NO_STM32_HASH
-
+#elif defined(STM32MP135Fxx)
+    #define WOLFSSL_STM32MP13
+    #define HAL_CONSOLE_UART huart4
+    #define STM32_HAL_V2
+    #undef NO_STM32_HASH
+    #undef NO_STM32_CRYPTO
+    #define WOLFSSL_STM32_PKA
+    #define WOLFSSL_STM32_PKA_V2
 #else
     #warning Please define a hardware platform!
     /* This means there is not a pre-defined platform for your board/CPU */
     /* You need to define a CPU type, HW crypto and debug UART */
     /* CPU Type: WOLFSSL_STM32F1, WOLFSSL_STM32F2, WOLFSSL_STM32F4,
         WOLFSSL_STM32F7, WOLFSSL_STM32H7, WOLFSSL_STM32L4, WOLFSSL_STM32L5,
-        WOLFSSL_STM32G0, WOLFSSL_STM32WB and WOLFSSL_STM32U5 */
+        WOLFSSL_STM32G0, WOLFSSL_STM32G4, WOLFSSL_STM32WB, WOLFSSL_STM32U5 and
+        WOLFSSL_STM32MP13 */
     #define WOLFSSL_STM32F4
 
     /* Debug UART used for printf */
@@ -177,7 +193,8 @@ extern ${variable.value} ${variable.name};
     //#define NO_STM32_RNG
     //#undef  NO_STM32_HASH
     //#undef  NO_STM32_CRYPTO
-    //#define WOLFSSL_GENSEED_FORTEST /* if no HW RNG is available use test seed */
+    /* if no HW RNG is available use test seed */
+    //#define WOLFSSL_GENSEED_FORTEST
     //#define STM32_HAL_V2
 #endif
 
@@ -189,13 +206,23 @@ extern ${variable.value} ${variable.name};
 #define WOLFSSL_GENERAL_ALIGNMENT 4
 #define WOLFSSL_STM32_CUBEMX
 #define WOLFSSL_SMALL_STACK
-#define WOLFSSL_USER_IO
-#define WOLFSSL_NO_SOCK
 #define WOLFSSL_IGNORE_FILE_WARN
+
+/* ------------------------------------------------------------------------- */
+/* Network stack: 1=User IO (custom), 2=LWIP (posix), 3=LWIP (native) */
+/* ------------------------------------------------------------------------- */
+#if defined(WOLF_CONF_IO) && WOLF_CONF_IO == 2
+    #define WOLFSSL_LWIP
+#elif defined(WOLF_CONF_IO) && WOLF_CONF_IO == 3
+    #define WOLFSSL_LWIP_NATIVE
+#else /* custom */
+    #define WOLFSSL_USER_IO
+    #define WOLFSSL_NO_SOCK
+#endif
 
 
 /* ------------------------------------------------------------------------- */
-/* Operating System */
+/* Operating System: 1=Bare-metal/Single threaded, 2=FREERTOS */
 /* ------------------------------------------------------------------------- */
 #if defined(WOLF_CONF_RTOS) && WOLF_CONF_RTOS == 2
     #define FREERTOS
@@ -207,18 +234,27 @@ extern ${variable.value} ${variable.name};
 /* ------------------------------------------------------------------------- */
 /* Math Configuration */
 /* ------------------------------------------------------------------------- */
-/* 1=Fast (stack)
- * 2=Normal (heap)
- * 3=Single Precision C (only common curves/key sizes)
- * 4=Single Precision ASM Cortex-M3+
- * 5=Single Precision ASM Cortex-M0 (Generic Thumb)
- * 6=Single Precision C all small
- * 7=Single Precision C all big
+/* 1=Fast (stack)                      (tfm.c)
+ * 2=Normal (heap)                     (integer.c)
+ * 3-5=Single Precision: only common curves/key sizes:
+ *                   (ECC 256/384/521 and RSA/DH 2048/3072/4096)
+ *   3=Single Precision C              (sp_c32.c)
+ *   4=Single Precision ASM Cortex-M3+ (sp_cortexm.c)
+ *   5=Single Precision ASM Cortex-M0  (sp_armthumb.c)
+ * 6=Wolf multi-precision C small      (sp_int.c)
+ * 7=Wolf multi-precision C big        (sp_int.c)
  */
+
 #if defined(WOLF_CONF_MATH) && WOLF_CONF_MATH == 1
     /* fast (stack) math - tfm.c */
     #define USE_FAST_MATH
     #define TFM_TIMING_RESISTANT
+
+    #if !defined(NO_RSA) || !defined(NO_DH)
+        /* Maximum math bits (Max DH/RSA key bits * 2) */
+        #undef  FP_MAX_BITS
+        #define FP_MAX_BITS     4096
+    #endif
 
     /* Optimizations (TFM_ARM, TFM_ASM or none) */
     //#define TFM_NO_ASM
@@ -234,22 +270,29 @@ extern ${variable.value} ${variable.name};
     #endif
     #if defined(WOLF_CONF_RSA) && WOLF_CONF_RSA == 1
         #define WOLFSSL_HAVE_SP_RSA
+        //#define WOLFSSL_SP_NO_2048
+        //#define WOLFSSL_SP_NO_3072
+        //#define WOLFSSL_SP_4096
     #endif
     #if defined(WOLF_CONF_DH) && WOLF_CONF_DH == 1
         #define WOLFSSL_HAVE_SP_DH
     #endif
     #if defined(WOLF_CONF_ECC) && WOLF_CONF_ECC == 1
         #define WOLFSSL_HAVE_SP_ECC
+        //#define WOLFSSL_SP_NO_256
+        //#define WOLFSSL_SP_384
+        //#define WOLFSSL_SP_521
     #endif
     #if WOLF_CONF_MATH == 6 || WOLF_CONF_MATH == 7
+        #define WOLFSSL_SP_MATH_ALL /* use sp_int.c multi precision math */
+        //#define WOLFSSL_SP_ARM_THUMB /* enable ARM Thumb ASM speedups */
+    #else
         #define WOLFSSL_SP_MATH    /* disable non-standard curves / key sizes */
     #endif
-    #define SP_WORD_SIZE 32
+    #define SP_WORD_SIZE 32 /* force 32-bit mode */
 
     /* Enable to put all math on stack (no heap) */
     //#define WOLFSSL_SP_NO_MALLOC
-    /* Enable for SP cache resistance (not usually enabled for embedded micros) */
-    //#define WOLFSSL_SP_CACHE_RESISTANT
 
     #if WOLF_CONF_MATH == 4 || WOLF_CONF_MATH == 5
         #define WOLFSSL_SP_ASM /* required if using the ASM versions */
@@ -273,6 +316,8 @@ extern ${variable.value} ${variable.name};
 #define HAVE_SUPPORTED_CURVES
 #define HAVE_ENCRYPT_THEN_MAC
 #define HAVE_EXTENDED_MASTER
+#define WOLFSSL_ASN_TEMPLATE
+#define HAVE_SNI
 
 #if defined(WOLF_CONF_TLS13) && WOLF_CONF_TLS13 == 1
     #define WOLFSSL_TLS13
@@ -304,20 +349,24 @@ extern ${variable.value} ${variable.name};
 #endif
 
 /* TLS Session Cache */
-#if 0
+#if defined(WOLF_CONF_RESUMPTION) && WOLF_CONF_RESUMPTION == 1
     #define SMALL_SESSION_CACHE
+    #define HAVE_SESSION_TICKET
 #else
     #define NO_SESSION_CACHE
 #endif
 
-/* Post Quantum
- * Note: PQM4 is compatible with STM32. The project can be found at:
- * https://github.com/mupq/pqm4
- */
-#if defined(WOLF_CONF_PQM4) && WOLF_CONF_PQM4 == 1
-    #define HAVE_PQM4
+/* TPM support */
+#if defined(WOLF_CONF_TPM) && WOLF_CONF_TPM == 1
+    #define WOLF_CRYPTO_CB
+    #define WOLFSSL_PUBLIC_MP
+    /* also AES CFB - enabled below */
 #endif
 
+/* TLS key callbacks */
+#if defined(WOLF_CONF_PK) && WOLF_CONF_PK == 1
+    #define HAVE_PK_CALLBACKS
+#endif
 
 /* ------------------------------------------------------------------------- */
 /* Crypto */
@@ -325,12 +374,6 @@ extern ${variable.value} ${variable.name};
 /* RSA */
 #undef NO_RSA
 #if defined(WOLF_CONF_RSA) && WOLF_CONF_RSA == 1
-    #ifdef USE_FAST_MATH
-        /* Maximum math bits (Max RSA key bits * 2) */
-        #undef  FP_MAX_BITS
-        #define FP_MAX_BITS     4096
-    #endif
-
     /* half as much memory but twice as slow */
     #undef  RSA_LOW_MEM
     //#define RSA_LOW_MEM
@@ -384,8 +427,8 @@ extern ${variable.value} ${variable.name};
     //#define HAVE_COMP_KEY
 
     #ifdef USE_FAST_MATH
-        #ifdef NO_RSA
-            /* Custom fastmath size if not using RSA */
+        #if defined(NO_RSA) && defined(NO_DH)
+            /* Custom fastmath size if not using RSA/DH */
             /* MAX = ROUND32(ECC BITS) * 2 */
             #define FP_MAX_BITS     (256 * 2)
         #else
@@ -412,20 +455,31 @@ extern ${variable.value} ${variable.name};
 #endif
 
 /* AES */
-#if defined(WOLF_CONF_AESGCM) && WOLF_CONF_AESGCM == 1
+#if defined(WOLF_CONF_AESGCM) && WOLF_CONF_AESGCM >= 1
     #define HAVE_AESGCM
+    #define HAVE_AES_DECRYPT
+
     /* GCM Method: GCM_SMALL, GCM_WORD32, GCM_TABLE or GCM_TABLE_4BIT */
     /* GCM_TABLE is about 4K larger and 3x faster for GHASH */
-    #define GCM_SMALL
-    #define HAVE_AES_DECRYPT
+    #if WOLF_CONF_AESGCM == 2
+        #define GCM_TABLE_4BIT
+    #else
+        #define GCM_SMALL
+    #endif
 #endif
 
 #if defined(WOLF_CONF_AESCBC) && WOLF_CONF_AESCBC == 1
     #define HAVE_AES_CBC
     #define HAVE_AES_DECRYPT
+#else
+    #define NO_AES_CBC
 #endif
 
 /* Other possible AES modes */
+#if defined(WOLF_CONF_TPM) && WOLF_CONF_TPM == 1
+    #define WOLFSSL_AES_CFB /* Used by TPM parameter encryption */
+#endif
+
 //#define WOLFSSL_AES_COUNTER
 //#define HAVE_AESCCM
 //#define WOLFSSL_AES_XTS
@@ -493,7 +547,7 @@ extern ${variable.value} ${variable.name};
     //#define USE_SLOW_SHA512
 
     #define WOLFSSL_SHA512
-    #define HAVE_SHA512 /* freeRTOS settings.h requires this */
+    #define HAVE_SHA512 /* old freeRTOS settings.h requires this */
 #endif
 
 /* Sha2-384 */
@@ -505,16 +559,62 @@ extern ${variable.value} ${variable.name};
 /* Sha3 */
 #undef WOLFSSL_SHA3
 #if defined(WOLF_CONF_SHA3) && WOLF_CONF_SHA3 == 1
-	#define WOLFSSL_SHA3
+    #define WOLFSSL_SHA3
 #endif
 
 /* MD5 */
 #if defined(WOLF_CONF_MD5) && WOLF_CONF_MD5 == 1
-	/* enabled */
+    /* enabled */
 #else
     #define NO_MD5
 #endif
 
+/* ------------------------------------------------------------------------- */
+/* Post-Quantum Crypto */
+/* ------------------------------------------------------------------------- */
+/* NOTE: this is after the hashing section to override the potential SHA3 undef
+ * above. */
+#if defined(WOLF_CONF_KYBER) && WOLF_CONF_KYBER == 1
+#undef  WOLFSSL_EXPERIMENTAL_SETTINGS
+#define WOLFSSL_EXPERIMENTAL_SETTINGS
+
+#undef  WOLFSSL_HAVE_KYBER
+#define WOLFSSL_HAVE_KYBER
+
+#undef  WOLFSSL_WC_KYBER
+#define WOLFSSL_WC_KYBER
+
+#undef  WOLFSSL_NO_SHAKE128
+#undef  WOLFSSL_SHAKE128
+#define WOLFSSL_SHAKE128
+
+#undef  WOLFSSL_NO_SHAKE256
+#undef  WOLFSSL_SHAKE256
+#define WOLFSSL_SHAKE256
+
+#undef  WOLFSSL_SHA3
+#define WOLFSSL_SHA3
+#endif /* WOLF_CONF_KYBER */
+
+/* ------------------------------------------------------------------------- */
+/* Crypto Acceleration */
+/* ------------------------------------------------------------------------- */
+/* This enables inline assembly speedups for SHA2, SHA3, AES,
+ * ChaCha20/Poly1305 and Ed/Curve25519. These settings work for Cortex M4/M7
+ * and the source code is located in wolfcrypt/src/port/arm/
+ */
+#if defined(WOLF_CONF_ARMASM) && WOLF_CONF_ARMASM == 1
+    #define WOLFSSL_ARMASM
+    #define WOLFSSL_ARMASM_INLINE
+    #define WOLFSSL_ARMASM_NO_HW_CRYPTO
+    #define WOLFSSL_ARMASM_NO_NEON
+    #define WOLFSSL_ARM_ARCH 7
+    /* Disable H/W offloading if accelerating S/W crypto */
+    #undef  NO_STM32_HASH
+    #define NO_STM32_HASH
+    #undef  NO_STM32_CRYPTO
+    #define NO_STM32_CRYPTO
+#endif
 
 /* ------------------------------------------------------------------------- */
 /* Benchmark / Test */
@@ -535,8 +635,8 @@ extern ${variable.value} ${variable.name};
     #if 0
         #define USE_WOLFSSL_MEMORY
         #define WOLFSSL_TRACK_MEMORY
-  		  #define WOLFSSL_DEBUG_MEMORY
-	  	  #define WOLFSSL_DEBUG_MEMORY_PRINT
+        #define WOLFSSL_DEBUG_MEMORY
+        #define WOLFSSL_DEBUG_MEMORY_PRINT
     #endif
 #else
     //#define NO_WOLFSSL_MEMORY
@@ -594,6 +694,8 @@ extern ${variable.value} ${variable.name};
 #define NO_RC4
 #define NO_MD4
 #define NO_DES3
+#define WOLFSSL_NO_SHAKE128
+#define WOLFSSL_NO_SHAKE256
 
 /* In-lining of misc.c functions */
 /* If defined, must include wolfcrypt/src/misc.c in build */

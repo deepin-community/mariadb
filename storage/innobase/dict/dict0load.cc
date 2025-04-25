@@ -33,8 +33,8 @@ Created 4/24/1996 Heikki Tuuri
 #include "dict0boot.h"
 #include "dict0crea.h"
 #include "dict0dict.h"
-#include "dict0mem.h"
 #include "dict0stats.h"
+#include "ibuf0ibuf.h"
 #include "fsp0file.h"
 #include "fts0priv.h"
 #include "mach0data.h"
@@ -168,40 +168,28 @@ name_of_col_is(
 					      dict_index_get_nth_field(
 						      index, i)));
 
-	return(strcmp(name, dict_table_get_col_name(table, tmp)) == 0);
+	return(strcmp(name, dict_table_get_col_name(table, tmp).str) == 0);
 }
 #endif /* UNIV_DEBUG */
 
-/********************************************************************//**
-This function gets the next system table record as it scans the table.
-@return the next record if found, NULL if end of scan */
-static
 const rec_t*
-dict_getnext_system_low(
-/*====================*/
-	btr_pcur_t*	pcur,		/*!< in/out: persistent cursor to the
-					record*/
-	mtr_t*		mtr)		/*!< in: the mini-transaction */
+dict_getnext_system_low(btr_pcur_t *pcur, mtr_t *mtr)
 {
-	rec_t*	rec = NULL;
-
-	while (!rec) {
-		btr_pcur_move_to_next_user_rec(pcur, mtr);
-
-		rec = btr_pcur_get_rec(pcur);
-
-		if (!btr_pcur_is_on_user_rec(pcur)) {
-			/* end of index */
-			btr_pcur_close(pcur);
-
-			return(NULL);
-		}
-	}
-
-	/* Get a record, let's save the position */
-	btr_pcur_store_position(pcur, mtr);
-
-	return(rec);
+  rec_t *rec = nullptr;
+  while (!rec)
+  {
+    btr_pcur_move_to_next_user_rec(pcur, mtr);
+    rec = btr_pcur_get_rec(pcur);
+    if (!btr_pcur_is_on_user_rec(pcur))
+    {
+      /* end of index */
+      btr_pcur_close(pcur);
+      return nullptr;
+    }
+  }
+  /* Get a record, let's save the position */
+  btr_pcur_store_position(pcur, mtr);
+  return rec;
 }
 
 /********************************************************************//**
@@ -865,28 +853,45 @@ err_exit:
 	return READ_OK;
 }
 
-/** Check each tablespace found in the data dictionary.
-Then look at each table defined in SYS_TABLES that has a space_id > 0
-to find all the file-per-table tablespaces.
+/** @return SELECT MAX(space) FROM sys_tables */
+static uint32_t dict_find_max_space_id(btr_pcur_t *pcur, mtr_t *mtr)
+{
+  uint32_t max_space_id= 0;
 
-In a crash recovery we already have some tablespace objects created from
-processing the REDO log. We will compare the
-space_id information in the data dictionary to what we find in the
-tablespace file. In addition, more validation will be done if recovery
-was needed and force_recovery is not set.
+  for (const rec_t *rec= dict_startscan_system(pcur, mtr, dict_sys.sys_tables);
+       rec; rec= dict_getnext_system_low(pcur, mtr))
+    if (!dict_sys_tables_rec_check(rec))
+    {
+      ulint len;
+      const byte *field=
+        rec_get_nth_field_old(rec, DICT_FLD__SYS_TABLES__SPACE, &len);
+      ut_ad(len == 4);
+      max_space_id= std::max(max_space_id, mach_read_from_4(field));
+    }
 
-We also scan the biggest space id, and store it to fil_system. */
-void dict_check_tablespaces_and_store_max_id()
+  return max_space_id;
+}
+
+/** Check MAX(SPACE) FROM SYS_TABLES and store it in fil_system.
+Open each data file if an encryption plugin has been loaded.
+
+@param spaces  set of tablespace files to open
+@param upgrade whether we need to invoke ibuf_upgrade() */
+void dict_load_tablespaces(const std::set<uint32_t> *spaces, bool upgrade)
 {
 	uint32_t	max_space_id = 0;
 	btr_pcur_t	pcur;
 	mtr_t		mtr;
 
-	DBUG_ENTER("dict_check_tablespaces_and_store_max_id");
-
 	mtr.start();
 
 	dict_sys.lock(SRW_LOCK_CALL);
+
+	if (!spaces && !upgrade
+	    && !encryption_key_id_exists(FIL_DEFAULT_ENCRYPTION_KEY)) {
+		max_space_id = dict_find_max_space_id(&pcur, &mtr);
+		goto done;
+	}
 
 	for (const rec_t *rec = dict_startscan_system(&pcur, &mtr,
 						      dict_sys.sys_tables);
@@ -919,14 +924,6 @@ void dict_check_tablespaces_and_store_max_id()
 			continue;
 		}
 
-		if (flags2 & DICT_TF2_DISCARDED) {
-			sql_print_information("InnoDB: Ignoring tablespace"
-					      " for %.*s because "
-					      "the DISCARD flag is set",
-					      static_cast<int>(len), field);
-			continue;
-		}
-
 		/* For tables or partitions using .ibd files, the flag
 		DICT_TF2_USE_FILE_PER_TABLE was not set in MIX_LEN
 		before MySQL 5.6.5. The flag should not have been
@@ -939,6 +936,19 @@ void dict_check_tablespaces_and_store_max_id()
 			continue;
 		}
 
+		if (spaces && spaces->find(uint32_t(space_id))
+                    == spaces->end()) {
+			continue;
+		}
+
+		if (flags2 & DICT_TF2_DISCARDED) {
+			sql_print_information("InnoDB: Ignoring tablespace"
+					      " for %.*s because "
+					      "the DISCARD flag is set",
+					      static_cast<int>(len), field);
+			continue;
+		}
+
 		const span<const char> name{field, len};
 
 		char*	filepath = fil_make_filepath(nullptr, name,
@@ -947,8 +957,10 @@ void dict_check_tablespaces_and_store_max_id()
 		const bool not_dropped{!rec_get_deleted_flag(rec, 0)};
 
 		/* Check that the .ibd file exists. */
-		if (fil_ibd_open(not_dropped, FIL_TYPE_TABLESPACE,
-				 space_id, dict_tf_to_fsp_flags(flags),
+		if (fil_ibd_open(space_id, dict_tf_to_fsp_flags(flags),
+				 not_dropped
+				 ? fil_space_t::VALIDATE_NOTHING
+				 : fil_space_t::MAYBE_MISSING,
 				 name, filepath)) {
 		} else if (!not_dropped) {
 		} else if (srv_operation == SRV_OPERATION_NORMAL
@@ -971,13 +983,12 @@ void dict_check_tablespaces_and_store_max_id()
 		ut_free(filepath);
 	}
 
+done:
 	mtr.commit();
 
 	fil_set_max_space_id_if_bigger(max_space_id);
 
 	dict_sys.unlock();
-
-	DBUG_VOID_RETURN;
 }
 
 /** Error message for a delete-marked record in dict_load_column_low() */
@@ -1125,7 +1136,7 @@ err_len:
 
 			prtype = dtype_form_prtype(
 				prtype,
-				data_mysql_default_charset_coll);
+				default_charset_info->number);
 		}
 	}
 
@@ -1308,7 +1319,7 @@ static dberr_t dict_load_columns(dict_table_t *table, unsigned use_uncommitted,
 
 	dfield_t dfield;
 	dtuple_t tuple{
-		0,1,1,&dfield,0,nullptr
+		0,1,1,0,&dfield,nullptr
 #ifdef UNIV_DEBUG
 		, DATA_TUPLE_MAGIC_N
 #endif
@@ -1362,8 +1373,8 @@ static dberr_t dict_load_columns(dict_table_t *table, unsigned use_uncommitted,
 		/* Note: Currently we have one DOC_ID column that is
 		shared by all FTS indexes on a table. And only non-virtual
 		column can be used for FULLTEXT index */
-		if (innobase_strcasecmp(name,
-					FTS_DOC_ID_COL_NAME) == 0
+		if (Lex_ident_column(Lex_cstring_strlen(name)).
+		      streq(FTS_DOC_ID)
 		    && nth_v_col == ULINT_UNDEFINED) {
 			dict_col_t*	col;
 			/* As part of normal loading of tables the
@@ -1435,7 +1446,7 @@ dict_load_virtual_col(dict_table_t *table, bool uncommitted, ulint nth_v_col)
 
 	dfield_t dfield[2];
 	dtuple_t tuple{
-		0,2,2,dfield,0,nullptr
+		0,2,2,0,dfield,nullptr
 #ifdef UNIV_DEBUG
 		, DATA_TUPLE_MAGIC_N
 #endif
@@ -1679,7 +1690,7 @@ static dberr_t dict_load_fields(dict_index_t *index, bool uncommitted,
 
 	dfield_t dfield;
 	dtuple_t tuple{
-		0,1,1,&dfield,0,nullptr
+		0,1,1,0,&dfield,nullptr
 #ifdef UNIV_DEBUG
 		, DATA_TUPLE_MAGIC_N
 #endif
@@ -1938,7 +1949,7 @@ dberr_t dict_load_indexes(dict_table_t *table, bool uncommitted,
 
 	dfield_t dfield;
 	dtuple_t tuple{
-		0,1,1,&dfield,0,nullptr
+		0,1,1,0,&dfield,nullptr
 #ifdef UNIV_DEBUG
 		, DATA_TUPLE_MAGIC_N
 #endif
@@ -2134,7 +2145,7 @@ next_rec:
 
 	if (table->fts != NULL) {
 		dict_index_t *idx = dict_table_get_index_on_name(
-			table, FTS_DOC_ID_INDEX_NAME);
+			table, FTS_DOC_ID_INDEX.str);
 		if (idx && dict_index_is_unique(idx)) {
 			table->fts_doc_id_index = idx;
 		}
@@ -2246,20 +2257,8 @@ dict_load_tablespace(
 	/* The tablespace may already be open. */
 	table->space = fil_space_for_table_exists_in_mem(table->space_id,
 							 table->flags);
-	if (table->space) {
+	if (table->space || table->file_unreadable) {
 		return;
-	}
-
-	if (ignore_err >= DICT_ERR_IGNORE_TABLESPACE) {
-		table->file_unreadable = true;
-		return;
-	}
-
-	if (!(ignore_err & DICT_ERR_IGNORE_RECOVER_LOCK)) {
-		ib::error() << "Failed to find tablespace for table "
-			<< table->name << " in the cache. Attempting"
-			" to load the tablespace with space id "
-			<< table->space_id;
 	}
 
 	/* Use the remote filepath if needed. This parameter is optional
@@ -2277,13 +2276,19 @@ dict_load_tablespace(
 	}
 
 	table->space = fil_ibd_open(
-		2, FIL_TYPE_TABLESPACE, table->space_id,
-		dict_tf_to_fsp_flags(table->flags),
+		table->space_id, dict_tf_to_fsp_flags(table->flags),
+		fil_space_t::VALIDATE_SPACE_ID,
 		{table->name.m_name, strlen(table->name.m_name)}, filepath);
 
 	if (!table->space) {
 		/* We failed to find a sensible tablespace file */
 		table->file_unreadable = true;
+
+		if (!(ignore_err & DICT_ERR_IGNORE_RECOVER_LOCK)) {
+			sql_print_error("InnoDB: Failed to load tablespace %"
+					PRIu32 " for table %s",
+					table->space_id, table->name.m_name);
+		}
 	}
 
 	ut_free(filepath);
@@ -2333,7 +2338,7 @@ static dict_table_t *dict_load_table_one(const span<const char> &name,
 
 	dfield_t dfield;
 	dtuple_t tuple{
-		0,1,1,&dfield,0,nullptr
+		0,1,1,0,&dfield,nullptr
 #ifdef UNIV_DEBUG
 		, DATA_TUPLE_MAGIC_N
 #endif
@@ -2454,30 +2459,25 @@ corrupted:
 			only to delete the .ibd files. */
 			goto corrupted;
 		} else {
-			const page_id_t page_id{table->space->id, pk->page};
 			mtr.start();
-			buf_block_t* block = buf_page_get(
-				page_id, table->space->zip_size(),
-				RW_S_LATCH, &mtr);
-			const bool corrupted = !block
-				|| page_get_space_id(block->page.frame)
-				!= page_id.space()
-				|| page_get_page_no(block->page.frame)
-				!= page_id.page_no()
-				|| (mach_read_from_2(FIL_PAGE_TYPE
-						    + block->page.frame)
-				    != FIL_PAGE_INDEX
-				    && mach_read_from_2(FIL_PAGE_TYPE
-							+ block->page.frame)
-				    != FIL_PAGE_TYPE_INSTANT);
+			bool ok = false;
+			if (buf_block_t* b = buf_page_get(
+				    page_id_t(table->space->id, pk->page),
+				    table->space->zip_size(),
+				    RW_S_LATCH, &mtr)) {
+				switch (mach_read_from_2(FIL_PAGE_TYPE
+							 + b->page.frame)) {
+				case FIL_PAGE_INDEX:
+				case FIL_PAGE_TYPE_INSTANT:
+					ok = true;
+				}
+			}
 			mtr.commit();
-			if (corrupted) {
+			if (!ok) {
 				goto corrupted;
 			}
 
-			if (table->supports_instant()) {
-				err = btr_cur_instant_init(table);
-			}
+			err = btr_cur_instant_init(table);
 		}
 	} else {
 		ut_ad(ignore_err & DICT_ERR_IGNORE_INDEX);
@@ -2542,7 +2542,7 @@ corrupted:
 }
 
 dict_table_t *dict_sys_t::load_table(const span<const char> &name,
-                                     dict_err_ignore_t ignore)
+                                     dict_err_ignore_t ignore) noexcept
 {
   if (dict_table_t *table= find_table(name))
     return table;
@@ -2590,7 +2590,7 @@ dict_load_table_on_id(
 
 	dfield_t dfield;
 	dtuple_t tuple{
-		0,1,1,&dfield,0,nullptr
+		0,1,1,0,&dfield,nullptr
 #ifdef UNIV_DEBUG
 		, DATA_TUPLE_MAGIC_N
 #endif
@@ -2699,7 +2699,7 @@ static dberr_t dict_load_foreign_cols(dict_foreign_t *foreign, trx_id_t trx_id)
 
 	dfield_t dfield;
 	dtuple_t tuple{
-		0,1,1,&dfield,0,nullptr
+		0,1,1,0,&dfield,nullptr
 #ifdef UNIV_DEBUG
 		, DATA_TUPLE_MAGIC_N
 #endif
@@ -2875,7 +2875,7 @@ dict_load_foreign(
 
 	dfield_t dfield;
 	dtuple_t tuple{
-		0,1,1,&dfield,0,nullptr
+		0,1,1,0,&dfield,nullptr
 #ifdef UNIV_DEBUG
 		, DATA_TUPLE_MAGIC_N
 #endif
@@ -2963,7 +2963,7 @@ err_exit:
 
 	foreign->foreign_table_name = mem_heap_strdupl(
 		foreign->heap, (char*) field, len);
-	dict_mem_foreign_table_name_lookup_set(foreign, TRUE);
+	foreign->foreign_table_name_lookup_set();
 
 	const size_t foreign_table_name_len = len;
 	const size_t table_name_len = strlen(table_name);
@@ -2984,7 +2984,7 @@ err_exit:
 
 	foreign->referenced_table_name = mem_heap_strdupl(
 		foreign->heap, (const char*) field, len);
-	dict_mem_referenced_table_name_lookup_set(foreign, TRUE);
+	foreign->referenced_table_name_lookup_set();
 
 	mtr.commit();
 	if (UNIV_LIKELY_NULL(heap)) {
@@ -3086,7 +3086,7 @@ dict_load_foreigns(
 	bool check_recursive = !trx_id;
 	dfield_t dfield;
 	dtuple_t tuple{
-		0,1,1,&dfield,0,nullptr
+		0,1,1,0,&dfield,nullptr
 #ifdef UNIV_DEBUG
 		, DATA_TUPLE_MAGIC_N
 #endif

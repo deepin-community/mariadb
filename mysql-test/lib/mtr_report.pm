@@ -87,12 +87,16 @@ sub flush_out {
     $out_line = "";
 }
 
+use if $^O eq "MSWin32", "threads::shared";
+our $flush_lock :shared;
+
 # Print to stdout
 sub print_out {
   if(IS_WIN32PERL) {
     $out_line .= $_[0];
     # Flush buffered output on new lines.
     if (rindex($_[0], "\n") != -1) {
+      lock($flush_lock);
       flush_out();
     }
   } else {
@@ -450,9 +454,8 @@ sub mtr_report_stats ($$$$) {
     # Print info about reporting the error
     print
       "The log files in var/log may give you some hint of what went wrong.\n\n",
-      "If you want to report this error, please read first ",
-      "the documentation\n",
-      "at http://dev.mysql.com/doc/mysql/en/mysql-test-suite.html\n\n";
+      "If you want to report this error, MariaDB's bug tracker is found at\n",
+      "https://jira.mariadb.org\n\n";
 
    }
   else

@@ -97,7 +97,7 @@ C_MODE_START
 /**
   A cycle timer.
 
-  On clang we use __builtin_readcyclecounter(), except for AARCH64.
+  On clang we use __builtin_readcyclecounter(), except for AARCH64 and RISC-V.
   On other compilers:
 
   On IA-32 and AMD64, we use the RDTSC instruction.
@@ -111,7 +111,7 @@ C_MODE_START
   On AARCH64, we use the generic timer base register. We override clang
   implementation for aarch64 as it access a PMU register which is not
   guaranteed to be active.
-  On RISC-V, we use the rdcycle instruction to read from mcycle register.
+  On RISC-V, we use the rdtime instruction to read from mtime register.
 
   Sadly, we have nothing for the Digital Alpha, MIPS, Motorola m68k,
   HP PA-RISC or other non-mainstream (or obsolete) processors.
@@ -152,7 +152,7 @@ C_MODE_START
 */
 static inline ulonglong my_timer_cycles(void)
 {
-# if __has_builtin(__builtin_readcyclecounter) && !defined (__aarch64__)
+# if __has_builtin(__builtin_readcyclecounter) && !defined (__aarch64__) && !(defined(__linux__) && defined(__riscv))
   #define MY_TIMER_ROUTINE_CYCLES MY_TIMER_ROUTINE_AARCH64
   return __builtin_readcyclecounter();
 # elif defined _M_IX86  || defined _M_X64  || defined __i386__ || defined __x86_64__
@@ -211,15 +211,15 @@ static inline ulonglong my_timer_cycles(void)
   }
 #elif defined(__riscv)
   #define MY_TIMER_ROUTINE_CYCLES MY_TIMER_ROUTINE_RISCV
-  /* Use RDCYCLE (and RDCYCLEH on riscv32) */
+  /* Use RDTIME (and RDTIMEH on riscv32) */
   {
 # if __riscv_xlen == 32
     ulong result_lo, result_hi0, result_hi1;
     /* Implemented in assembly because Clang insisted on branching. */
     __asm __volatile__(
-        "rdcycleh %0\n"
-        "rdcycle %1\n"
-        "rdcycleh %2\n"
+        "rdtimeh %0\n"
+        "rdtime %1\n"
+        "rdtimeh %2\n"
         "sub %0, %0, %2\n"
         "seqz %0, %0\n"
         "sub %0, zero, %0\n"
@@ -228,10 +228,10 @@ static inline ulonglong my_timer_cycles(void)
     return (static_cast<ulonglong>(result_hi1) << 32) | result_lo;
 # else
     ulonglong result;
-    __asm __volatile__("rdcycle %0" : "=r"(result));
+    __asm __volatile__("rdtime %0" : "=r"(result));
     return result;
-  }
 # endif
+  }
 #elif defined(HAVE_SYS_TIMES_H) && defined(HAVE_GETHRTIME)
   #define MY_TIMER_ROUTINE_CYCLES MY_TIMER_ROUTINE_GETHRTIME
   /* gethrtime may appear as either cycle or nanosecond counter */
@@ -241,6 +241,18 @@ static inline ulonglong my_timer_cycles(void)
   return 0;
 #endif
 }
+
+#if MY_TIMER_ROUTINE_CYCLES == 0
+static inline size_t my_pseudo_random(void)
+{
+  /* In some platforms, pthread_self() might return a structure
+  that cannot be converted to a number like this. Possible alternatives
+  could include gettid() or sched_getcpu(). */
+  return ((size_t) pthread_self()) / 16;
+}
+#else
+# define my_pseudo_random my_timer_cycles
+#endif
 
 /**
   A nanosecond timer.

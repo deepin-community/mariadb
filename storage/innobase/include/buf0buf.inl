@@ -75,26 +75,6 @@ inline bool buf_page_peek_if_too_old(const buf_page_t *bpage)
 	}
 }
 
-/** Allocate a buffer block.
-@return own: the allocated block, in state BUF_BLOCK_MEMORY */
-inline buf_block_t *buf_block_alloc()
-{
-  return buf_LRU_get_free_block(false);
-}
-
-/********************************************************************//**
-Frees a buffer block which does not contain a file page. */
-UNIV_INLINE
-void
-buf_block_free(
-/*===========*/
-	buf_block_t*	block)	/*!< in, own: block to be freed */
-{
-	mysql_mutex_lock(&buf_pool.mutex);
-	buf_LRU_block_free_non_file_page(block);
-	mysql_mutex_unlock(&buf_pool.mutex);
-}
-
 /********************************************************************//**
 Increments the modify clock of a frame by 1. The caller must (1) own the
 buf_pool mutex and block bufferfix count has to be zero, (2) or own an x-lock
@@ -115,18 +95,4 @@ buf_block_modify_clock_inc(
 	assert_block_ahi_valid(block);
 
 	block->modify_clock++;
-}
-
-/********************************************************************//**
-Returns the value of the modify clock. The caller must have an s-lock
-or x-lock on the block.
-@return value */
-UNIV_INLINE
-ib_uint64_t
-buf_block_get_modify_clock(
-/*=======================*/
-	buf_block_t*	block)	/*!< in: block */
-{
-	ut_ad(block->page.lock.have_any());
-	return(block->modify_clock);
 }

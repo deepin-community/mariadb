@@ -140,7 +140,7 @@ datatypes::TUInt64Null GenericToBitOperand(Row& row, const execplan::SPTP& parm,
     case execplan::CalpontSystemCatalog::TEXT:
     {
       bool tmpIsNull = false;
-      const string& str = parm->data()->getStrVal(row, tmpIsNull);
+      const auto& str = parm->data()->getStrVal(row, tmpIsNull).safeString("");
       if (tmpIsNull)
         return datatypes::TUInt64Null();
 
@@ -494,4 +494,3 @@ bool Func_bit_count::fix(execplan::FunctionColumn& col) const
 }
 
 }  // namespace funcexp
-// vim:ts=4 sw=4:

@@ -1,8 +1,303 @@
-mariadb (1:10.11.6-1deepin0) unstable; urgency=medium
+mariadb (1:11.8.1-4) unstable; urgency=medium
 
-  * No source change upload against GCC 12.
+  * Disable main.mysqld--help-aria test that failed on nearly every
+    architecture in previous upload due to new upstream issue (MDEV-36334)
+  * Disable some vector related tests that failed on sparc64 (MDEV-36670)
+  * Backport main.func_format fix for exabyte/petabyte mismatch on i386
 
- -- Tianyu Chen <sweetyfish@deepin.org>  Fri, 20 Sep 2024 12:13:23 +0800
+ -- Otto Kekäläinen <otto@debian.org>  Wed, 23 Apr 2025 07:29:38 -0700
+
+mariadb (1:11.8.1-3) unstable; urgency=medium
+
+  * Add patch to have CEST as allowed in main.timezone test (Closes: #1084293)
+  * Backport revert of CONC-710 that broke building UDFs (Closes: #1101397)
+  * Backport systemd service fix for restarts on crashes (Closes: #1073847)
+  * Update standards version to 4.7.2, no changes needed
+  * Re-enable tests that were passing recently in experimental when MariaDB
+    Debian revision 1:11.4.5-2~exp1 built or which otherwise was confirmed to
+    passing now: mariabackup.encrypted_page_corruption, mariadb_upgrade,
+    MDEV-22243, MDEV-23427, MDEV-23921, MDEV-27955, MDEV-30518, MDEV-30676,
+    MDEV-30728, MDEV-30918, MDEV-30929, MDEV-31349, MDEV-33520, MDEV-33520,
+    MDEV-34084, MDEV-34733, MDEV-34781, MDEV-34788, MDEV-36334
+
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 19 Apr 2025 12:06:11 -0700
+
+mariadb (1:11.8.1-2) unstable; urgency=medium
+
+  * Disable test func_format on i386 (MDEV-36334) to get i386 builds
+    pass on official Debian buildd while upstream fixes the issue
+  * Restore better error message on service stop failures from c789cdaf
+  * Revert "Set CAP_IPC_LOCK capability if possible" to follow upstream
+
+ -- Otto Kekäläinen <otto@debian.org>  Thu, 20 Mar 2025 12:31:04 -0700
+
+mariadb (1:11.8.1-1) unstable; urgency=medium
+
+  * New major upstream release candidate MariaDB 11.8, which is going to be the
+    next Long-Term Supported (LTS) version. For an overview of what is new in
+    the upstream release, see
+    https://mariadb.com/kb/en/changes-improvements-in-mariadb-11-8/.
+  * Update d/watch for MariaDB 11.8 series
+  * Update references to 11.4 with 11.8
+  * Drop 'utf8mb4' config as 'utf8mb4' and 'uca1400_ai_ci' is now default
+  * Include new authentication plugin PARSEC
+  * Temporarily disable the new SBOM generation incompatible with Debian
+  * Ensure mariadb-server-core can overwrite mariadb-server-compat
+  * Update configuration traces for 11.8(.1)
+  * Drop unused dh-exec from libmariadb-dev-compat.links
+  * Disable main.view test on sparc64 as it seems permanently failing now
+  * Complete and unfuzz all incomplete translations
+  * Add Hindi and Korean translations for MariaDB debconf templates
+  * Update Lintian overrides/mismatches
+  * Manually strip debug symbols from libmariadbd.a
+  * Fix incorrect SIGTERM/SIGKILL use in 98c3c0730
+
+ -- Otto Kekäläinen <otto@debian.org>  Thu, 13 Mar 2025 13:58:11 -0700
+
+mariadb (1:11.4.5-1) unstable; urgency=medium
+
+  [ Otto Kekäläinen ]
+  * New upstream version 11.4.5. Includes fixes for several defects
+    as noted at https://mariadb.com/kb/en/mariadb-11-4-5-release-notes/ as well
+    the following security issues:
+    - CVE-2025-21490
+  * Include new packaging changes done upstream:
+    - MDEV-35907: debian-start script fails when using non-standard socket path
+    - MCOL-5819: Disable LTO for ColumnStore, otherwise enabled by default
+    - MDEV-32686: Include ELF package notes
+  * Update configuration traces to match changes done in MDEV-35785
+  * Update configuration traces with new query allocator values from MDEV-35750
+  * Build MariaDB RocksDB on loong64 now too
+  * Fix minor typos in Debian packaging files
+  * Fix broken links in d/copyright
+  * Unify spelling fix patches into one, and fix spelling of Enrypt->Encrypt
+
+  [ Matthew Vernon ]
+  * Add patch to fix `main.func_regexp_pcre` failing with latest PCRE2 10.45
+    due to backwards-incompatible case-sensitivity change in behavior in latest
+    PCRE2 version (Closes: #1095286)
+
+  [ Joe Bliss ]
+  * Revert backticks change in commit 0300a915 to be compatible with databases
+    containing hyphenated table names (LP: #2085554)
+
+ -- Otto Kekäläinen <otto@debian.org>  Wed, 19 Feb 2025 08:57:57 -0800
+
+mariadb (1:11.4.4-3) unstable; urgency=medium
+
+  * Set CAP_IPC_LOCK capability if possible
+  * Stop depending on obsolete libpmem-dev, re-implemented in MariaDB
+  * Clean away duplicate wsrep-provider from configuration traces
+  * Add upstream patch to ensure innodb_log_file_mmap is always visible
+  * Add patch to use the same innodb_log_file_mmap description on all systems
+
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 12 Jan 2025 14:10:40 -0800
+
+mariadb (1:11.4.4-2) unstable; urgency=medium
+
+  * Disable main.mysqld--help-aria on all architectures as if seems
+    they are all now affected by https://jira.mariadb.org/browse/MDEV-34733
+
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 21 Dec 2024 22:22:48 -0800
+
+mariadb (1:11.4.4-1) unstable; urgency=medium
+
+  [ Otto Kekäläinen ]
+  * New upstream version 11.4.4. Includes fixes for several severe regressions
+    as noted at https://mariadb.com/kb/en/mariadb-11-4-4-release-notes/. This
+    release is not known to include any CVE assigned security fixes.
+  * MariaDB 11.4.4 includes fix to crashes related to SST from older MariaDB
+    versions (Closes: #1089142)
+  * Update server trace to include new parameters and values. This includes now
+    MariaDB client parameter 'quick-max-column-width' and new MariaDB Server
+    parameters 'innodb-log-file-mmap' and 'optimizer-join-limit-pref-ratio'.
+    Also the parameters 'innodb-lru-flush-size' and
+    'innodb-purge-rseg-truncate-frequency' seems to have been removed.
+  * Update MTR skiplists based on buildd results after 1:11.4.3-1 upload, but
+    re-enable main.having_cond_pushdown fixed in latest release (MDEV-34650)
+  * Rename README.Contributor to README.source.md
+  * Update debian/patches to be compatible with `gbp pq` to avoid `quilt`.
+  * Update Lintian overrides for libmariadb-dev regarding man page syntax.
+  * Add patch to fix Lintian nag about spelling of 'allows one to' and drop one
+    patch about spelling fixes that got applied upstream.
+  * Apply `debputy reformat --style black`.
+  * Allow use of patched libfmt-dev 10.1.1 with thousands separator fixed
+    (Related: #1086722, Closes: #1088198).
+  * Add patch to revert mysqlbinlog related regression MDEV-35528
+  * To follow gbp pq practices, place DEP-3 headers at the end of patches
+  * Thanks to Jing Luo for review!
+
+  [ Phil Dibowitz ]
+  * Add some info on getting back to passwordless root (Closes: #1088133)
+
+ -- Otto Kekäläinen <otto@debian.org>  Thu, 12 Dec 2024 21:56:05 -0800
+
+mariadb (1:11.4.3-1) unstable; urgency=medium
+
+  [ Otto Kekäläinen ]
+  * New upstream version 11.4.3. Includes fixes for several severe regressions
+    as noted at https://mariadb.com/kb/en/mariadb-11-4-3-release-notes/. This
+    release is not known to include any CVE assigned security fixes.
+  * Add Lintian override for metadata_lock_info.so not linked against libc
+  * Update Lintian overrides and MTR skiplists after 11.4.3 import
+  * Update server trace to include new parameters and values
+  * Refactor import * with only required imports
+  * Import upstream debian/ changes from MDEV-33750
+  * Pre-depend on 'procps' in mariadb-server
+  * Use /usr/lib/lsb/init-functions instead of old /lib location
+  * Rewrite the NEWS item to match latest status in MariaDB 11.4.3
+  * Extend gbp.conf and update maintainer READMEs to make git-buildpackage
+    and in general building and maintaining this package easier and more
+    approachable by new contributors
+
+  [ Bastien Roucariès ]
+  * Add NEWS file
+
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 18 Aug 2024 21:59:29 -0700
+
+mariadb (1:11.4.2-4) unstable; urgency=medium
+
+  * Revert move of 'mysqld_safe' to compat package to avoid breaking pdns
+
+ -- Otto Kekäläinen <otto@debian.org>  Fri, 12 Jul 2024 20:52:32 -0700
+
+mariadb (1:11.4.2-3) unstable; urgency=medium
+
+  * Make compile_time_assert compatible with x32 (Closes: #1063738)
+  * Revert "Stop building the embedded server to save disk space"
+    (Closes: #1074670)
+
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 07 Jul 2024 21:59:40 -0700
+
+mariadb (1:11.4.2-2) unstable; urgency=medium
+
+  * Disable the 'mysql*' command deprecation warning
+  * Revert move of 'mysqldump' to compat package to avoid breaking dependencies
+  * Revert move of 'mysqladmin' to compat package to avoid breaking dependencies
+  * Use correct 1:11.0.0 version in Breaks/Replaces (Closes: #1074566)
+
+ -- Otto Kekäläinen <otto@debian.org>  Mon, 01 Jul 2024 15:41:57 -0700
+
+mariadb (1:11.4.2-1) unstable; urgency=medium
+
+  * New upstream major version 11.4.2. Includes new features as noted at
+    https://mariadb.com/kb/en/mariadb-11-4-2-release-notes/ for this
+    minor release that got announced for General Availabily and
+    https://mariadb.com/kb/en/changes-improvements-in-mariadb-11-4/
+    for an overview of what the MariaDB 11.4 series brings.
+  * Use new '/usr/share/mariadb' path instead of deprecated 'mysql' equivalent
+  * Use new 'mariadb-test' path and name instead of deprecated 'mysql-test'
+  * Use command 'mariadb' instead of deprecated 'mysql'
+  * Don't stop autopkgtest configuration-tracing on errors early
+  * Update server trace to include new parameters and values
+  * Add build/test dependency libnet-ssleay-perl
+  * Partially sync debian/ with upstream MariaDB 11.4.2
+  * Fix all Lintian errors, and more, for MariaDB 11.4.2
+  * Make transitional mariadb-server-10.5 package compatible with 11.4
+  * Stop building the embedded server to save disk space
+  * When shutting down 'mariadbd', fallback to 'mysqld'
+
+ -- Otto Kekäläinen <otto@debian.org>  Sun, 23 Jun 2024 21:46:13 -0700
+
+mariadb (1:10.11.8-1) unstable; urgency=medium
+
+  [ Otto Kekäläinen ]
+  * New upstream version 10.11.8. Includes fixes for several severe regressions
+    as noted at https://mariadb.com/kb/en/mariadb-10-11-8-release-notes/ as well
+    as security issues:
+    - CVE-2024-21096
+  * Add CMake flag to ignore libfmt exit code so cross-building works
+  * Extend skip test list for latest failures in reproducible builds on armhf
+  * Disable tests that fail on armhf when full test suite is run
+  * Remove temporary exceptions for bugs that should by now be fixed
+  * MDEV-31530 Localizations for Swahili language
+  * Update Innotop to be compatible with MariaDB 11.x series
+  * Replace use of trailing line `| \` with just `|` in Bash scripts
+  * Remove libmariadb file no longer present in MariaDB Connector C v3.3
+  * Replace autopkgtest smoke test dependency hack with arch list
+  * Update client program 'mariadb' trace to match new libmariadb v3.3
+    - New parameter 'sandbox' to fix a vulnerability and new mariadb-dump
+      output that always has the sandbox header and is backwards incompatible
+  * Update server trace to include new parameters innodb-log-spin-wait-delay
+    and innodb-snapshot-isolation
+  [ Michael Biebl ]
+  * Ensure debconf database is purged after it has been used in postrm
+
+  [ Svante Signell ]
+  * Make hurd-i386 build fully pass (Closes: #1069094)
+
+
+ -- Otto Kekäläinen <otto@debian.org>  Thu, 16 May 2024 22:02:04 -0700
+
+mariadb (1:10.11.7-4) unstable; urgency=medium
+
+  [ Michael Biebl ]
+  * Drop unnecessary mariadb-server.prerm (Closes: #1067491)
+  * Rely on dh_installsystemd to stop the service in postrm
+
+  [ Otto Kekäläinen ]
+  * Remove direct dependencies on libcurl4 (Closes: #1068403, #1068404)
+  * Make tests compatible with OpenSSL 3.2.0
+
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 13 Apr 2024 11:07:08 -0700
+
+mariadb (1:10.11.7-3) unstable; urgency=medium
+
+  * Add 'dpkg-dev (>= 1.22.5)' to Build-Depends for time_t transition
+    (Closes: #1065275)
+
+ -- Otto Kekäläinen <otto@debian.org>  Sat, 02 Mar 2024 08:26:26 -0800
+
+mariadb (1:10.11.7-2) unstable; urgency=medium
+
+  [ Graham Inggs ]
+  * Rename libraries for 64-bit time_t transition (Closes: #1062841)
+
+  [ Otto Kekäläinen ]
+  * Salsa-CI: Adopt new libmariadbd19t64 library name in CI
+  * Remove obsolete Lintian override:
+    package-supports-alternative-init-but-no-init.d-script
+  * Disable more tests not passing for sparc64 on Debian
+  * Add patch to fix hurd-i386 build failure (Closes: #1063739)
+  * Add patch to partially revert upstream c432c9ef (Closes: #1063738)
+  * Disable table_value_constr failing on armhf on Launchpad
+  * Backport patch for MDEV-32975 (collation fix for PHP connector)
+
+ -- Otto Kekäläinen <otto@debian.org>  Fri, 01 Mar 2024 17:43:11 -0800
+
+mariadb (1:10.11.7-1) unstable; urgency=medium
+
+  [ Otto Kekäläinen ]
+  * New upstream version 10.11.7. Includes fixes for several regressions
+    as noted at https://mariadb.com/kb/en/mariadb-10-11-7-release-notes/
+  * Add missing ${misc:Depends} to Depends for mariadb-server-10.5
+  * Re-export upstream signing key without extra signatures
+  * Remove field Priority on binary package mariadb-server-10.5 that duplicates
+    source
+  * Update debian/copyright for 2024
+  * Delete test plugin pam_mariadb_mtr.so to keep mariadb-test-data clean
+  * Clean away unused Lintian overrides
+  * Remove unneeded CMAKE_SYSTEM_PROCESSOR from debian/rules
+  * Add patch to skip building AUTH_SOCKET on Hurd (Related: #1006531)
+  * Use Pre-Depends to ensure init-system-helpers is present
+
+  [ Michael Biebl ]
+  * Install PAM module and systemd files into /usr (Closes: #1061348)
+  * Install .service files via .install and let dh_installinit/dh_systemd
+    generate the maintscript code
+  * Switch to dh_installsystemd and debhelper compat 13
+
+ -- Otto Kekäläinen <otto@debian.org>  Tue, 06 Feb 2024 20:14:49 -0800
+
+mariadb (1:10.11.6-2) unstable; urgency=medium
+
+  [ Otto Kekäläinen ]
+  * Make the transitional dummy package description explicit
+  * Ensure 'clean' target works
+  * Use upstream patch to fix subselect test regressions (Closes: #1059904)
+  * Disable innodb_ext_key crashing on ppc64el (Related: #1059904)
+  * Apply upstream patch to use RDTIME in RISC-V (Closes: #1060007)
+ -- Otto Kekäläinen <otto@debian.org>  Fri, 05 Jan 2024 16:32:12 +0800
 
 mariadb (1:10.11.6-1) unstable; urgency=medium
 

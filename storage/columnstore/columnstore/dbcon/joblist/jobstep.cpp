@@ -91,6 +91,7 @@ JobStep::JobStep(const JobInfo& j)
  , fProgress(0)
  , fStartTime(-1)
  , fTimeZone(j.timeZone)
+ , fMaxPmJoinResultCount(j.maxPmJoinResultCount)
 {
   QueryTeleServerParms tsp;
   string teleServerHost(Config::makeConfig()->getConfig("QueryTele", "Host"));
@@ -244,4 +245,3 @@ void JobStep::handleException(std::exception_ptr e, const int errorCode, const u
 }
 
 }  // namespace joblist
-// vim:ts=4 sw=4:

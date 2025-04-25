@@ -23,21 +23,20 @@
 #include "sql_class.h"
 #include "item.h"
 #include "table.h"
-#include "vers_string.h"
 
 /* System Versioning: TRT_TRX_ID(), TRT_COMMIT_ID(), TRT_BEGIN_TS(), TRT_COMMIT_TS(), TRT_ISO_LEVEL() */
 template <TR_table::field_id_t TRT_FIELD>
 class Create_func_trt : public Create_native_func
 {
 public:
-  virtual Item *create_native(THD *thd, const LEX_CSTRING *name,
-                              List<Item> *item_list);
+  Item *create_native(THD *thd, const LEX_CSTRING *name,
+                              List<Item> *item_list) override;
 
   static Create_func_trt<TRT_FIELD> s_singleton;
 
 protected:
-  Create_func_trt<TRT_FIELD>() = default;
-  virtual ~Create_func_trt<TRT_FIELD>() = default;
+  Create_func_trt() = default;
+  ~Create_func_trt() override = default;
 };
 
 template<TR_table::field_id_t TRT_FIELD>
@@ -104,8 +103,8 @@ template <class Item_func_trt_trx_seesX>
 class Create_func_trt_trx_sees : public Create_native_func
 {
 public:
-  virtual Item *create_native(THD *thd, const LEX_CSTRING *name,
-                              List<Item> *item_list)
+  Item *create_native(THD *thd, const LEX_CSTRING *name,
+                              List<Item> *item_list) override
   {
     Item *func= NULL;
     int arg_count= 0;
@@ -132,8 +131,8 @@ public:
   static Create_func_trt_trx_sees<Item_func_trt_trx_seesX> s_singleton;
 
 protected:
-  Create_func_trt_trx_sees<Item_func_trt_trx_seesX>() = default;
-  virtual ~Create_func_trt_trx_sees<Item_func_trt_trx_seesX>() = default;
+  Create_func_trt_trx_sees() = default;
+  ~Create_func_trt_trx_sees() override = default;
 };
 
 template<class X>

@@ -21,16 +21,11 @@
  *
  ***********************************************************************/
 /** @file */
-#ifndef MARKPARTITIONPROCESSOR_H
-#define MARKPARTITIONPROCESSOR_H
+#pragma once
 
 #include "ddlpackageprocessor.h"
 
-#if defined(_MSC_VER) && defined(DDLPKGPROC_DLLEXPORT)
-#define EXPORT __declspec(dllexport)
-#else
 #define EXPORT
-#endif
 
 namespace ddlpackageprocessor
 {
@@ -38,24 +33,22 @@ namespace ddlpackageprocessor
  * for interacting with the Write Engine
  * to process create table ddl statements.
  */
-class MarkPartitionProcessor : public DDLPackageProcessor
+class MarkPartitionProcessor : public DDLPackageProcessor, FormatStatementString
 {
  public:
   MarkPartitionProcessor(BRM::DBRM* aDbrm) : DDLPackageProcessor(aDbrm)
   {
   }
+
+ protected:
+ private:
   /** @brief process a create table statement
    *
    * @param createTableStmt the CreateTableStatement
    */
-  EXPORT DDLResult processPackage(ddlpackage::MarkPartitionStatement& MarkPartitionStmt);
-
- protected:
- private:
+  DDLResult processPackageInternal(ddlpackage::SqlStatement* MarkPartitionStmt);
 };
 
 }  // namespace ddlpackageprocessor
 
 #undef EXPORT
-
-#endif  // MARKPARTITIONPROCESSOR_H

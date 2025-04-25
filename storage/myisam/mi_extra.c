@@ -69,7 +69,7 @@ int mi_extra(MI_INFO *info, enum ha_extra_function function, void *extra_arg)
     }
     if (info->s->file_map) /* Don't use cache if mmap */
       break;
-#if defined(HAVE_MMAP) && defined(HAVE_MADVISE)
+#if defined(HAVE_MMAP) && defined(HAVE_MADVISE) && !defined(HAVE_valgrind)
     if ((share->options & HA_OPTION_COMPRESS_RECORD))
     {
       mysql_mutex_lock(&share->intern_lock);
@@ -155,7 +155,7 @@ int mi_extra(MI_INFO *info, enum ha_extra_function function, void *extra_arg)
       error=end_io_cache(&info->rec_cache);
       /* Sergei will insert full text index caching here */
     }
-#if defined(HAVE_MMAP) && defined(HAVE_MADVISE)
+#if defined(HAVE_MMAP) && defined(HAVE_MADVISE)  && !defined(HAVE_valgrind)
     if (info->opt_flag & MEMMAP_USED)
       madvise((char*) share->file_map, share->state.state.data_file_length,
               MADV_RANDOM);
@@ -225,16 +225,9 @@ int mi_extra(MI_INFO *info, enum ha_extra_function function, void *extra_arg)
     }
     if (mi_is_any_key_active(share->state.key_map))
     {
-      MI_KEYDEF *key=share->keyinfo;
-      uint i;
-      for (i=0 ; i < share->base.keys ; i++,key++)
-      {
-        if (!(key->flag & HA_NOSAME) && info->s->base.auto_key != i+1)
-        {
-          mi_clear_key_active(share->state.key_map, i);
-          info->update|= HA_STATE_CHANGED;
-        }
-      }
+      if (share->state.key_map != *(ulonglong*)extra_arg)
+        info->update|= HA_STATE_CHANGED;
+      share->state.key_map= *(ulonglong*)extra_arg;
 
       if (!share->changed)
       {
@@ -328,7 +321,7 @@ int mi_extra(MI_INFO *info, enum ha_extra_function function, void *extra_arg)
     mi_extra_keyflag(info, function);
     break;
   case HA_EXTRA_MMAP:
-#ifdef HAVE_MMAP
+#if defined(HAVE_MMAP) && !defined(HAVE_valgrind)
     mysql_mutex_lock(&share->intern_lock);
     /*
       Memory map the data file if it is not already mapped. It is safe
@@ -376,16 +369,16 @@ void mi_set_index_cond_func(MI_INFO *info, index_cond_func_t func,
 {
   info->index_cond_func= func;
   info->index_cond_func_arg= func_arg;
+  info->has_cond_pushdown= (info->index_cond_func || info->rowid_filter_func);
 }
 
 void mi_set_rowid_filter_func(MI_INFO *info,
                               rowid_filter_func_t check_func,
-                              rowid_filter_is_active_func_t is_active_func,
                               void *func_arg)
 {
   info->rowid_filter_func= check_func;
-  info->rowid_filter_is_active_func= is_active_func;
   info->rowid_filter_func_arg= func_arg;
+  info->has_cond_pushdown= (info->index_cond_func || info->rowid_filter_func);
 }
 
 /*

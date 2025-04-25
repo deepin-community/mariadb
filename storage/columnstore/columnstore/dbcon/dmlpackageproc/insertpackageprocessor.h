@@ -22,8 +22,7 @@
  ***********************************************************************/
 /** @file */
 
-#ifndef INSERTPACKAGEPROCESSOR_H
-#define INSERTPACKAGEPROCESSOR_H
+#pragma once
 #include <string>
 #include <vector>
 #include <boost/any.hpp>
@@ -32,11 +31,7 @@
 #include "dataconvert.h"
 #include "we_chunkmanager.h"
 
-#if defined(_MSC_VER) && defined(DMLPKGPROC_DLLEXPORT)
-#define EXPORT __declspec(dllexport)
-#else
 #define EXPORT
-#endif
 
 namespace dmlpackageprocessor
 {
@@ -50,18 +45,12 @@ class InsertPackageProcessor : public DMLPackageProcessor
   InsertPackageProcessor(BRM::DBRM* aDbrm, uint32_t sid) : DMLPackageProcessor(aDbrm, sid)
   {
   }
-  /** @brief process an InsertDMLPackage
-   *
-   * @param cpackage the InsertDMLPackage to process
-   */
-  EXPORT DMLResult processPackage(dmlpackage::CalpontDMLPackage& cpackage);
 
  protected:
  private:
+  DMLResult processPackageInternal(dmlpackage::CalpontDMLPackage& cpackage) override;
 };
 
 }  // namespace dmlpackageprocessor
 
 #undef EXPORT
-
-#endif  // INSERTPACKAGEPROCESSOR_H

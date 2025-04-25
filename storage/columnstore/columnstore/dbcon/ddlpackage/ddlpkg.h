@@ -35,8 +35,7 @@
  *
  */
 
-#ifndef DDLPACKAGE_H
-#define DDLPACKAGE_H
+#pragma once
 
 #include <vector>
 #include <string>
@@ -47,11 +46,7 @@
 #include "bytestream.h"
 #include "logicalpartition.h"
 
-#if defined(_MSC_VER) && defined(xxxDDLPKG_DLLEXPORT)
-#define EXPORT __declspec(dllexport)
-#else
 #define EXPORT
-#endif
 
 namespace ddlpackage
 {
@@ -337,7 +332,8 @@ enum DDL_SERIAL_TYPE
   DDL_TRUNC_TABLE_STATEMENT,
   DDL_MARK_PARTITION_STATEMENT,
   DDL_RESTORE_PARTITION_STATEMENT,
-  DDL_DROP_PARTITION_STATEMENT
+  DDL_DROP_PARTITION_STATEMENT,
+  DDL_DEBUG_STATEMENT
 };
 
 /** @brief An abstract base for TableDef, ColumnDef, ...
@@ -933,13 +929,13 @@ struct AtaRenameColumn : public AlterTableAction
 struct ColumnType
 {
   /** @brief Deserialize from ByteStream */
-  EXPORT virtual int unserialize(messageqcpp::ByteStream& bs);
+  EXPORT int unserialize(messageqcpp::ByteStream& bs);
 
   /** @brief Serialize to ByteStream */
-  EXPORT virtual int serialize(messageqcpp::ByteStream& bs);
+  EXPORT int serialize(messageqcpp::ByteStream& bs);
 
   /** @brief For deserialization. */
-  ColumnType() : fCharset(NULL), fExplicitLength(false)
+  ColumnType() : fCharset(NULL), fCollate(NULL), fCharsetNum(0), fExplicitLength(false)
   {
   }
 
@@ -983,6 +979,10 @@ struct ColumnType
 
   /** @brief Column charset (CHAR, VARCHAR and TEXT only) */
   const char* fCharset;
+  /** @brief Column collation (CHAR, VARCHAR and TEXT only) */
+  const char* fCollate;
+  /** @brief Column charset number (CHAR, VARCHAR and TEXT only) */
+  uint32_t fCharsetNum;
 
   /** @brief Is the TEXT column has explicit defined length, ie TEXT(1717) */
   bool fExplicitLength;
@@ -1320,8 +1320,10 @@ struct AlterTableStatement : public SqlStatement
 
   QualifiedName* fTableName;
   AlterTableActionList fActions;
+
  private:
   long fTimeZone;
+
  public:
 };
 
@@ -1440,6 +1442,30 @@ struct DropTableStatement : public SqlStatement
 
   QualifiedName* fTableName;
   bool fCascade;
+};
+
+/** @brief DebugStatement
+ */
+struct DebugDDLStatement : public SqlStatement
+{
+  /** @brief Deserialize from ByteStream */
+  EXPORT virtual int unserialize(messageqcpp::ByteStream& bs);
+
+  /** @brief Serialize to ByteStream */
+  EXPORT virtual int serialize(messageqcpp::ByteStream& bs);
+
+  DebugDDLStatement(uint32_t debugLevel);
+
+  EXPORT DebugDDLStatement();
+
+  /** @brief Dump to stdout. */
+  EXPORT std::ostream& put(std::ostream& os) const;
+
+  virtual ~DebugDDLStatement()
+  {
+  }
+
+  uint32_t fDebugLevel;
 };
 
 /** @brief TruncTableStatement represents the drop table operation
@@ -1570,5 +1596,3 @@ struct DropPartitionStatement : public SqlStatement
 }  // namespace ddlpackage
 
 #undef EXPORT
-
-#endif

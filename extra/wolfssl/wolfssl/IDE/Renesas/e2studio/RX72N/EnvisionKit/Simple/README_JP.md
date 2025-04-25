@@ -32,10 +32,10 @@ IDEとしてe2 studioを使用するものです。本ドキュメントでは�
 |:--|:--|
 |評価ボード|RX72N EnvisionKit|
 |Device|R5F572NNHxFB|
-|IDE| Renesas e2Studio Version:2022-07 |
+|IDE| Renesas e2Studio Version:2024-01.1 (24.1.1) |
 |エミュレーター| E2エミュレーターLite |
-|Toolchain|CCRX v3.03.00|
-|TSIP| TSIP v1.15|
+|Toolchain|CCRX v3.06.00|
+|TSIP| TSIP v1.21|
 
 
 本サンプルプログラムのプロジェクトには以下のFITコンポーネントを使用する設定ファイルが用意されています。
@@ -51,7 +51,7 @@ IDEとしてe2 studioを使用するものです。本ドキュメントでは�
 |Generic system timer for RX MCUs|1.01|r_sys_time_rx|
 |TCP/IP protocol stack[M3S-T4-Tiny] - RX Ethernet Driver Interface|1.09|r_t4_driver_rx|
 |TCP/IP protocol stack[M3S-T4-Tiny] for Renesas MCUs|2.10|r_t4_rx|
-|TSIP(Trusted Secure IP) driver|1.15.l|r_tsip_rx|
+|TSIP(Trusted Secure IP) driver|1.21|r_tsip_rx|
 
 
 ## 3. サンプルプログラムプロジェクトのe2Studioへのインポート
@@ -212,7 +212,7 @@ TSIPドライバがサポートする暗号スイートは下記の一覧にな�
 |:--|:--|:--|
 |TLS1.3|RSA/ECDSA certificate|  |
 |||TLS_AES_128_GCM_SHA256|
-|||TLS_AES_128_CCM_SHA256| 
+|||TLS_AES_128_CCM_SHA256|
 |TLS1.2|RSA certificate|
 |||TLS_RSA_WITH_AES_128_CBC_SHA|
 |||TLS_RSA_WITH_AES_256_CBC_SHA|
@@ -237,7 +237,7 @@ $ ./configure CFLAGS="-DWOLFSSL_STATIC_RSA"
 $ ./examples/server/server -b -i
 ```
 
-実行すると、下記のようなメッセージがRenesas Debug Virtual Consol に表示されます。
+実行すると、下記のようなメッセージがRenesas Debug Virtual Console に表示されます。
 
 ```
 cipher : ECDHE-RSA-AES128-GCM-SHA256
@@ -298,7 +298,7 @@ SSL curve name is SECP256R1
 hello wolfssl!
 ```
 
-Renesas Debug Virtual Consol に下記のように表示されていれば、ボード上の TLS サーバーとクライアント間でTLS通信が行われています。
+Renesas Debug Virtual Console に下記のように表示されていれば、ボード上の TLS サーバーとクライアント間でTLS通信が行われています。
 ```
 Received: hello wolfssl!
 ```

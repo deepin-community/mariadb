@@ -60,6 +60,14 @@ then "Open Terminal".
 
 ## Build and Run wolfCrypt Test Application
 
+If you want to run build apps without running `west zephyr-export` then it is
+possible by setting the `CMAKE_PREFIX_PATH` variable to the location of the
+zephyr sdk and building from the `zephyr` directory. For example:
+
+```
+CMAKE_PREFIX_PATH=/path/to/zephyr-sdk-<VERSION> west build -p always -b qemu_x86 ../modules/crypto/wolfssl/zephyr/samples/wolfssl_test/
+```
+
 build and execute `wolfssl_test`
 
 ```
@@ -93,4 +101,13 @@ cd [zephyrproject]
 west build -p auto -b qemu_x86 modules/crypto/wolfssl/zephyr/samples/wolfssl_tls_thread
 west build -t run
 ```
+
+## How to setup wolfSSL support for Zephyr TLS Sockets and RNG
+
+wolfSSL can also be used as the underlying implementation for the default Zephyr TLS socket interface.
+With this enabled, all existing applications using the Zephyr TLS sockets will now use wolfSSL inside
+for all TLS operations. This will also enable wolfSSL as the default RNG implementation. To enable this
+feature, use the patch file and instructions found here:
+
+https://github.com/wolfSSL/osp/tree/master/zephyr
 

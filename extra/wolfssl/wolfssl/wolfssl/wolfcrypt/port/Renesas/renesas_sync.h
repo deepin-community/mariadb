@@ -1,6 +1,6 @@
 /* renesas_sync.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -25,8 +25,8 @@
 #ifdef HAVE_RENESAS_SYNC
 
 struct WOLFSSL;
-struct User_SCEPKCbInfo;
-extern User_SCEPKCbInfo guser_PKCbInfo;
+struct FSPSM_ST;
+extern FSPSM_ST guser_PKCbInfo;
 
 WOLFSSL_API int wc_CryptoCb_CryptInitRenesasCmn(struct WOLFSSL* ssl, void* ctx);
 WOLFSSL_API void wc_CryptoCb_CleanupRenesasCmn(int* id);

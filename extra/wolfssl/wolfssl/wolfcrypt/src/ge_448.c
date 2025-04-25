@@ -1,6 +1,6 @@
 /* ge_448.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -77,6 +77,14 @@ static const ge448_p2 ed448_base = {
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
 };
 
+static const word8 ed448_order[56] = {
+    0xf3, 0x44, 0x58, 0xab, 0x92, 0xc2, 0x78, 0x23, 0x55, 0x8f, 0xc5, 0x8d,
+    0x72, 0xc2, 0x6c, 0x21, 0x90, 0x36, 0xd6, 0xae, 0x49, 0xdb, 0x4e, 0xc4,
+    0xe9, 0x23, 0xca, 0x7c, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3f,
+};
+
 /* Part of order of ed448 that needs tp be multiplied when reducing */
 static const word8 ed448_order_mul[56] = {
     0x0d, 0xbb, 0xa7, 0x54, 0x6d, 0x3d, 0x87, 0xdc, 0xaa, 0x70, 0x3a, 0x72,
@@ -86,6 +94,8 @@ static const word8 ed448_order_mul[56] = {
 
 /* Reduce scalar mod the order of the curve.
  * Scalar Will be 114 bytes.
+ *
+ * Only performs a weak reduce.
  *
  * b  [in]  Scalar to reduce.
  */
@@ -149,6 +159,7 @@ void sc448_muladd(byte* r, const byte* a, const byte* b, const byte* d)
     int i, j;
     word32 t[112];
     word8 o;
+    sword16 u;
 
     /* a * b + d */
     for (i = 0; i < 56; i++)
@@ -200,6 +211,16 @@ void sc448_muladd(byte* r, const byte* a, const byte* b, const byte* d)
     }
     r[i] = t[i] & 0xff;
     r[i+1] = 0;
+    /* Reduce to mod order. */
+    u = 0;
+    for (i = 0; i < 56; i++) {
+        u += r[i] - ed448_order[i]; u >>= 8;
+    }
+    o = 0 - (u >= 0);
+    u = 0;
+    for (i = 0; i < 56; i++) {
+        u += r[i] - (ed448_order[i] & o); r[i] = u & 0xff; u >>= 8;
+    }
 }
 
 /* Double the point on the Twisted Edwards curve. r = 2.p
@@ -342,9 +363,10 @@ static void ge448_scalarmult(ge448_p2* h, const ge448_p2* p, const byte* a)
  * r  [in]  Point to hold result.
  * a  [in]  Scalar to multiply by.
  */
-void ge448_scalarmult_base(ge448_p2* h, const byte* a)
+int ge448_scalarmult_base(ge448_p2* h, const byte* a)
 {
     ge448_scalarmult(h, &ed448_base, a);
+    return 0;
 }
 
 /* Perform a scalar multplication of the base point and public point.
@@ -430,6 +452,8 @@ int ge448_from_bytes_negate_vartime(ge448_p2 *r, const byte *b)
 /* Reduce scalar mod the order of the curve.
  * Scalar Will be 114 bytes.
  *
+ * Only performs a weak reduce.
+ *
  * b  [in]  Scalar to reduce.
  */
 void sc448_reduce(byte* b)
@@ -440,120 +464,120 @@ void sc448_reduce(byte* b)
     word64 o;
 
     /* Load from bytes */
-    t[ 0] =  ((sword64) (b[ 0]) <<  0)
-          |  ((sword64) (b[ 1]) <<  8)
-          |  ((sword64) (b[ 2]) << 16)
-          |  ((sword64) (b[ 3]) << 24)
-          |  ((sword64) (b[ 4]) << 32)
-          |  ((sword64) (b[ 5]) << 40)
-          |  ((sword64) (b[ 6]) << 48);
-    t[ 1] =  ((sword64) (b[ 7]) <<  0)
-          |  ((sword64) (b[ 8]) <<  8)
-          |  ((sword64) (b[ 9]) << 16)
-          |  ((sword64) (b[10]) << 24)
-          |  ((sword64) (b[11]) << 32)
-          |  ((sword64) (b[12]) << 40)
-          |  ((sword64) (b[13]) << 48);
-    t[ 2] =  ((sword64) (b[14]) <<  0)
-          |  ((sword64) (b[15]) <<  8)
-          |  ((sword64) (b[16]) << 16)
-          |  ((sword64) (b[17]) << 24)
-          |  ((sword64) (b[18]) << 32)
-          |  ((sword64) (b[19]) << 40)
-          |  ((sword64) (b[20]) << 48);
-    t[ 3] =  ((sword64) (b[21]) <<  0)
-          |  ((sword64) (b[22]) <<  8)
-          |  ((sword64) (b[23]) << 16)
-          |  ((sword64) (b[24]) << 24)
-          |  ((sword64) (b[25]) << 32)
-          |  ((sword64) (b[26]) << 40)
-          |  ((sword64) (b[27]) << 48);
-    t[ 4] =  ((sword64) (b[28]) <<  0)
-          |  ((sword64) (b[29]) <<  8)
-          |  ((sword64) (b[30]) << 16)
-          |  ((sword64) (b[31]) << 24)
-          |  ((sword64) (b[32]) << 32)
-          |  ((sword64) (b[33]) << 40)
-          |  ((sword64) (b[34]) << 48);
-    t[ 5] =  ((sword64) (b[35]) <<  0)
-          |  ((sword64) (b[36]) <<  8)
-          |  ((sword64) (b[37]) << 16)
-          |  ((sword64) (b[38]) << 24)
-          |  ((sword64) (b[39]) << 32)
-          |  ((sword64) (b[40]) << 40)
-          |  ((sword64) (b[41]) << 48);
-    t[ 6] =  ((sword64) (b[42]) <<  0)
-          |  ((sword64) (b[43]) <<  8)
-          |  ((sword64) (b[44]) << 16)
-          |  ((sword64) (b[45]) << 24)
-          |  ((sword64) (b[46]) << 32)
-          |  ((sword64) (b[47]) << 40)
-          |  ((sword64) (b[48]) << 48);
-    t[ 7] =  ((sword64) (b[49]) <<  0)
-          |  ((sword64) (b[50]) <<  8)
-          |  ((sword64) (b[51]) << 16)
-          |  ((sword64) (b[52]) << 24)
-          |  ((sword64) (b[53]) << 32)
-          |  ((sword64) (b[54]) << 40)
-          |  ((sword64) (b[55]) << 48);
-    t[ 8] =  ((sword64) (b[56]) <<  0)
-          |  ((sword64) (b[57]) <<  8)
-          |  ((sword64) (b[58]) << 16)
-          |  ((sword64) (b[59]) << 24)
-          |  ((sword64) (b[60]) << 32)
-          |  ((sword64) (b[61]) << 40)
-          |  ((sword64) (b[62]) << 48);
-    t[ 9] =  ((sword64) (b[63]) <<  0)
-          |  ((sword64) (b[64]) <<  8)
-          |  ((sword64) (b[65]) << 16)
-          |  ((sword64) (b[66]) << 24)
-          |  ((sword64) (b[67]) << 32)
-          |  ((sword64) (b[68]) << 40)
-          |  ((sword64) (b[69]) << 48);
-    t[10] =  ((sword64) (b[70]) <<  0)
-          |  ((sword64) (b[71]) <<  8)
-          |  ((sword64) (b[72]) << 16)
-          |  ((sword64) (b[73]) << 24)
-          |  ((sword64) (b[74]) << 32)
-          |  ((sword64) (b[75]) << 40)
-          |  ((sword64) (b[76]) << 48);
-    t[11] =  ((sword64) (b[77]) <<  0)
-          |  ((sword64) (b[78]) <<  8)
-          |  ((sword64) (b[79]) << 16)
-          |  ((sword64) (b[80]) << 24)
-          |  ((sword64) (b[81]) << 32)
-          |  ((sword64) (b[82]) << 40)
-          |  ((sword64) (b[83]) << 48);
-    t[12] =  ((sword64) (b[84]) <<  0)
-          |  ((sword64) (b[85]) <<  8)
-          |  ((sword64) (b[86]) << 16)
-          |  ((sword64) (b[87]) << 24)
-          |  ((sword64) (b[88]) << 32)
-          |  ((sword64) (b[89]) << 40)
-          |  ((sword64) (b[90]) << 48);
-    t[13] =  ((sword64) (b[91]) <<  0)
-          |  ((sword64) (b[92]) <<  8)
-          |  ((sword64) (b[93]) << 16)
-          |  ((sword64) (b[94]) << 24)
-          |  ((sword64) (b[95]) << 32)
-          |  ((sword64) (b[96]) << 40)
-          |  ((sword64) (b[97]) << 48);
-    t[14] =  ((sword64) (b[98]) <<  0)
-          |  ((sword64) (b[99]) <<  8)
-          |  ((sword64) (b[100]) << 16)
-          |  ((sword64) (b[101]) << 24)
-          |  ((sword64) (b[102]) << 32)
-          |  ((sword64) (b[103]) << 40)
-          |  ((sword64) (b[104]) << 48);
-    t[15] =  ((sword64) (b[105]) <<  0)
-          |  ((sword64) (b[106]) <<  8)
-          |  ((sword64) (b[107]) << 16)
-          |  ((sword64) (b[108]) << 24)
-          |  ((sword64) (b[109]) << 32)
-          |  ((sword64) (b[110]) << 40)
-          |  ((sword64) (b[111]) << 48);
-    t[16] =  ((sword64) (b[112]) <<  0)
-          |  ((sword64) (b[113]) <<  8);
+    t[ 0] =  (word64)((sword64) (b[ 0]) <<  0)
+          |  (word64)((sword64) (b[ 1]) <<  8)
+          |  (word64)((sword64) (b[ 2]) << 16)
+          |  (word64)((sword64) (b[ 3]) << 24)
+          |  (word64)((sword64) (b[ 4]) << 32)
+          |  (word64)((sword64) (b[ 5]) << 40)
+          |  (word64)((sword64) (b[ 6]) << 48);
+    t[ 1] =  (word64)((sword64) (b[ 7]) <<  0)
+          |  (word64)((sword64) (b[ 8]) <<  8)
+          |  (word64)((sword64) (b[ 9]) << 16)
+          |  (word64)((sword64) (b[10]) << 24)
+          |  (word64)((sword64) (b[11]) << 32)
+          |  (word64)((sword64) (b[12]) << 40)
+          |  (word64)((sword64) (b[13]) << 48);
+    t[ 2] =  (word64)((sword64) (b[14]) <<  0)
+          |  (word64)((sword64) (b[15]) <<  8)
+          |  (word64)((sword64) (b[16]) << 16)
+          |  (word64)((sword64) (b[17]) << 24)
+          |  (word64)((sword64) (b[18]) << 32)
+          |  (word64)((sword64) (b[19]) << 40)
+          |  (word64)((sword64) (b[20]) << 48);
+    t[ 3] =  (word64)((sword64) (b[21]) <<  0)
+          |  (word64)((sword64) (b[22]) <<  8)
+          |  (word64)((sword64) (b[23]) << 16)
+          |  (word64)((sword64) (b[24]) << 24)
+          |  (word64)((sword64) (b[25]) << 32)
+          |  (word64)((sword64) (b[26]) << 40)
+          |  (word64)((sword64) (b[27]) << 48);
+    t[ 4] =  (word64)((sword64) (b[28]) <<  0)
+          |  (word64)((sword64) (b[29]) <<  8)
+          |  (word64)((sword64) (b[30]) << 16)
+          |  (word64)((sword64) (b[31]) << 24)
+          |  (word64)((sword64) (b[32]) << 32)
+          |  (word64)((sword64) (b[33]) << 40)
+          |  (word64)((sword64) (b[34]) << 48);
+    t[ 5] =  (word64)((sword64) (b[35]) <<  0)
+          |  (word64)((sword64) (b[36]) <<  8)
+          |  (word64)((sword64) (b[37]) << 16)
+          |  (word64)((sword64) (b[38]) << 24)
+          |  (word64)((sword64) (b[39]) << 32)
+          |  (word64)((sword64) (b[40]) << 40)
+          |  (word64)((sword64) (b[41]) << 48);
+    t[ 6] =  (word64)((sword64) (b[42]) <<  0)
+          |  (word64)((sword64) (b[43]) <<  8)
+          |  (word64)((sword64) (b[44]) << 16)
+          |  (word64)((sword64) (b[45]) << 24)
+          |  (word64)((sword64) (b[46]) << 32)
+          |  (word64)((sword64) (b[47]) << 40)
+          |  (word64)((sword64) (b[48]) << 48);
+    t[ 7] =  (word64)((sword64) (b[49]) <<  0)
+          |  (word64)((sword64) (b[50]) <<  8)
+          |  (word64)((sword64) (b[51]) << 16)
+          |  (word64)((sword64) (b[52]) << 24)
+          |  (word64)((sword64) (b[53]) << 32)
+          |  (word64)((sword64) (b[54]) << 40)
+          |  (word64)((sword64) (b[55]) << 48);
+    t[ 8] =  (word64)((sword64) (b[56]) <<  0)
+          |  (word64)((sword64) (b[57]) <<  8)
+          |  (word64)((sword64) (b[58]) << 16)
+          |  (word64)((sword64) (b[59]) << 24)
+          |  (word64)((sword64) (b[60]) << 32)
+          |  (word64)((sword64) (b[61]) << 40)
+          |  (word64)((sword64) (b[62]) << 48);
+    t[ 9] =  (word64)((sword64) (b[63]) <<  0)
+          |  (word64)((sword64) (b[64]) <<  8)
+          |  (word64)((sword64) (b[65]) << 16)
+          |  (word64)((sword64) (b[66]) << 24)
+          |  (word64)((sword64) (b[67]) << 32)
+          |  (word64)((sword64) (b[68]) << 40)
+          |  (word64)((sword64) (b[69]) << 48);
+    t[10] =  (word64)((sword64) (b[70]) <<  0)
+          |  (word64)((sword64) (b[71]) <<  8)
+          |  (word64)((sword64) (b[72]) << 16)
+          |  (word64)((sword64) (b[73]) << 24)
+          |  (word64)((sword64) (b[74]) << 32)
+          |  (word64)((sword64) (b[75]) << 40)
+          |  (word64)((sword64) (b[76]) << 48);
+    t[11] =  (word64)((sword64) (b[77]) <<  0)
+          |  (word64)((sword64) (b[78]) <<  8)
+          |  (word64)((sword64) (b[79]) << 16)
+          |  (word64)((sword64) (b[80]) << 24)
+          |  (word64)((sword64) (b[81]) << 32)
+          |  (word64)((sword64) (b[82]) << 40)
+          |  (word64)((sword64) (b[83]) << 48);
+    t[12] =  (word64)((sword64) (b[84]) <<  0)
+          |  (word64)((sword64) (b[85]) <<  8)
+          |  (word64)((sword64) (b[86]) << 16)
+          |  (word64)((sword64) (b[87]) << 24)
+          |  (word64)((sword64) (b[88]) << 32)
+          |  (word64)((sword64) (b[89]) << 40)
+          |  (word64)((sword64) (b[90]) << 48);
+    t[13] =  (word64)((sword64) (b[91]) <<  0)
+          |  (word64)((sword64) (b[92]) <<  8)
+          |  (word64)((sword64) (b[93]) << 16)
+          |  (word64)((sword64) (b[94]) << 24)
+          |  (word64)((sword64) (b[95]) << 32)
+          |  (word64)((sword64) (b[96]) << 40)
+          |  (word64)((sword64) (b[97]) << 48);
+    t[14] =  (word64)((sword64) (b[98]) <<  0)
+          |  (word64)((sword64) (b[99]) <<  8)
+          |  (word64)((sword64) (b[100]) << 16)
+          |  (word64)((sword64) (b[101]) << 24)
+          |  (word64)((sword64) (b[102]) << 32)
+          |  (word64)((sword64) (b[103]) << 40)
+          |  (word64)((sword64) (b[104]) << 48);
+    t[15] =  (word64)((sword64) (b[105]) <<  0)
+          |  (word64)((sword64) (b[106]) <<  8)
+          |  (word64)((sword64) (b[107]) << 16)
+          |  (word64)((sword64) (b[108]) << 24)
+          |  (word64)((sword64) (b[109]) << 32)
+          |  (word64)((sword64) (b[110]) << 40)
+          |  (word64)((sword64) (b[111]) << 48);
+    t[16] =  (word64)((sword64) (b[112]) <<  0)
+          |  (word64)((sword64) (b[113]) <<  8);
 
     /* Mod curve order */
     /* 2^446 - 0x8335dc163bb124b65129c96fde933d8d723a70aadc873d6d54a7bb0d */
@@ -648,62 +672,62 @@ void sc448_reduce(byte* b)
     o = d[ 6] >> 56; d[ 7] += o; d[ 6] = d[ 6] & 0xffffffffffffff;
 
     /* Convert to bytes */
-    b[ 0] = (d[0 ] >>  0);
-    b[ 1] = (d[0 ] >>  8);
-    b[ 2] = (d[0 ] >> 16);
-    b[ 3] = (d[0 ] >> 24);
-    b[ 4] = (d[0 ] >> 32);
-    b[ 5] = (d[0 ] >> 40);
-    b[ 6] = (d[0 ] >> 48);
-    b[ 7] = (d[1 ] >>  0);
-    b[ 8] = (d[1 ] >>  8);
-    b[ 9] = (d[1 ] >> 16);
-    b[10] = (d[1 ] >> 24);
-    b[11] = (d[1 ] >> 32);
-    b[12] = (d[1 ] >> 40);
-    b[13] = (d[1 ] >> 48);
-    b[14] = (d[2 ] >>  0);
-    b[15] = (d[2 ] >>  8);
-    b[16] = (d[2 ] >> 16);
-    b[17] = (d[2 ] >> 24);
-    b[18] = (d[2 ] >> 32);
-    b[19] = (d[2 ] >> 40);
-    b[20] = (d[2 ] >> 48);
-    b[21] = (d[3 ] >>  0);
-    b[22] = (d[3 ] >>  8);
-    b[23] = (d[3 ] >> 16);
-    b[24] = (d[3 ] >> 24);
-    b[25] = (d[3 ] >> 32);
-    b[26] = (d[3 ] >> 40);
-    b[27] = (d[3 ] >> 48);
-    b[28] = (d[4 ] >>  0);
-    b[29] = (d[4 ] >>  8);
-    b[30] = (d[4 ] >> 16);
-    b[31] = (d[4 ] >> 24);
-    b[32] = (d[4 ] >> 32);
-    b[33] = (d[4 ] >> 40);
-    b[34] = (d[4 ] >> 48);
-    b[35] = (d[5 ] >>  0);
-    b[36] = (d[5 ] >>  8);
-    b[37] = (d[5 ] >> 16);
-    b[38] = (d[5 ] >> 24);
-    b[39] = (d[5 ] >> 32);
-    b[40] = (d[5 ] >> 40);
-    b[41] = (d[5 ] >> 48);
-    b[42] = (d[6 ] >>  0);
-    b[43] = (d[6 ] >>  8);
-    b[44] = (d[6 ] >> 16);
-    b[45] = (d[6 ] >> 24);
-    b[46] = (d[6 ] >> 32);
-    b[47] = (d[6 ] >> 40);
-    b[48] = (d[6 ] >> 48);
-    b[49] = (d[7 ] >>  0);
-    b[50] = (d[7 ] >>  8);
-    b[51] = (d[7 ] >> 16);
-    b[52] = (d[7 ] >> 24);
-    b[53] = (d[7 ] >> 32);
-    b[54] = (d[7 ] >> 40);
-    b[55] = (d[7 ] >> 48);
+    b[ 0] = (byte)(d[0 ] >>  0);
+    b[ 1] = (byte)(d[0 ] >>  8);
+    b[ 2] = (byte)(d[0 ] >> 16);
+    b[ 3] = (byte)(d[0 ] >> 24);
+    b[ 4] = (byte)(d[0 ] >> 32);
+    b[ 5] = (byte)(d[0 ] >> 40);
+    b[ 6] = (byte)(d[0 ] >> 48);
+    b[ 7] = (byte)(d[1 ] >>  0);
+    b[ 8] = (byte)(d[1 ] >>  8);
+    b[ 9] = (byte)(d[1 ] >> 16);
+    b[10] = (byte)(d[1 ] >> 24);
+    b[11] = (byte)(d[1 ] >> 32);
+    b[12] = (byte)(d[1 ] >> 40);
+    b[13] = (byte)(d[1 ] >> 48);
+    b[14] = (byte)(d[2 ] >>  0);
+    b[15] = (byte)(d[2 ] >>  8);
+    b[16] = (byte)(d[2 ] >> 16);
+    b[17] = (byte)(d[2 ] >> 24);
+    b[18] = (byte)(d[2 ] >> 32);
+    b[19] = (byte)(d[2 ] >> 40);
+    b[20] = (byte)(d[2 ] >> 48);
+    b[21] = (byte)(d[3 ] >>  0);
+    b[22] = (byte)(d[3 ] >>  8);
+    b[23] = (byte)(d[3 ] >> 16);
+    b[24] = (byte)(d[3 ] >> 24);
+    b[25] = (byte)(d[3 ] >> 32);
+    b[26] = (byte)(d[3 ] >> 40);
+    b[27] = (byte)(d[3 ] >> 48);
+    b[28] = (byte)(d[4 ] >>  0);
+    b[29] = (byte)(d[4 ] >>  8);
+    b[30] = (byte)(d[4 ] >> 16);
+    b[31] = (byte)(d[4 ] >> 24);
+    b[32] = (byte)(d[4 ] >> 32);
+    b[33] = (byte)(d[4 ] >> 40);
+    b[34] = (byte)(d[4 ] >> 48);
+    b[35] = (byte)(d[5 ] >>  0);
+    b[36] = (byte)(d[5 ] >>  8);
+    b[37] = (byte)(d[5 ] >> 16);
+    b[38] = (byte)(d[5 ] >> 24);
+    b[39] = (byte)(d[5 ] >> 32);
+    b[40] = (byte)(d[5 ] >> 40);
+    b[41] = (byte)(d[5 ] >> 48);
+    b[42] = (byte)(d[6 ] >>  0);
+    b[43] = (byte)(d[6 ] >>  8);
+    b[44] = (byte)(d[6 ] >> 16);
+    b[45] = (byte)(d[6 ] >> 24);
+    b[46] = (byte)(d[6 ] >> 32);
+    b[47] = (byte)(d[6 ] >> 40);
+    b[48] = (byte)(d[6 ] >> 48);
+    b[49] = (byte)(d[7 ] >>  0);
+    b[50] = (byte)(d[7 ] >>  8);
+    b[51] = (byte)(d[7 ] >> 16);
+    b[52] = (byte)(d[7 ] >> 24);
+    b[53] = (byte)(d[7 ] >> 32);
+    b[54] = (byte)(d[7 ] >> 40);
+    b[55] = (byte)(d[7 ] >> 48);
     b[56] = 0;
 }
 
@@ -720,244 +744,245 @@ void sc448_muladd(byte* r, const byte* a, const byte* b, const byte* d)
     word128 t[16];
     word128 c;
     word64 o;
+    sword64 u;
 
     /* Load from bytes */
-    ad[ 0] =  ((sword64) (a[ 0]) <<  0)
-           |  ((sword64) (a[ 1]) <<  8)
-           |  ((sword64) (a[ 2]) << 16)
-           |  ((sword64) (a[ 3]) << 24)
-           |  ((sword64) (a[ 4]) << 32)
-           |  ((sword64) (a[ 5]) << 40)
-           |  ((sword64) (a[ 6]) << 48);
-    ad[ 1] =  ((sword64) (a[ 7]) <<  0)
-           |  ((sword64) (a[ 8]) <<  8)
-           |  ((sword64) (a[ 9]) << 16)
-           |  ((sword64) (a[10]) << 24)
-           |  ((sword64) (a[11]) << 32)
-           |  ((sword64) (a[12]) << 40)
-           |  ((sword64) (a[13]) << 48);
-    ad[ 2] =  ((sword64) (a[14]) <<  0)
-           |  ((sword64) (a[15]) <<  8)
-           |  ((sword64) (a[16]) << 16)
-           |  ((sword64) (a[17]) << 24)
-           |  ((sword64) (a[18]) << 32)
-           |  ((sword64) (a[19]) << 40)
-           |  ((sword64) (a[20]) << 48);
-    ad[ 3] =  ((sword64) (a[21]) <<  0)
-           |  ((sword64) (a[22]) <<  8)
-           |  ((sword64) (a[23]) << 16)
-           |  ((sword64) (a[24]) << 24)
-           |  ((sword64) (a[25]) << 32)
-           |  ((sword64) (a[26]) << 40)
-           |  ((sword64) (a[27]) << 48);
-    ad[ 4] =  ((sword64) (a[28]) <<  0)
-           |  ((sword64) (a[29]) <<  8)
-           |  ((sword64) (a[30]) << 16)
-           |  ((sword64) (a[31]) << 24)
-           |  ((sword64) (a[32]) << 32)
-           |  ((sword64) (a[33]) << 40)
-           |  ((sword64) (a[34]) << 48);
-    ad[ 5] =  ((sword64) (a[35]) <<  0)
-           |  ((sword64) (a[36]) <<  8)
-           |  ((sword64) (a[37]) << 16)
-           |  ((sword64) (a[38]) << 24)
-           |  ((sword64) (a[39]) << 32)
-           |  ((sword64) (a[40]) << 40)
-           |  ((sword64) (a[41]) << 48);
-    ad[ 6] =  ((sword64) (a[42]) <<  0)
-           |  ((sword64) (a[43]) <<  8)
-           |  ((sword64) (a[44]) << 16)
-           |  ((sword64) (a[45]) << 24)
-           |  ((sword64) (a[46]) << 32)
-           |  ((sword64) (a[47]) << 40)
-           |  ((sword64) (a[48]) << 48);
-    ad[ 7] =  ((sword64) (a[49]) <<  0)
-           |  ((sword64) (a[50]) <<  8)
-           |  ((sword64) (a[51]) << 16)
-           |  ((sword64) (a[52]) << 24)
-           |  ((sword64) (a[53]) << 32)
-           |  ((sword64) (a[54]) << 40)
-           |  ((sword64) (a[55]) << 48);
+    ad[ 0] =  (word64)((sword64) (a[ 0]) <<  0)
+           |  (word64)((sword64) (a[ 1]) <<  8)
+           |  (word64)((sword64) (a[ 2]) << 16)
+           |  (word64)((sword64) (a[ 3]) << 24)
+           |  (word64)((sword64) (a[ 4]) << 32)
+           |  (word64)((sword64) (a[ 5]) << 40)
+           |  (word64)((sword64) (a[ 6]) << 48);
+    ad[ 1] =  (word64)((sword64) (a[ 7]) <<  0)
+           |  (word64)((sword64) (a[ 8]) <<  8)
+           |  (word64)((sword64) (a[ 9]) << 16)
+           |  (word64)((sword64) (a[10]) << 24)
+           |  (word64)((sword64) (a[11]) << 32)
+           |  (word64)((sword64) (a[12]) << 40)
+           |  (word64)((sword64) (a[13]) << 48);
+    ad[ 2] =  (word64)((sword64) (a[14]) <<  0)
+           |  (word64)((sword64) (a[15]) <<  8)
+           |  (word64)((sword64) (a[16]) << 16)
+           |  (word64)((sword64) (a[17]) << 24)
+           |  (word64)((sword64) (a[18]) << 32)
+           |  (word64)((sword64) (a[19]) << 40)
+           |  (word64)((sword64) (a[20]) << 48);
+    ad[ 3] =  (word64)((sword64) (a[21]) <<  0)
+           |  (word64)((sword64) (a[22]) <<  8)
+           |  (word64)((sword64) (a[23]) << 16)
+           |  (word64)((sword64) (a[24]) << 24)
+           |  (word64)((sword64) (a[25]) << 32)
+           |  (word64)((sword64) (a[26]) << 40)
+           |  (word64)((sword64) (a[27]) << 48);
+    ad[ 4] =  (word64)((sword64) (a[28]) <<  0)
+           |  (word64)((sword64) (a[29]) <<  8)
+           |  (word64)((sword64) (a[30]) << 16)
+           |  (word64)((sword64) (a[31]) << 24)
+           |  (word64)((sword64) (a[32]) << 32)
+           |  (word64)((sword64) (a[33]) << 40)
+           |  (word64)((sword64) (a[34]) << 48);
+    ad[ 5] =  (word64)((sword64) (a[35]) <<  0)
+           |  (word64)((sword64) (a[36]) <<  8)
+           |  (word64)((sword64) (a[37]) << 16)
+           |  (word64)((sword64) (a[38]) << 24)
+           |  (word64)((sword64) (a[39]) << 32)
+           |  (word64)((sword64) (a[40]) << 40)
+           |  (word64)((sword64) (a[41]) << 48);
+    ad[ 6] =  (word64)((sword64) (a[42]) <<  0)
+           |  (word64)((sword64) (a[43]) <<  8)
+           |  (word64)((sword64) (a[44]) << 16)
+           |  (word64)((sword64) (a[45]) << 24)
+           |  (word64)((sword64) (a[46]) << 32)
+           |  (word64)((sword64) (a[47]) << 40)
+           |  (word64)((sword64) (a[48]) << 48);
+    ad[ 7] =  (word64)((sword64) (a[49]) <<  0)
+           |  (word64)((sword64) (a[50]) <<  8)
+           |  (word64)((sword64) (a[51]) << 16)
+           |  (word64)((sword64) (a[52]) << 24)
+           |  (word64)((sword64) (a[53]) << 32)
+           |  (word64)((sword64) (a[54]) << 40)
+           |  (word64)((sword64) (a[55]) << 48);
     /* Load from bytes */
-    bd[ 0] =  ((sword64) (b[ 0]) <<  0)
-           |  ((sword64) (b[ 1]) <<  8)
-           |  ((sword64) (b[ 2]) << 16)
-           |  ((sword64) (b[ 3]) << 24)
-           |  ((sword64) (b[ 4]) << 32)
-           |  ((sword64) (b[ 5]) << 40)
-           |  ((sword64) (b[ 6]) << 48);
-    bd[ 1] =  ((sword64) (b[ 7]) <<  0)
-           |  ((sword64) (b[ 8]) <<  8)
-           |  ((sword64) (b[ 9]) << 16)
-           |  ((sword64) (b[10]) << 24)
-           |  ((sword64) (b[11]) << 32)
-           |  ((sword64) (b[12]) << 40)
-           |  ((sword64) (b[13]) << 48);
-    bd[ 2] =  ((sword64) (b[14]) <<  0)
-           |  ((sword64) (b[15]) <<  8)
-           |  ((sword64) (b[16]) << 16)
-           |  ((sword64) (b[17]) << 24)
-           |  ((sword64) (b[18]) << 32)
-           |  ((sword64) (b[19]) << 40)
-           |  ((sword64) (b[20]) << 48);
-    bd[ 3] =  ((sword64) (b[21]) <<  0)
-           |  ((sword64) (b[22]) <<  8)
-           |  ((sword64) (b[23]) << 16)
-           |  ((sword64) (b[24]) << 24)
-           |  ((sword64) (b[25]) << 32)
-           |  ((sword64) (b[26]) << 40)
-           |  ((sword64) (b[27]) << 48);
-    bd[ 4] =  ((sword64) (b[28]) <<  0)
-           |  ((sword64) (b[29]) <<  8)
-           |  ((sword64) (b[30]) << 16)
-           |  ((sword64) (b[31]) << 24)
-           |  ((sword64) (b[32]) << 32)
-           |  ((sword64) (b[33]) << 40)
-           |  ((sword64) (b[34]) << 48);
-    bd[ 5] =  ((sword64) (b[35]) <<  0)
-           |  ((sword64) (b[36]) <<  8)
-           |  ((sword64) (b[37]) << 16)
-           |  ((sword64) (b[38]) << 24)
-           |  ((sword64) (b[39]) << 32)
-           |  ((sword64) (b[40]) << 40)
-           |  ((sword64) (b[41]) << 48);
-    bd[ 6] =  ((sword64) (b[42]) <<  0)
-           |  ((sword64) (b[43]) <<  8)
-           |  ((sword64) (b[44]) << 16)
-           |  ((sword64) (b[45]) << 24)
-           |  ((sword64) (b[46]) << 32)
-           |  ((sword64) (b[47]) << 40)
-           |  ((sword64) (b[48]) << 48);
-    bd[ 7] =  ((sword64) (b[49]) <<  0)
-           |  ((sword64) (b[50]) <<  8)
-           |  ((sword64) (b[51]) << 16)
-           |  ((sword64) (b[52]) << 24)
-           |  ((sword64) (b[53]) << 32)
-           |  ((sword64) (b[54]) << 40)
-           |  ((sword64) (b[55]) << 48);
+    bd[ 0] =  (word64)((sword64) (b[ 0]) <<  0)
+           |  (word64)((sword64) (b[ 1]) <<  8)
+           |  (word64)((sword64) (b[ 2]) << 16)
+           |  (word64)((sword64) (b[ 3]) << 24)
+           |  (word64)((sword64) (b[ 4]) << 32)
+           |  (word64)((sword64) (b[ 5]) << 40)
+           |  (word64)((sword64) (b[ 6]) << 48);
+    bd[ 1] =  (word64)((sword64) (b[ 7]) <<  0)
+           |  (word64)((sword64) (b[ 8]) <<  8)
+           |  (word64)((sword64) (b[ 9]) << 16)
+           |  (word64)((sword64) (b[10]) << 24)
+           |  (word64)((sword64) (b[11]) << 32)
+           |  (word64)((sword64) (b[12]) << 40)
+           |  (word64)((sword64) (b[13]) << 48);
+    bd[ 2] =  (word64)((sword64) (b[14]) <<  0)
+           |  (word64)((sword64) (b[15]) <<  8)
+           |  (word64)((sword64) (b[16]) << 16)
+           |  (word64)((sword64) (b[17]) << 24)
+           |  (word64)((sword64) (b[18]) << 32)
+           |  (word64)((sword64) (b[19]) << 40)
+           |  (word64)((sword64) (b[20]) << 48);
+    bd[ 3] =  (word64)((sword64) (b[21]) <<  0)
+           |  (word64)((sword64) (b[22]) <<  8)
+           |  (word64)((sword64) (b[23]) << 16)
+           |  (word64)((sword64) (b[24]) << 24)
+           |  (word64)((sword64) (b[25]) << 32)
+           |  (word64)((sword64) (b[26]) << 40)
+           |  (word64)((sword64) (b[27]) << 48);
+    bd[ 4] =  (word64)((sword64) (b[28]) <<  0)
+           |  (word64)((sword64) (b[29]) <<  8)
+           |  (word64)((sword64) (b[30]) << 16)
+           |  (word64)((sword64) (b[31]) << 24)
+           |  (word64)((sword64) (b[32]) << 32)
+           |  (word64)((sword64) (b[33]) << 40)
+           |  (word64)((sword64) (b[34]) << 48);
+    bd[ 5] =  (word64)((sword64) (b[35]) <<  0)
+           |  (word64)((sword64) (b[36]) <<  8)
+           |  (word64)((sword64) (b[37]) << 16)
+           |  (word64)((sword64) (b[38]) << 24)
+           |  (word64)((sword64) (b[39]) << 32)
+           |  (word64)((sword64) (b[40]) << 40)
+           |  (word64)((sword64) (b[41]) << 48);
+    bd[ 6] =  (word64)((sword64) (b[42]) <<  0)
+           |  (word64)((sword64) (b[43]) <<  8)
+           |  (word64)((sword64) (b[44]) << 16)
+           |  (word64)((sword64) (b[45]) << 24)
+           |  (word64)((sword64) (b[46]) << 32)
+           |  (word64)((sword64) (b[47]) << 40)
+           |  (word64)((sword64) (b[48]) << 48);
+    bd[ 7] =  (word64)((sword64) (b[49]) <<  0)
+           |  (word64)((sword64) (b[50]) <<  8)
+           |  (word64)((sword64) (b[51]) << 16)
+           |  (word64)((sword64) (b[52]) << 24)
+           |  (word64)((sword64) (b[53]) << 32)
+           |  (word64)((sword64) (b[54]) << 40)
+           |  (word64)((sword64) (b[55]) << 48);
     /* Load from bytes */
-    dd[ 0] =  ((sword64) (d[ 0]) <<  0)
-           |  ((sword64) (d[ 1]) <<  8)
-           |  ((sword64) (d[ 2]) << 16)
-           |  ((sword64) (d[ 3]) << 24)
-           |  ((sword64) (d[ 4]) << 32)
-           |  ((sword64) (d[ 5]) << 40)
-           |  ((sword64) (d[ 6]) << 48);
-    dd[ 1] =  ((sword64) (d[ 7]) <<  0)
-           |  ((sword64) (d[ 8]) <<  8)
-           |  ((sword64) (d[ 9]) << 16)
-           |  ((sword64) (d[10]) << 24)
-           |  ((sword64) (d[11]) << 32)
-           |  ((sword64) (d[12]) << 40)
-           |  ((sword64) (d[13]) << 48);
-    dd[ 2] =  ((sword64) (d[14]) <<  0)
-           |  ((sword64) (d[15]) <<  8)
-           |  ((sword64) (d[16]) << 16)
-           |  ((sword64) (d[17]) << 24)
-           |  ((sword64) (d[18]) << 32)
-           |  ((sword64) (d[19]) << 40)
-           |  ((sword64) (d[20]) << 48);
-    dd[ 3] =  ((sword64) (d[21]) <<  0)
-           |  ((sword64) (d[22]) <<  8)
-           |  ((sword64) (d[23]) << 16)
-           |  ((sword64) (d[24]) << 24)
-           |  ((sword64) (d[25]) << 32)
-           |  ((sword64) (d[26]) << 40)
-           |  ((sword64) (d[27]) << 48);
-    dd[ 4] =  ((sword64) (d[28]) <<  0)
-           |  ((sword64) (d[29]) <<  8)
-           |  ((sword64) (d[30]) << 16)
-           |  ((sword64) (d[31]) << 24)
-           |  ((sword64) (d[32]) << 32)
-           |  ((sword64) (d[33]) << 40)
-           |  ((sword64) (d[34]) << 48);
-    dd[ 5] =  ((sword64) (d[35]) <<  0)
-           |  ((sword64) (d[36]) <<  8)
-           |  ((sword64) (d[37]) << 16)
-           |  ((sword64) (d[38]) << 24)
-           |  ((sword64) (d[39]) << 32)
-           |  ((sword64) (d[40]) << 40)
-           |  ((sword64) (d[41]) << 48);
-    dd[ 6] =  ((sword64) (d[42]) <<  0)
-           |  ((sword64) (d[43]) <<  8)
-           |  ((sword64) (d[44]) << 16)
-           |  ((sword64) (d[45]) << 24)
-           |  ((sword64) (d[46]) << 32)
-           |  ((sword64) (d[47]) << 40)
-           |  ((sword64) (d[48]) << 48);
-    dd[ 7] =  ((sword64) (d[49]) <<  0)
-           |  ((sword64) (d[50]) <<  8)
-           |  ((sword64) (d[51]) << 16)
-           |  ((sword64) (d[52]) << 24)
-           |  ((sword64) (d[53]) << 32)
-           |  ((sword64) (d[54]) << 40)
-           |  ((sword64) (d[55]) << 48);
+    dd[ 0] =  (word64)((sword64) (d[ 0]) <<  0)
+           |  (word64)((sword64) (d[ 1]) <<  8)
+           |  (word64)((sword64) (d[ 2]) << 16)
+           |  (word64)((sword64) (d[ 3]) << 24)
+           |  (word64)((sword64) (d[ 4]) << 32)
+           |  (word64)((sword64) (d[ 5]) << 40)
+           |  (word64)((sword64) (d[ 6]) << 48);
+    dd[ 1] =  (word64)((sword64) (d[ 7]) <<  0)
+           |  (word64)((sword64) (d[ 8]) <<  8)
+           |  (word64)((sword64) (d[ 9]) << 16)
+           |  (word64)((sword64) (d[10]) << 24)
+           |  (word64)((sword64) (d[11]) << 32)
+           |  (word64)((sword64) (d[12]) << 40)
+           |  (word64)((sword64) (d[13]) << 48);
+    dd[ 2] =  (word64)((sword64) (d[14]) <<  0)
+           |  (word64)((sword64) (d[15]) <<  8)
+           |  (word64)((sword64) (d[16]) << 16)
+           |  (word64)((sword64) (d[17]) << 24)
+           |  (word64)((sword64) (d[18]) << 32)
+           |  (word64)((sword64) (d[19]) << 40)
+           |  (word64)((sword64) (d[20]) << 48);
+    dd[ 3] =  (word64)((sword64) (d[21]) <<  0)
+           |  (word64)((sword64) (d[22]) <<  8)
+           |  (word64)((sword64) (d[23]) << 16)
+           |  (word64)((sword64) (d[24]) << 24)
+           |  (word64)((sword64) (d[25]) << 32)
+           |  (word64)((sword64) (d[26]) << 40)
+           |  (word64)((sword64) (d[27]) << 48);
+    dd[ 4] =  (word64)((sword64) (d[28]) <<  0)
+           |  (word64)((sword64) (d[29]) <<  8)
+           |  (word64)((sword64) (d[30]) << 16)
+           |  (word64)((sword64) (d[31]) << 24)
+           |  (word64)((sword64) (d[32]) << 32)
+           |  (word64)((sword64) (d[33]) << 40)
+           |  (word64)((sword64) (d[34]) << 48);
+    dd[ 5] =  (word64)((sword64) (d[35]) <<  0)
+           |  (word64)((sword64) (d[36]) <<  8)
+           |  (word64)((sword64) (d[37]) << 16)
+           |  (word64)((sword64) (d[38]) << 24)
+           |  (word64)((sword64) (d[39]) << 32)
+           |  (word64)((sword64) (d[40]) << 40)
+           |  (word64)((sword64) (d[41]) << 48);
+    dd[ 6] =  (word64)((sword64) (d[42]) <<  0)
+           |  (word64)((sword64) (d[43]) <<  8)
+           |  (word64)((sword64) (d[44]) << 16)
+           |  (word64)((sword64) (d[45]) << 24)
+           |  (word64)((sword64) (d[46]) << 32)
+           |  (word64)((sword64) (d[47]) << 40)
+           |  (word64)((sword64) (d[48]) << 48);
+    dd[ 7] =  (word64)((sword64) (d[49]) <<  0)
+           |  (word64)((sword64) (d[50]) <<  8)
+           |  (word64)((sword64) (d[51]) << 16)
+           |  (word64)((sword64) (d[52]) << 24)
+           |  (word64)((sword64) (d[53]) << 32)
+           |  (word64)((sword64) (d[54]) << 40)
+           |  (word64)((sword64) (d[55]) << 48);
 
     /* a * b + d */
-    t[ 0] =  dd[ 0] + (sword128)ad[ 0] * bd[ 0];
-    t[ 1] =  dd[ 1] + (sword128)ad[ 0] * bd[ 1]
-                    + (sword128)ad[ 1] * bd[ 0];
-    t[ 2] =  dd[ 2] + (sword128)ad[ 0] * bd[ 2]
-                    + (sword128)ad[ 1] * bd[ 1]
-                    + (sword128)ad[ 2] * bd[ 0];
-    t[ 3] =  dd[ 3] + (sword128)ad[ 0] * bd[ 3]
-                    + (sword128)ad[ 1] * bd[ 2]
-                    + (sword128)ad[ 2] * bd[ 1]
-                    + (sword128)ad[ 3] * bd[ 0];
-    t[ 4] =  dd[ 4] + (sword128)ad[ 0] * bd[ 4]
-                    + (sword128)ad[ 1] * bd[ 3]
-                    + (sword128)ad[ 2] * bd[ 2]
-                    + (sword128)ad[ 3] * bd[ 1]
-                    + (sword128)ad[ 4] * bd[ 0];
-    t[ 5] =  dd[ 5] + (sword128)ad[ 0] * bd[ 5]
-                    + (sword128)ad[ 1] * bd[ 4]
-                    + (sword128)ad[ 2] * bd[ 3]
-                    + (sword128)ad[ 3] * bd[ 2]
-                    + (sword128)ad[ 4] * bd[ 1]
-                    + (sword128)ad[ 5] * bd[ 0];
-    t[ 6] =  dd[ 6] + (sword128)ad[ 0] * bd[ 6]
-                    + (sword128)ad[ 1] * bd[ 5]
-                    + (sword128)ad[ 2] * bd[ 4]
-                    + (sword128)ad[ 3] * bd[ 3]
-                    + (sword128)ad[ 4] * bd[ 2]
-                    + (sword128)ad[ 5] * bd[ 1]
-                    + (sword128)ad[ 6] * bd[ 0];
-    t[ 7] =  dd[ 7] + (sword128)ad[ 0] * bd[ 7]
-                    + (sword128)ad[ 1] * bd[ 6]
-                    + (sword128)ad[ 2] * bd[ 5]
-                    + (sword128)ad[ 3] * bd[ 4]
-                    + (sword128)ad[ 4] * bd[ 3]
-                    + (sword128)ad[ 5] * bd[ 2]
-                    + (sword128)ad[ 6] * bd[ 1]
-                    + (sword128)ad[ 7] * bd[ 0];
-    t[ 8] =           (sword128)ad[ 1] * bd[ 7]
-                    + (sword128)ad[ 2] * bd[ 6]
-                    + (sword128)ad[ 3] * bd[ 5]
-                    + (sword128)ad[ 4] * bd[ 4]
-                    + (sword128)ad[ 5] * bd[ 3]
-                    + (sword128)ad[ 6] * bd[ 2]
-                    + (sword128)ad[ 7] * bd[ 1];
-    t[ 9] =           (sword128)ad[ 2] * bd[ 7]
-                    + (sword128)ad[ 3] * bd[ 6]
-                    + (sword128)ad[ 4] * bd[ 5]
-                    + (sword128)ad[ 5] * bd[ 4]
-                    + (sword128)ad[ 6] * bd[ 3]
-                    + (sword128)ad[ 7] * bd[ 2];
-    t[10] =           (sword128)ad[ 3] * bd[ 7]
-                    + (sword128)ad[ 4] * bd[ 6]
-                    + (sword128)ad[ 5] * bd[ 5]
-                    + (sword128)ad[ 6] * bd[ 4]
-                    + (sword128)ad[ 7] * bd[ 3];
-    t[11] =           (sword128)ad[ 4] * bd[ 7]
-                    + (sword128)ad[ 5] * bd[ 6]
-                    + (sword128)ad[ 6] * bd[ 5]
-                    + (sword128)ad[ 7] * bd[ 4];
-    t[12] =           (sword128)ad[ 5] * bd[ 7]
-                    + (sword128)ad[ 6] * bd[ 6]
-                    + (sword128)ad[ 7] * bd[ 5];
-    t[13] =           (sword128)ad[ 6] * bd[ 7]
-                    + (sword128)ad[ 7] * bd[ 6];
-    t[14] =           (sword128)ad[ 7] * bd[ 7];
+    t[ 0] = (word128)dd[ 0] + (word128)((sword128)ad[ 0] * bd[ 0]);
+    t[ 1] = (word128)dd[ 1] + (word128)((sword128)ad[ 0] * bd[ 1]
+                                      + (sword128)ad[ 1] * bd[ 0]);
+    t[ 2] = (word128)dd[ 2] + (word128)((sword128)ad[ 0] * bd[ 2]
+                                      + (sword128)ad[ 1] * bd[ 1]
+                                      + (sword128)ad[ 2] * bd[ 0]);
+    t[ 3] = (word128)dd[ 3] + (word128)((sword128)ad[ 0] * bd[ 3]
+                                      + (sword128)ad[ 1] * bd[ 2]
+                                      + (sword128)ad[ 2] * bd[ 1]
+                                      + (sword128)ad[ 3] * bd[ 0]);
+    t[ 4] = (word128)dd[ 4] + (word128)((sword128)ad[ 0] * bd[ 4]
+                            + (sword128)ad[ 1] * bd[ 3]
+                            + (sword128)ad[ 2] * bd[ 2]
+                            + (sword128)ad[ 3] * bd[ 1]
+                                        + (sword128)ad[ 4] * bd[ 0]);
+    t[ 5] = (word128)dd[ 5] + (word128)((sword128)ad[ 0] * bd[ 5]
+                            + (sword128)ad[ 1] * bd[ 4]
+                            + (sword128)ad[ 2] * bd[ 3]
+                            + (sword128)ad[ 3] * bd[ 2]
+                            + (sword128)ad[ 4] * bd[ 1]
+                                        + (sword128)ad[ 5] * bd[ 0]);
+    t[ 6] = (word128)dd[ 6] + (word128)((sword128)ad[ 0] * bd[ 6]
+                            + (sword128)ad[ 1] * bd[ 5]
+                            + (sword128)ad[ 2] * bd[ 4]
+                            + (sword128)ad[ 3] * bd[ 3]
+                            + (sword128)ad[ 4] * bd[ 2]
+                            + (sword128)ad[ 5] * bd[ 1]
+                                        + (sword128)ad[ 6] * bd[ 0]);
+    t[ 7] = (word128)dd[ 7] + (word128)((sword128)ad[ 0] * bd[ 7]
+                            + (sword128)ad[ 1] * bd[ 6]
+                            + (sword128)ad[ 2] * bd[ 5]
+                            + (sword128)ad[ 3] * bd[ 4]
+                            + (sword128)ad[ 4] * bd[ 3]
+                            + (sword128)ad[ 5] * bd[ 2]
+                            + (sword128)ad[ 6] * bd[ 1]
+                                        + (sword128)ad[ 7] * bd[ 0]);
+    t[ 8] = (word128)          ((sword128)ad[ 1] * bd[ 7]
+                            + (sword128)ad[ 2] * bd[ 6]
+                            + (sword128)ad[ 3] * bd[ 5]
+                            + (sword128)ad[ 4] * bd[ 4]
+                            + (sword128)ad[ 5] * bd[ 3]
+                            + (sword128)ad[ 6] * bd[ 2]
+                                + (sword128)ad[ 7] * bd[ 1]);
+    t[ 9] = (word128)          ((sword128)ad[ 2] * bd[ 7]
+                            + (sword128)ad[ 3] * bd[ 6]
+                            + (sword128)ad[ 4] * bd[ 5]
+                            + (sword128)ad[ 5] * bd[ 4]
+                            + (sword128)ad[ 6] * bd[ 3]
+                                + (sword128)ad[ 7] * bd[ 2]);
+    t[10] = (word128)          ((sword128)ad[ 3] * bd[ 7]
+                            + (sword128)ad[ 4] * bd[ 6]
+                            + (sword128)ad[ 5] * bd[ 5]
+                            + (sword128)ad[ 6] * bd[ 4]
+                                + (sword128)ad[ 7] * bd[ 3]);
+    t[11] = (word128)          ((sword128)ad[ 4] * bd[ 7]
+                            + (sword128)ad[ 5] * bd[ 6]
+                            + (sword128)ad[ 6] * bd[ 5]
+                                + (sword128)ad[ 7] * bd[ 4]);
+    t[12] = (word128)          ((sword128)ad[ 5] * bd[ 7]
+                            + (sword128)ad[ 6] * bd[ 6]
+                                + (sword128)ad[ 7] * bd[ 5]);
+    t[13] = (word128)          ((sword128)ad[ 6] * bd[ 7]
+                                + (sword128)ad[ 7] * bd[ 6]);
+    t[14] = (word128)          (sword128)ad[ 7] * bd[ 7];
     t[15] = 0;
 
     /* Mod curve order */
@@ -1043,64 +1068,99 @@ void sc448_muladd(byte* r, const byte* a, const byte* b, const byte* d)
     o = rd[ 4] >> 56; rd[ 5] += o; rd[ 4] = rd[ 4] & 0xffffffffffffff;
     o = rd[ 5] >> 56; rd[ 6] += o; rd[ 5] = rd[ 5] & 0xffffffffffffff;
     o = rd[ 6] >> 56; rd[ 7] += o; rd[ 6] = rd[ 6] & 0xffffffffffffff;
+    /* Reduce to mod order. */
+    u = 0;
+    u += (sword64)rd[0] - (sword64)0x078c292ab5844f3L; u >>= 56;
+    u += (sword64)rd[1] - (sword64)0x0c2728dc58f5523L; u >>= 56;
+    u += (sword64)rd[2] - (sword64)0x049aed63690216cL; u >>= 56;
+    u += (sword64)rd[3] - (sword64)0x07cca23e9c44edbL; u >>= 56;
+    u += (sword64)rd[4] - (sword64)0x0ffffffffffffffL; u >>= 56;
+    u += (sword64)rd[5] - (sword64)0x0ffffffffffffffL; u >>= 56;
+    u += (sword64)rd[6] - (sword64)0x0ffffffffffffffL; u >>= 56;
+    u += (sword64)rd[7] - (sword64)0x03fffffffffffffL; u >>= 56;
+    o = (word64)0 - (u >= 0);
+    u = 0;
+    u += (sword64)rd[0] - (sword64)((word64)0x078c292ab5844f3L & o);
+    rd[0] = u & 0xffffffffffffff;
+    u >>= 56;
+    u += (sword64)rd[1] - (sword64)((word64)0x0c2728dc58f5523L & o);
+    rd[1] = u & 0xffffffffffffff;
+    u >>= 56;
+    u += (sword64)rd[2] - (sword64)((word64)0x049aed63690216cL & o);
+    rd[2] = u & 0xffffffffffffff;
+    u >>= 56;
+    u += (sword64)rd[3] - (sword64)((word64)0x07cca23e9c44edbL & o);
+    rd[3] = u & 0xffffffffffffff;
+    u >>= 56;
+    u += (sword64)rd[4] - (sword64)((word64)0x0ffffffffffffffL & o);
+    rd[4] = u & 0xffffffffffffff;
+    u >>= 56;
+    u += (sword64)rd[5] - (sword64)((word64)0x0ffffffffffffffL & o);
+    rd[5] = u & 0xffffffffffffff;
+    u >>= 56;
+    u += (sword64)rd[6] - (sword64)((word64)0x0ffffffffffffffL & o);
+    rd[6] = u & 0xffffffffffffff;
+    u >>= 56;
+    u += (sword64)rd[7] - (sword64)((word64)0x03fffffffffffffL & o);
+    rd[7] = u & 0xffffffffffffff;
 
     /* Convert to bytes */
-    r[ 0] = (rd[0 ] >>  0);
-    r[ 1] = (rd[0 ] >>  8);
-    r[ 2] = (rd[0 ] >> 16);
-    r[ 3] = (rd[0 ] >> 24);
-    r[ 4] = (rd[0 ] >> 32);
-    r[ 5] = (rd[0 ] >> 40);
-    r[ 6] = (rd[0 ] >> 48);
-    r[ 7] = (rd[1 ] >>  0);
-    r[ 8] = (rd[1 ] >>  8);
-    r[ 9] = (rd[1 ] >> 16);
-    r[10] = (rd[1 ] >> 24);
-    r[11] = (rd[1 ] >> 32);
-    r[12] = (rd[1 ] >> 40);
-    r[13] = (rd[1 ] >> 48);
-    r[14] = (rd[2 ] >>  0);
-    r[15] = (rd[2 ] >>  8);
-    r[16] = (rd[2 ] >> 16);
-    r[17] = (rd[2 ] >> 24);
-    r[18] = (rd[2 ] >> 32);
-    r[19] = (rd[2 ] >> 40);
-    r[20] = (rd[2 ] >> 48);
-    r[21] = (rd[3 ] >>  0);
-    r[22] = (rd[3 ] >>  8);
-    r[23] = (rd[3 ] >> 16);
-    r[24] = (rd[3 ] >> 24);
-    r[25] = (rd[3 ] >> 32);
-    r[26] = (rd[3 ] >> 40);
-    r[27] = (rd[3 ] >> 48);
-    r[28] = (rd[4 ] >>  0);
-    r[29] = (rd[4 ] >>  8);
-    r[30] = (rd[4 ] >> 16);
-    r[31] = (rd[4 ] >> 24);
-    r[32] = (rd[4 ] >> 32);
-    r[33] = (rd[4 ] >> 40);
-    r[34] = (rd[4 ] >> 48);
-    r[35] = (rd[5 ] >>  0);
-    r[36] = (rd[5 ] >>  8);
-    r[37] = (rd[5 ] >> 16);
-    r[38] = (rd[5 ] >> 24);
-    r[39] = (rd[5 ] >> 32);
-    r[40] = (rd[5 ] >> 40);
-    r[41] = (rd[5 ] >> 48);
-    r[42] = (rd[6 ] >>  0);
-    r[43] = (rd[6 ] >>  8);
-    r[44] = (rd[6 ] >> 16);
-    r[45] = (rd[6 ] >> 24);
-    r[46] = (rd[6 ] >> 32);
-    r[47] = (rd[6 ] >> 40);
-    r[48] = (rd[6 ] >> 48);
-    r[49] = (rd[7 ] >>  0);
-    r[50] = (rd[7 ] >>  8);
-    r[51] = (rd[7 ] >> 16);
-    r[52] = (rd[7 ] >> 24);
-    r[53] = (rd[7 ] >> 32);
-    r[54] = (rd[7 ] >> 40);
-    r[55] = (rd[7 ] >> 48);
+    r[ 0] = (byte)(rd[0 ] >>  0);
+    r[ 1] = (byte)(rd[0 ] >>  8);
+    r[ 2] = (byte)(rd[0 ] >> 16);
+    r[ 3] = (byte)(rd[0 ] >> 24);
+    r[ 4] = (byte)(rd[0 ] >> 32);
+    r[ 5] = (byte)(rd[0 ] >> 40);
+    r[ 6] = (byte)(rd[0 ] >> 48);
+    r[ 7] = (byte)(rd[1 ] >>  0);
+    r[ 8] = (byte)(rd[1 ] >>  8);
+    r[ 9] = (byte)(rd[1 ] >> 16);
+    r[10] = (byte)(rd[1 ] >> 24);
+    r[11] = (byte)(rd[1 ] >> 32);
+    r[12] = (byte)(rd[1 ] >> 40);
+    r[13] = (byte)(rd[1 ] >> 48);
+    r[14] = (byte)(rd[2 ] >>  0);
+    r[15] = (byte)(rd[2 ] >>  8);
+    r[16] = (byte)(rd[2 ] >> 16);
+    r[17] = (byte)(rd[2 ] >> 24);
+    r[18] = (byte)(rd[2 ] >> 32);
+    r[19] = (byte)(rd[2 ] >> 40);
+    r[20] = (byte)(rd[2 ] >> 48);
+    r[21] = (byte)(rd[3 ] >>  0);
+    r[22] = (byte)(rd[3 ] >>  8);
+    r[23] = (byte)(rd[3 ] >> 16);
+    r[24] = (byte)(rd[3 ] >> 24);
+    r[25] = (byte)(rd[3 ] >> 32);
+    r[26] = (byte)(rd[3 ] >> 40);
+    r[27] = (byte)(rd[3 ] >> 48);
+    r[28] = (byte)(rd[4 ] >>  0);
+    r[29] = (byte)(rd[4 ] >>  8);
+    r[30] = (byte)(rd[4 ] >> 16);
+    r[31] = (byte)(rd[4 ] >> 24);
+    r[32] = (byte)(rd[4 ] >> 32);
+    r[33] = (byte)(rd[4 ] >> 40);
+    r[34] = (byte)(rd[4 ] >> 48);
+    r[35] = (byte)(rd[5 ] >>  0);
+    r[36] = (byte)(rd[5 ] >>  8);
+    r[37] = (byte)(rd[5 ] >> 16);
+    r[38] = (byte)(rd[5 ] >> 24);
+    r[39] = (byte)(rd[5 ] >> 32);
+    r[40] = (byte)(rd[5 ] >> 40);
+    r[41] = (byte)(rd[5 ] >> 48);
+    r[42] = (byte)(rd[6 ] >>  0);
+    r[43] = (byte)(rd[6 ] >>  8);
+    r[44] = (byte)(rd[6 ] >> 16);
+    r[45] = (byte)(rd[6 ] >> 24);
+    r[46] = (byte)(rd[6 ] >> 32);
+    r[47] = (byte)(rd[6 ] >> 40);
+    r[48] = (byte)(rd[6 ] >> 48);
+    r[49] = (byte)(rd[7 ] >>  0);
+    r[50] = (byte)(rd[7 ] >>  8);
+    r[51] = (byte)(rd[7 ] >> 16);
+    r[52] = (byte)(rd[7 ] >> 24);
+    r[53] = (byte)(rd[7 ] >> 32);
+    r[54] = (byte)(rd[7 ] >> 40);
+    r[55] = (byte)(rd[7 ] >> 48);
     r[56] = 0;
 }
 
@@ -5071,6 +5131,8 @@ static const ge448_precomp base_i[16] = {
 /* Reduce scalar mod the order of the curve.
  * Scalar Will be 114 bytes.
  *
+ * Only performs a weak reduce.
+ *
  * b  [in]  Scalar to reduce.
  */
 void sc448_reduce(byte* b)
@@ -5449,62 +5511,62 @@ void sc448_reduce(byte* b)
     o = d[14] >> 28; d[15] += o; d[14] = d[14] & 0xfffffff;
 
     /* Convert to bytes */
-    b[ 0] = (d[0 ] >>  0);
-    b[ 1] = (d[0 ] >>  8);
-    b[ 2] = (d[0 ] >> 16);
-    b[ 3] = (d[0 ] >> 24) + ((d[1 ] >>  0) <<  4);
-    b[ 4] = (d[1 ] >>  4);
-    b[ 5] = (d[1 ] >> 12);
-    b[ 6] = (d[1 ] >> 20);
-    b[ 7] = (d[2 ] >>  0);
-    b[ 8] = (d[2 ] >>  8);
-    b[ 9] = (d[2 ] >> 16);
-    b[10] = (d[2 ] >> 24) + ((d[3 ] >>  0) <<  4);
-    b[11] = (d[3 ] >>  4);
-    b[12] = (d[3 ] >> 12);
-    b[13] = (d[3 ] >> 20);
-    b[14] = (d[4 ] >>  0);
-    b[15] = (d[4 ] >>  8);
-    b[16] = (d[4 ] >> 16);
-    b[17] = (d[4 ] >> 24) + ((d[5 ] >>  0) <<  4);
-    b[18] = (d[5 ] >>  4);
-    b[19] = (d[5 ] >> 12);
-    b[20] = (d[5 ] >> 20);
-    b[21] = (d[6 ] >>  0);
-    b[22] = (d[6 ] >>  8);
-    b[23] = (d[6 ] >> 16);
-    b[24] = (d[6 ] >> 24) + ((d[7 ] >>  0) <<  4);
-    b[25] = (d[7 ] >>  4);
-    b[26] = (d[7 ] >> 12);
-    b[27] = (d[7 ] >> 20);
-    b[28] = (d[8 ] >>  0);
-    b[29] = (d[8 ] >>  8);
-    b[30] = (d[8 ] >> 16);
-    b[31] = (d[8 ] >> 24) + ((d[9 ] >>  0) <<  4);
-    b[32] = (d[9 ] >>  4);
-    b[33] = (d[9 ] >> 12);
-    b[34] = (d[9 ] >> 20);
-    b[35] = (d[10] >>  0);
-    b[36] = (d[10] >>  8);
-    b[37] = (d[10] >> 16);
-    b[38] = (d[10] >> 24) + ((d[11] >>  0) <<  4);
-    b[39] = (d[11] >>  4);
-    b[40] = (d[11] >> 12);
-    b[41] = (d[11] >> 20);
-    b[42] = (d[12] >>  0);
-    b[43] = (d[12] >>  8);
-    b[44] = (d[12] >> 16);
-    b[45] = (d[12] >> 24) + ((d[13] >>  0) <<  4);
-    b[46] = (d[13] >>  4);
-    b[47] = (d[13] >> 12);
-    b[48] = (d[13] >> 20);
-    b[49] = (d[14] >>  0);
-    b[50] = (d[14] >>  8);
-    b[51] = (d[14] >> 16);
-    b[52] = (d[14] >> 24) + ((d[15] >>  0) <<  4);
-    b[53] = (d[15] >>  4);
-    b[54] = (d[15] >> 12);
-    b[55] = (d[15] >> 20);
+    b[ 0] = (byte)(d[0 ] >>  0);
+    b[ 1] = (byte)(d[0 ] >>  8);
+    b[ 2] = (byte)(d[0 ] >> 16);
+    b[ 3] = (byte)(d[0 ] >> 24) + (byte)((d[1 ] >>  0) <<  4);
+    b[ 4] = (byte)(d[1 ] >>  4);
+    b[ 5] = (byte)(d[1 ] >> 12);
+    b[ 6] = (byte)(d[1 ] >> 20);
+    b[ 7] = (byte)(d[2 ] >>  0);
+    b[ 8] = (byte)(d[2 ] >>  8);
+    b[ 9] = (byte)(d[2 ] >> 16);
+    b[10] = (byte)(d[2 ] >> 24) + (byte)((d[3 ] >>  0) <<  4);
+    b[11] = (byte)(d[3 ] >>  4);
+    b[12] = (byte)(d[3 ] >> 12);
+    b[13] = (byte)(d[3 ] >> 20);
+    b[14] = (byte)(d[4 ] >>  0);
+    b[15] = (byte)(d[4 ] >>  8);
+    b[16] = (byte)(d[4 ] >> 16);
+    b[17] = (byte)(d[4 ] >> 24) + (byte)((d[5 ] >>  0) <<  4);
+    b[18] = (byte)(d[5 ] >>  4);
+    b[19] = (byte)(d[5 ] >> 12);
+    b[20] = (byte)(d[5 ] >> 20);
+    b[21] = (byte)(d[6 ] >>  0);
+    b[22] = (byte)(d[6 ] >>  8);
+    b[23] = (byte)(d[6 ] >> 16);
+    b[24] = (byte)(d[6 ] >> 24) + (byte)((d[7 ] >>  0) <<  4);
+    b[25] = (byte)(d[7 ] >>  4);
+    b[26] = (byte)(d[7 ] >> 12);
+    b[27] = (byte)(d[7 ] >> 20);
+    b[28] = (byte)(d[8 ] >>  0);
+    b[29] = (byte)(d[8 ] >>  8);
+    b[30] = (byte)(d[8 ] >> 16);
+    b[31] = (byte)(d[8 ] >> 24) + (byte)((d[9 ] >>  0) <<  4);
+    b[32] = (byte)(d[9 ] >>  4);
+    b[33] = (byte)(d[9 ] >> 12);
+    b[34] = (byte)(d[9 ] >> 20);
+    b[35] = (byte)(d[10] >>  0);
+    b[36] = (byte)(d[10] >>  8);
+    b[37] = (byte)(d[10] >> 16);
+    b[38] = (byte)(d[10] >> 24) + (byte)((d[11] >>  0) <<  4);
+    b[39] = (byte)(d[11] >>  4);
+    b[40] = (byte)(d[11] >> 12);
+    b[41] = (byte)(d[11] >> 20);
+    b[42] = (byte)(d[12] >>  0);
+    b[43] = (byte)(d[12] >>  8);
+    b[44] = (byte)(d[12] >> 16);
+    b[45] = (byte)(d[12] >> 24) + (byte)((d[13] >>  0) <<  4);
+    b[46] = (byte)(d[13] >>  4);
+    b[47] = (byte)(d[13] >> 12);
+    b[48] = (byte)(d[13] >> 20);
+    b[49] = (byte)(d[14] >>  0);
+    b[50] = (byte)(d[14] >>  8);
+    b[51] = (byte)(d[14] >> 16);
+    b[52] = (byte)(d[14] >> 24) + (byte)((d[15] >>  0) <<  4);
+    b[53] = (byte)(d[15] >>  4);
+    b[54] = (byte)(d[15] >> 12);
+    b[55] = (byte)(d[15] >> 20);
     b[56] = 0;
 }
 
@@ -5521,6 +5583,7 @@ void sc448_muladd(byte* r, const byte* a, const byte* b, const byte* d)
     word64 t[32];
     word64 c;
     word32 o;
+    sword32 u;
 
     /* Load from bytes */
     ad[ 0] =  (((sword32)((a[ 0]        ) >>  0)) <<  0)
@@ -5719,262 +5782,262 @@ void sc448_muladd(byte* r, const byte* a, const byte* b, const byte* d)
            |  (((sword32)((d[55]        ) >>  0)) << 20);
 
     /* a * b + d */
-    t[ 0] =  dd[ 0] + (sword64)ad[ 0] * bd[ 0];
-    t[ 1] =  dd[ 1] + (sword64)ad[ 0] * bd[ 1]
-                    + (sword64)ad[ 1] * bd[ 0];
-    t[ 2] =  dd[ 2] + (sword64)ad[ 0] * bd[ 2]
-                    + (sword64)ad[ 1] * bd[ 1]
-                    + (sword64)ad[ 2] * bd[ 0];
-    t[ 3] =  dd[ 3] + (sword64)ad[ 0] * bd[ 3]
-                    + (sword64)ad[ 1] * bd[ 2]
-                    + (sword64)ad[ 2] * bd[ 1]
-                    + (sword64)ad[ 3] * bd[ 0];
-    t[ 4] =  dd[ 4] + (sword64)ad[ 0] * bd[ 4]
-                    + (sword64)ad[ 1] * bd[ 3]
-                    + (sword64)ad[ 2] * bd[ 2]
-                    + (sword64)ad[ 3] * bd[ 1]
-                    + (sword64)ad[ 4] * bd[ 0];
-    t[ 5] =  dd[ 5] + (sword64)ad[ 0] * bd[ 5]
-                    + (sword64)ad[ 1] * bd[ 4]
-                    + (sword64)ad[ 2] * bd[ 3]
-                    + (sword64)ad[ 3] * bd[ 2]
-                    + (sword64)ad[ 4] * bd[ 1]
-                    + (sword64)ad[ 5] * bd[ 0];
-    t[ 6] =  dd[ 6] + (sword64)ad[ 0] * bd[ 6]
-                    + (sword64)ad[ 1] * bd[ 5]
-                    + (sword64)ad[ 2] * bd[ 4]
-                    + (sword64)ad[ 3] * bd[ 3]
-                    + (sword64)ad[ 4] * bd[ 2]
-                    + (sword64)ad[ 5] * bd[ 1]
-                    + (sword64)ad[ 6] * bd[ 0];
-    t[ 7] =  dd[ 7] + (sword64)ad[ 0] * bd[ 7]
-                    + (sword64)ad[ 1] * bd[ 6]
-                    + (sword64)ad[ 2] * bd[ 5]
-                    + (sword64)ad[ 3] * bd[ 4]
-                    + (sword64)ad[ 4] * bd[ 3]
-                    + (sword64)ad[ 5] * bd[ 2]
-                    + (sword64)ad[ 6] * bd[ 1]
-                    + (sword64)ad[ 7] * bd[ 0];
-    t[ 8] =  dd[ 8] + (sword64)ad[ 0] * bd[ 8]
-                    + (sword64)ad[ 1] * bd[ 7]
-                    + (sword64)ad[ 2] * bd[ 6]
-                    + (sword64)ad[ 3] * bd[ 5]
-                    + (sword64)ad[ 4] * bd[ 4]
-                    + (sword64)ad[ 5] * bd[ 3]
-                    + (sword64)ad[ 6] * bd[ 2]
-                    + (sword64)ad[ 7] * bd[ 1]
-                    + (sword64)ad[ 8] * bd[ 0];
-    t[ 9] =  dd[ 9] + (sword64)ad[ 0] * bd[ 9]
-                    + (sword64)ad[ 1] * bd[ 8]
-                    + (sword64)ad[ 2] * bd[ 7]
-                    + (sword64)ad[ 3] * bd[ 6]
-                    + (sword64)ad[ 4] * bd[ 5]
-                    + (sword64)ad[ 5] * bd[ 4]
-                    + (sword64)ad[ 6] * bd[ 3]
-                    + (sword64)ad[ 7] * bd[ 2]
-                    + (sword64)ad[ 8] * bd[ 1]
-                    + (sword64)ad[ 9] * bd[ 0];
-    t[10] =  dd[10] + (sword64)ad[ 0] * bd[10]
-                    + (sword64)ad[ 1] * bd[ 9]
-                    + (sword64)ad[ 2] * bd[ 8]
-                    + (sword64)ad[ 3] * bd[ 7]
-                    + (sword64)ad[ 4] * bd[ 6]
-                    + (sword64)ad[ 5] * bd[ 5]
-                    + (sword64)ad[ 6] * bd[ 4]
-                    + (sword64)ad[ 7] * bd[ 3]
-                    + (sword64)ad[ 8] * bd[ 2]
-                    + (sword64)ad[ 9] * bd[ 1]
-                    + (sword64)ad[10] * bd[ 0];
-    t[11] =  dd[11] + (sword64)ad[ 0] * bd[11]
-                    + (sword64)ad[ 1] * bd[10]
-                    + (sword64)ad[ 2] * bd[ 9]
-                    + (sword64)ad[ 3] * bd[ 8]
-                    + (sword64)ad[ 4] * bd[ 7]
-                    + (sword64)ad[ 5] * bd[ 6]
-                    + (sword64)ad[ 6] * bd[ 5]
-                    + (sword64)ad[ 7] * bd[ 4]
-                    + (sword64)ad[ 8] * bd[ 3]
-                    + (sword64)ad[ 9] * bd[ 2]
-                    + (sword64)ad[10] * bd[ 1]
-                    + (sword64)ad[11] * bd[ 0];
-    t[12] =  dd[12] + (sword64)ad[ 0] * bd[12]
-                    + (sword64)ad[ 1] * bd[11]
-                    + (sword64)ad[ 2] * bd[10]
-                    + (sword64)ad[ 3] * bd[ 9]
-                    + (sword64)ad[ 4] * bd[ 8]
-                    + (sword64)ad[ 5] * bd[ 7]
-                    + (sword64)ad[ 6] * bd[ 6]
-                    + (sword64)ad[ 7] * bd[ 5]
-                    + (sword64)ad[ 8] * bd[ 4]
-                    + (sword64)ad[ 9] * bd[ 3]
-                    + (sword64)ad[10] * bd[ 2]
-                    + (sword64)ad[11] * bd[ 1]
-                    + (sword64)ad[12] * bd[ 0];
-    t[13] =  dd[13] + (sword64)ad[ 0] * bd[13]
-                    + (sword64)ad[ 1] * bd[12]
-                    + (sword64)ad[ 2] * bd[11]
-                    + (sword64)ad[ 3] * bd[10]
-                    + (sword64)ad[ 4] * bd[ 9]
-                    + (sword64)ad[ 5] * bd[ 8]
-                    + (sword64)ad[ 6] * bd[ 7]
-                    + (sword64)ad[ 7] * bd[ 6]
-                    + (sword64)ad[ 8] * bd[ 5]
-                    + (sword64)ad[ 9] * bd[ 4]
-                    + (sword64)ad[10] * bd[ 3]
-                    + (sword64)ad[11] * bd[ 2]
-                    + (sword64)ad[12] * bd[ 1]
-                    + (sword64)ad[13] * bd[ 0];
-    t[14] =  dd[14] + (sword64)ad[ 0] * bd[14]
-                    + (sword64)ad[ 1] * bd[13]
-                    + (sword64)ad[ 2] * bd[12]
-                    + (sword64)ad[ 3] * bd[11]
-                    + (sword64)ad[ 4] * bd[10]
-                    + (sword64)ad[ 5] * bd[ 9]
-                    + (sword64)ad[ 6] * bd[ 8]
-                    + (sword64)ad[ 7] * bd[ 7]
-                    + (sword64)ad[ 8] * bd[ 6]
-                    + (sword64)ad[ 9] * bd[ 5]
-                    + (sword64)ad[10] * bd[ 4]
-                    + (sword64)ad[11] * bd[ 3]
-                    + (sword64)ad[12] * bd[ 2]
-                    + (sword64)ad[13] * bd[ 1]
-                    + (sword64)ad[14] * bd[ 0];
-    t[15] =  dd[15] + (sword64)ad[ 0] * bd[15]
-                    + (sword64)ad[ 1] * bd[14]
-                    + (sword64)ad[ 2] * bd[13]
-                    + (sword64)ad[ 3] * bd[12]
-                    + (sword64)ad[ 4] * bd[11]
-                    + (sword64)ad[ 5] * bd[10]
-                    + (sword64)ad[ 6] * bd[ 9]
-                    + (sword64)ad[ 7] * bd[ 8]
-                    + (sword64)ad[ 8] * bd[ 7]
-                    + (sword64)ad[ 9] * bd[ 6]
-                    + (sword64)ad[10] * bd[ 5]
-                    + (sword64)ad[11] * bd[ 4]
-                    + (sword64)ad[12] * bd[ 3]
-                    + (sword64)ad[13] * bd[ 2]
-                    + (sword64)ad[14] * bd[ 1]
-                    + (sword64)ad[15] * bd[ 0];
-    t[16] =           (sword64)ad[ 1] * bd[15]
-                    + (sword64)ad[ 2] * bd[14]
-                    + (sword64)ad[ 3] * bd[13]
-                    + (sword64)ad[ 4] * bd[12]
-                    + (sword64)ad[ 5] * bd[11]
-                    + (sword64)ad[ 6] * bd[10]
-                    + (sword64)ad[ 7] * bd[ 9]
-                    + (sword64)ad[ 8] * bd[ 8]
-                    + (sword64)ad[ 9] * bd[ 7]
-                    + (sword64)ad[10] * bd[ 6]
-                    + (sword64)ad[11] * bd[ 5]
-                    + (sword64)ad[12] * bd[ 4]
-                    + (sword64)ad[13] * bd[ 3]
-                    + (sword64)ad[14] * bd[ 2]
-                    + (sword64)ad[15] * bd[ 1];
-    t[17] =           (sword64)ad[ 2] * bd[15]
-                    + (sword64)ad[ 3] * bd[14]
-                    + (sword64)ad[ 4] * bd[13]
-                    + (sword64)ad[ 5] * bd[12]
-                    + (sword64)ad[ 6] * bd[11]
-                    + (sword64)ad[ 7] * bd[10]
-                    + (sword64)ad[ 8] * bd[ 9]
-                    + (sword64)ad[ 9] * bd[ 8]
-                    + (sword64)ad[10] * bd[ 7]
-                    + (sword64)ad[11] * bd[ 6]
-                    + (sword64)ad[12] * bd[ 5]
-                    + (sword64)ad[13] * bd[ 4]
-                    + (sword64)ad[14] * bd[ 3]
-                    + (sword64)ad[15] * bd[ 2];
-    t[18] =           (sword64)ad[ 3] * bd[15]
-                    + (sword64)ad[ 4] * bd[14]
-                    + (sword64)ad[ 5] * bd[13]
-                    + (sword64)ad[ 6] * bd[12]
-                    + (sword64)ad[ 7] * bd[11]
-                    + (sword64)ad[ 8] * bd[10]
-                    + (sword64)ad[ 9] * bd[ 9]
-                    + (sword64)ad[10] * bd[ 8]
-                    + (sword64)ad[11] * bd[ 7]
-                    + (sword64)ad[12] * bd[ 6]
-                    + (sword64)ad[13] * bd[ 5]
-                    + (sword64)ad[14] * bd[ 4]
-                    + (sword64)ad[15] * bd[ 3];
-    t[19] =           (sword64)ad[ 4] * bd[15]
-                    + (sword64)ad[ 5] * bd[14]
-                    + (sword64)ad[ 6] * bd[13]
-                    + (sword64)ad[ 7] * bd[12]
-                    + (sword64)ad[ 8] * bd[11]
-                    + (sword64)ad[ 9] * bd[10]
-                    + (sword64)ad[10] * bd[ 9]
-                    + (sword64)ad[11] * bd[ 8]
-                    + (sword64)ad[12] * bd[ 7]
-                    + (sword64)ad[13] * bd[ 6]
-                    + (sword64)ad[14] * bd[ 5]
-                    + (sword64)ad[15] * bd[ 4];
-    t[20] =           (sword64)ad[ 5] * bd[15]
-                    + (sword64)ad[ 6] * bd[14]
-                    + (sword64)ad[ 7] * bd[13]
-                    + (sword64)ad[ 8] * bd[12]
-                    + (sword64)ad[ 9] * bd[11]
-                    + (sword64)ad[10] * bd[10]
-                    + (sword64)ad[11] * bd[ 9]
-                    + (sword64)ad[12] * bd[ 8]
-                    + (sword64)ad[13] * bd[ 7]
-                    + (sword64)ad[14] * bd[ 6]
-                    + (sword64)ad[15] * bd[ 5];
-    t[21] =           (sword64)ad[ 6] * bd[15]
-                    + (sword64)ad[ 7] * bd[14]
-                    + (sword64)ad[ 8] * bd[13]
-                    + (sword64)ad[ 9] * bd[12]
-                    + (sword64)ad[10] * bd[11]
-                    + (sword64)ad[11] * bd[10]
-                    + (sword64)ad[12] * bd[ 9]
-                    + (sword64)ad[13] * bd[ 8]
-                    + (sword64)ad[14] * bd[ 7]
-                    + (sword64)ad[15] * bd[ 6];
-    t[22] =           (sword64)ad[ 7] * bd[15]
-                    + (sword64)ad[ 8] * bd[14]
-                    + (sword64)ad[ 9] * bd[13]
-                    + (sword64)ad[10] * bd[12]
-                    + (sword64)ad[11] * bd[11]
-                    + (sword64)ad[12] * bd[10]
-                    + (sword64)ad[13] * bd[ 9]
-                    + (sword64)ad[14] * bd[ 8]
-                    + (sword64)ad[15] * bd[ 7];
-    t[23] =           (sword64)ad[ 8] * bd[15]
-                    + (sword64)ad[ 9] * bd[14]
-                    + (sword64)ad[10] * bd[13]
-                    + (sword64)ad[11] * bd[12]
-                    + (sword64)ad[12] * bd[11]
-                    + (sword64)ad[13] * bd[10]
-                    + (sword64)ad[14] * bd[ 9]
-                    + (sword64)ad[15] * bd[ 8];
-    t[24] =           (sword64)ad[ 9] * bd[15]
-                    + (sword64)ad[10] * bd[14]
-                    + (sword64)ad[11] * bd[13]
-                    + (sword64)ad[12] * bd[12]
-                    + (sword64)ad[13] * bd[11]
-                    + (sword64)ad[14] * bd[10]
-                    + (sword64)ad[15] * bd[ 9];
-    t[25] =           (sword64)ad[10] * bd[15]
-                    + (sword64)ad[11] * bd[14]
-                    + (sword64)ad[12] * bd[13]
-                    + (sword64)ad[13] * bd[12]
-                    + (sword64)ad[14] * bd[11]
-                    + (sword64)ad[15] * bd[10];
-    t[26] =           (sword64)ad[11] * bd[15]
-                    + (sword64)ad[12] * bd[14]
-                    + (sword64)ad[13] * bd[13]
-                    + (sword64)ad[14] * bd[12]
-                    + (sword64)ad[15] * bd[11];
-    t[27] =           (sword64)ad[12] * bd[15]
-                    + (sword64)ad[13] * bd[14]
-                    + (sword64)ad[14] * bd[13]
-                    + (sword64)ad[15] * bd[12];
-    t[28] =           (sword64)ad[13] * bd[15]
-                    + (sword64)ad[14] * bd[14]
-                    + (sword64)ad[15] * bd[13];
-    t[29] =           (sword64)ad[14] * bd[15]
-                    + (sword64)ad[15] * bd[14];
-    t[30] =           (sword64)ad[15] * bd[15];
+    t[ 0] = (word64)dd[ 0] + (sword64)ad[ 0] * bd[ 0];
+    t[ 1] = (word64)dd[ 1] + (sword64)ad[ 0] * bd[ 1]
+                           + (sword64)ad[ 1] * bd[ 0];
+    t[ 2] = (word64)dd[ 2] + (sword64)ad[ 0] * bd[ 2]
+                           + (sword64)ad[ 1] * bd[ 1]
+                           + (sword64)ad[ 2] * bd[ 0];
+    t[ 3] = (word64)dd[ 3] + (sword64)ad[ 0] * bd[ 3]
+                           + (sword64)ad[ 1] * bd[ 2]
+                           + (sword64)ad[ 2] * bd[ 1]
+                           + (sword64)ad[ 3] * bd[ 0];
+    t[ 4] = (word64)dd[ 4] + (sword64)ad[ 0] * bd[ 4]
+                           + (sword64)ad[ 1] * bd[ 3]
+                           + (sword64)ad[ 2] * bd[ 2]
+                           + (sword64)ad[ 3] * bd[ 1]
+                           + (sword64)ad[ 4] * bd[ 0];
+    t[ 5] = (word64)dd[ 5] + (sword64)ad[ 0] * bd[ 5]
+                           + (sword64)ad[ 1] * bd[ 4]
+                           + (sword64)ad[ 2] * bd[ 3]
+                           + (sword64)ad[ 3] * bd[ 2]
+                           + (sword64)ad[ 4] * bd[ 1]
+                           + (sword64)ad[ 5] * bd[ 0];
+    t[ 6] = (word64)dd[ 6] + (sword64)ad[ 0] * bd[ 6]
+                           + (sword64)ad[ 1] * bd[ 5]
+                           + (sword64)ad[ 2] * bd[ 4]
+                           + (sword64)ad[ 3] * bd[ 3]
+                           + (sword64)ad[ 4] * bd[ 2]
+                           + (sword64)ad[ 5] * bd[ 1]
+                           + (sword64)ad[ 6] * bd[ 0];
+    t[ 7] = (word64)dd[ 7] + (sword64)ad[ 0] * bd[ 7]
+                           + (sword64)ad[ 1] * bd[ 6]
+                           + (sword64)ad[ 2] * bd[ 5]
+                           + (sword64)ad[ 3] * bd[ 4]
+                           + (sword64)ad[ 4] * bd[ 3]
+                           + (sword64)ad[ 5] * bd[ 2]
+                           + (sword64)ad[ 6] * bd[ 1]
+                           + (sword64)ad[ 7] * bd[ 0];
+    t[ 8] = (word64)dd[ 8] + (sword64)ad[ 0] * bd[ 8]
+                           + (sword64)ad[ 1] * bd[ 7]
+                           + (sword64)ad[ 2] * bd[ 6]
+                           + (sword64)ad[ 3] * bd[ 5]
+                           + (sword64)ad[ 4] * bd[ 4]
+                           + (sword64)ad[ 5] * bd[ 3]
+                           + (sword64)ad[ 6] * bd[ 2]
+                           + (sword64)ad[ 7] * bd[ 1]
+                           + (sword64)ad[ 8] * bd[ 0];
+    t[ 9] = (word64)dd[ 9] + (sword64)ad[ 0] * bd[ 9]
+                           + (sword64)ad[ 1] * bd[ 8]
+                           + (sword64)ad[ 2] * bd[ 7]
+                           + (sword64)ad[ 3] * bd[ 6]
+                           + (sword64)ad[ 4] * bd[ 5]
+                           + (sword64)ad[ 5] * bd[ 4]
+                           + (sword64)ad[ 6] * bd[ 3]
+                           + (sword64)ad[ 7] * bd[ 2]
+                           + (sword64)ad[ 8] * bd[ 1]
+                           + (sword64)ad[ 9] * bd[ 0];
+    t[10] = (word64)dd[10] + (sword64)ad[ 0] * bd[10]
+                           + (sword64)ad[ 1] * bd[ 9]
+                           + (sword64)ad[ 2] * bd[ 8]
+                           + (sword64)ad[ 3] * bd[ 7]
+                           + (sword64)ad[ 4] * bd[ 6]
+                           + (sword64)ad[ 5] * bd[ 5]
+                           + (sword64)ad[ 6] * bd[ 4]
+                           + (sword64)ad[ 7] * bd[ 3]
+                           + (sword64)ad[ 8] * bd[ 2]
+                           + (sword64)ad[ 9] * bd[ 1]
+                           + (sword64)ad[10] * bd[ 0];
+    t[11] = (word64)dd[11] + (sword64)ad[ 0] * bd[11]
+                           + (sword64)ad[ 1] * bd[10]
+                           + (sword64)ad[ 2] * bd[ 9]
+                           + (sword64)ad[ 3] * bd[ 8]
+                           + (sword64)ad[ 4] * bd[ 7]
+                           + (sword64)ad[ 5] * bd[ 6]
+                           + (sword64)ad[ 6] * bd[ 5]
+                           + (sword64)ad[ 7] * bd[ 4]
+                           + (sword64)ad[ 8] * bd[ 3]
+                           + (sword64)ad[ 9] * bd[ 2]
+                           + (sword64)ad[10] * bd[ 1]
+                           + (sword64)ad[11] * bd[ 0];
+    t[12] = (word64)dd[12] + (sword64)ad[ 0] * bd[12]
+                           + (sword64)ad[ 1] * bd[11]
+                           + (sword64)ad[ 2] * bd[10]
+                           + (sword64)ad[ 3] * bd[ 9]
+                           + (sword64)ad[ 4] * bd[ 8]
+                           + (sword64)ad[ 5] * bd[ 7]
+                           + (sword64)ad[ 6] * bd[ 6]
+                           + (sword64)ad[ 7] * bd[ 5]
+                           + (sword64)ad[ 8] * bd[ 4]
+                           + (sword64)ad[ 9] * bd[ 3]
+                           + (sword64)ad[10] * bd[ 2]
+                           + (sword64)ad[11] * bd[ 1]
+                           + (sword64)ad[12] * bd[ 0];
+    t[13] = (word64)dd[13] + (sword64)ad[ 0] * bd[13]
+                           + (sword64)ad[ 1] * bd[12]
+                           + (sword64)ad[ 2] * bd[11]
+                           + (sword64)ad[ 3] * bd[10]
+                           + (sword64)ad[ 4] * bd[ 9]
+                           + (sword64)ad[ 5] * bd[ 8]
+                           + (sword64)ad[ 6] * bd[ 7]
+                           + (sword64)ad[ 7] * bd[ 6]
+                           + (sword64)ad[ 8] * bd[ 5]
+                           + (sword64)ad[ 9] * bd[ 4]
+                           + (sword64)ad[10] * bd[ 3]
+                           + (sword64)ad[11] * bd[ 2]
+                           + (sword64)ad[12] * bd[ 1]
+                           + (sword64)ad[13] * bd[ 0];
+    t[14] = (word64)dd[14] + (sword64)ad[ 0] * bd[14]
+                           + (sword64)ad[ 1] * bd[13]
+                           + (sword64)ad[ 2] * bd[12]
+                           + (sword64)ad[ 3] * bd[11]
+                           + (sword64)ad[ 4] * bd[10]
+                           + (sword64)ad[ 5] * bd[ 9]
+                           + (sword64)ad[ 6] * bd[ 8]
+                           + (sword64)ad[ 7] * bd[ 7]
+                           + (sword64)ad[ 8] * bd[ 6]
+                           + (sword64)ad[ 9] * bd[ 5]
+                           + (sword64)ad[10] * bd[ 4]
+                           + (sword64)ad[11] * bd[ 3]
+                           + (sword64)ad[12] * bd[ 2]
+                           + (sword64)ad[13] * bd[ 1]
+                           + (sword64)ad[14] * bd[ 0];
+    t[15] = (word64)dd[15] + (sword64)ad[ 0] * bd[15]
+                           + (sword64)ad[ 1] * bd[14]
+                           + (sword64)ad[ 2] * bd[13]
+                           + (sword64)ad[ 3] * bd[12]
+                           + (sword64)ad[ 4] * bd[11]
+                           + (sword64)ad[ 5] * bd[10]
+                           + (sword64)ad[ 6] * bd[ 9]
+                           + (sword64)ad[ 7] * bd[ 8]
+                           + (sword64)ad[ 8] * bd[ 7]
+                           + (sword64)ad[ 9] * bd[ 6]
+                           + (sword64)ad[10] * bd[ 5]
+                           + (sword64)ad[11] * bd[ 4]
+                           + (sword64)ad[12] * bd[ 3]
+                           + (sword64)ad[13] * bd[ 2]
+                           + (sword64)ad[14] * bd[ 1]
+                           + (sword64)ad[15] * bd[ 0];
+    t[16] = (word64)          (sword64)ad[ 1] * bd[15]
+                           + (sword64)ad[ 2] * bd[14]
+                           + (sword64)ad[ 3] * bd[13]
+                           + (sword64)ad[ 4] * bd[12]
+                           + (sword64)ad[ 5] * bd[11]
+                           + (sword64)ad[ 6] * bd[10]
+                           + (sword64)ad[ 7] * bd[ 9]
+                           + (sword64)ad[ 8] * bd[ 8]
+                           + (sword64)ad[ 9] * bd[ 7]
+                           + (sword64)ad[10] * bd[ 6]
+                           + (sword64)ad[11] * bd[ 5]
+                           + (sword64)ad[12] * bd[ 4]
+                           + (sword64)ad[13] * bd[ 3]
+                           + (sword64)ad[14] * bd[ 2]
+                           + (sword64)ad[15] * bd[ 1];
+    t[17] = (word64)          (sword64)ad[ 2] * bd[15]
+                           + (sword64)ad[ 3] * bd[14]
+                           + (sword64)ad[ 4] * bd[13]
+                           + (sword64)ad[ 5] * bd[12]
+                           + (sword64)ad[ 6] * bd[11]
+                           + (sword64)ad[ 7] * bd[10]
+                           + (sword64)ad[ 8] * bd[ 9]
+                           + (sword64)ad[ 9] * bd[ 8]
+                           + (sword64)ad[10] * bd[ 7]
+                           + (sword64)ad[11] * bd[ 6]
+                           + (sword64)ad[12] * bd[ 5]
+                           + (sword64)ad[13] * bd[ 4]
+                           + (sword64)ad[14] * bd[ 3]
+                           + (sword64)ad[15] * bd[ 2];
+    t[18] = (word64)          (sword64)ad[ 3] * bd[15]
+                           + (sword64)ad[ 4] * bd[14]
+                           + (sword64)ad[ 5] * bd[13]
+                           + (sword64)ad[ 6] * bd[12]
+                           + (sword64)ad[ 7] * bd[11]
+                           + (sword64)ad[ 8] * bd[10]
+                           + (sword64)ad[ 9] * bd[ 9]
+                           + (sword64)ad[10] * bd[ 8]
+                           + (sword64)ad[11] * bd[ 7]
+                           + (sword64)ad[12] * bd[ 6]
+                           + (sword64)ad[13] * bd[ 5]
+                           + (sword64)ad[14] * bd[ 4]
+                           + (sword64)ad[15] * bd[ 3];
+    t[19] = (word64)          (sword64)ad[ 4] * bd[15]
+                           + (sword64)ad[ 5] * bd[14]
+                           + (sword64)ad[ 6] * bd[13]
+                           + (sword64)ad[ 7] * bd[12]
+                           + (sword64)ad[ 8] * bd[11]
+                           + (sword64)ad[ 9] * bd[10]
+                           + (sword64)ad[10] * bd[ 9]
+                           + (sword64)ad[11] * bd[ 8]
+                           + (sword64)ad[12] * bd[ 7]
+                           + (sword64)ad[13] * bd[ 6]
+                           + (sword64)ad[14] * bd[ 5]
+                           + (sword64)ad[15] * bd[ 4];
+    t[20] = (word64)          (sword64)ad[ 5] * bd[15]
+                           + (sword64)ad[ 6] * bd[14]
+                           + (sword64)ad[ 7] * bd[13]
+                           + (sword64)ad[ 8] * bd[12]
+                           + (sword64)ad[ 9] * bd[11]
+                           + (sword64)ad[10] * bd[10]
+                           + (sword64)ad[11] * bd[ 9]
+                           + (sword64)ad[12] * bd[ 8]
+                           + (sword64)ad[13] * bd[ 7]
+                           + (sword64)ad[14] * bd[ 6]
+                           + (sword64)ad[15] * bd[ 5];
+    t[21] = (word64)          (sword64)ad[ 6] * bd[15]
+                           + (sword64)ad[ 7] * bd[14]
+                           + (sword64)ad[ 8] * bd[13]
+                           + (sword64)ad[ 9] * bd[12]
+                           + (sword64)ad[10] * bd[11]
+                           + (sword64)ad[11] * bd[10]
+                           + (sword64)ad[12] * bd[ 9]
+                           + (sword64)ad[13] * bd[ 8]
+                           + (sword64)ad[14] * bd[ 7]
+                           + (sword64)ad[15] * bd[ 6];
+    t[22] = (word64)          (sword64)ad[ 7] * bd[15]
+                           + (sword64)ad[ 8] * bd[14]
+                           + (sword64)ad[ 9] * bd[13]
+                           + (sword64)ad[10] * bd[12]
+                           + (sword64)ad[11] * bd[11]
+                           + (sword64)ad[12] * bd[10]
+                           + (sword64)ad[13] * bd[ 9]
+                           + (sword64)ad[14] * bd[ 8]
+                           + (sword64)ad[15] * bd[ 7];
+    t[23] = (word64)          (sword64)ad[ 8] * bd[15]
+                           + (sword64)ad[ 9] * bd[14]
+                           + (sword64)ad[10] * bd[13]
+                           + (sword64)ad[11] * bd[12]
+                           + (sword64)ad[12] * bd[11]
+                           + (sword64)ad[13] * bd[10]
+                           + (sword64)ad[14] * bd[ 9]
+                           + (sword64)ad[15] * bd[ 8];
+    t[24] = (word64)          (sword64)ad[ 9] * bd[15]
+                           + (sword64)ad[10] * bd[14]
+                           + (sword64)ad[11] * bd[13]
+                           + (sword64)ad[12] * bd[12]
+                           + (sword64)ad[13] * bd[11]
+                           + (sword64)ad[14] * bd[10]
+                           + (sword64)ad[15] * bd[ 9];
+    t[25] = (word64)          (sword64)ad[10] * bd[15]
+                           + (sword64)ad[11] * bd[14]
+                           + (sword64)ad[12] * bd[13]
+                           + (sword64)ad[13] * bd[12]
+                           + (sword64)ad[14] * bd[11]
+                           + (sword64)ad[15] * bd[10];
+    t[26] = (word64)          (sword64)ad[11] * bd[15]
+                           + (sword64)ad[12] * bd[14]
+                           + (sword64)ad[13] * bd[13]
+                           + (sword64)ad[14] * bd[12]
+                           + (sword64)ad[15] * bd[11];
+    t[27] = (word64)          (sword64)ad[12] * bd[15]
+                           + (sword64)ad[13] * bd[14]
+                           + (sword64)ad[14] * bd[13]
+                           + (sword64)ad[15] * bd[12];
+    t[28] = (word64)          (sword64)ad[13] * bd[15]
+                           + (sword64)ad[14] * bd[14]
+                           + (sword64)ad[15] * bd[13];
+    t[29] = (word64)          (sword64)ad[14] * bd[15]
+                           + (sword64)ad[15] * bd[14];
+    t[30] = (word64)          (sword64)ad[15] * bd[15];
     t[31] = 0;
 
     /* Mod curve order */
@@ -6200,64 +6263,115 @@ void sc448_muladd(byte* r, const byte* a, const byte* b, const byte* d)
     o = rd[12] >> 28; rd[13] += o; rd[12] = rd[12] & 0xfffffff;
     o = rd[13] >> 28; rd[14] += o; rd[13] = rd[13] & 0xfffffff;
     o = rd[14] >> 28; rd[15] += o; rd[14] = rd[14] & 0xfffffff;
+    /* Reduce to mod order. */
+    u = 0;
+    u += (sword32)(rd[0] - (sword32)0x0b5844f3L); u >>= 28;
+    u += (sword32)(rd[1] - (sword32)0x078c292aL); u >>= 28;
+    u += (sword32)(rd[2] - (sword32)0x058f5523L); u >>= 28;
+    u += (sword32)(rd[3] - (sword32)0x0c2728dcL); u >>= 28;
+    u += (sword32)(rd[4] - (sword32)0x0690216cL); u >>= 28;
+    u += (sword32)(rd[5] - (sword32)0x049aed63L); u >>= 28;
+    u += (sword32)(rd[6] - (sword32)0x09c44edbL); u >>= 28;
+    u += (sword32)(rd[7] - (sword32)0x07cca23eL); u >>= 28;
+    u += (sword32)(rd[8] - (sword32)0x0fffffffL); u >>= 28;
+    u += (sword32)(rd[9] - (sword32)0x0fffffffL); u >>= 28;
+    u += (sword32)(rd[10] - (sword32)0x0fffffffL); u >>= 28;
+    u += (sword32)(rd[11] - (sword32)0x0fffffffL); u >>= 28;
+    u += (sword32)(rd[12] - (sword32)0x0fffffffL); u >>= 28;
+    u += (sword32)(rd[13] - (sword32)0x0fffffffL); u >>= 28;
+    u += (sword32)(rd[14] - (sword32)0x0fffffffL); u >>= 28;
+    u += (sword32)(rd[15] - (sword32)0x03ffffffL); u >>= 28;
+    o = (word32)0 - (u >= 0);
+    u = 0;
+    u += (sword32)(rd[0] - ((word32)0x0b5844f3L & o)); rd[0] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[1] - ((word32)0x078c292aL & o)); rd[1] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[2] - ((word32)0x058f5523L & o)); rd[2] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[3] - ((word32)0x0c2728dcL & o)); rd[3] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[4] - ((word32)0x0690216cL & o)); rd[4] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[5] - ((word32)0x049aed63L & o)); rd[5] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[6] - ((word32)0x09c44edbL & o)); rd[6] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[7] - ((word32)0x07cca23eL & o)); rd[7] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[8] - ((word32)0x0fffffffL & o)); rd[8] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[9] - ((word32)0x0fffffffL & o)); rd[9] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[10] - ((word32)0x0fffffffL & o)); rd[10] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[11] - ((word32)0x0fffffffL & o)); rd[11] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[12] - ((word32)0x0fffffffL & o)); rd[12] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[13] - ((word32)0x0fffffffL & o)); rd[13] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[14] - ((word32)0x0fffffffL & o)); rd[14] = u & 0xfffffff;
+    u >>= 28;
+    u += (sword32)(rd[15] - ((word32)0x03ffffffL & o)); rd[15] = u & 0xfffffff;
 
     /* Convert to bytes */
-    r[ 0] = (rd[0 ] >>  0);
-    r[ 1] = (rd[0 ] >>  8);
-    r[ 2] = (rd[0 ] >> 16);
-    r[ 3] = (rd[0 ] >> 24) + ((rd[1 ] >>  0) <<  4);
-    r[ 4] = (rd[1 ] >>  4);
-    r[ 5] = (rd[1 ] >> 12);
-    r[ 6] = (rd[1 ] >> 20);
-    r[ 7] = (rd[2 ] >>  0);
-    r[ 8] = (rd[2 ] >>  8);
-    r[ 9] = (rd[2 ] >> 16);
-    r[10] = (rd[2 ] >> 24) + ((rd[3 ] >>  0) <<  4);
-    r[11] = (rd[3 ] >>  4);
-    r[12] = (rd[3 ] >> 12);
-    r[13] = (rd[3 ] >> 20);
-    r[14] = (rd[4 ] >>  0);
-    r[15] = (rd[4 ] >>  8);
-    r[16] = (rd[4 ] >> 16);
-    r[17] = (rd[4 ] >> 24) + ((rd[5 ] >>  0) <<  4);
-    r[18] = (rd[5 ] >>  4);
-    r[19] = (rd[5 ] >> 12);
-    r[20] = (rd[5 ] >> 20);
-    r[21] = (rd[6 ] >>  0);
-    r[22] = (rd[6 ] >>  8);
-    r[23] = (rd[6 ] >> 16);
-    r[24] = (rd[6 ] >> 24) + ((rd[7 ] >>  0) <<  4);
-    r[25] = (rd[7 ] >>  4);
-    r[26] = (rd[7 ] >> 12);
-    r[27] = (rd[7 ] >> 20);
-    r[28] = (rd[8 ] >>  0);
-    r[29] = (rd[8 ] >>  8);
-    r[30] = (rd[8 ] >> 16);
-    r[31] = (rd[8 ] >> 24) + ((rd[9 ] >>  0) <<  4);
-    r[32] = (rd[9 ] >>  4);
-    r[33] = (rd[9 ] >> 12);
-    r[34] = (rd[9 ] >> 20);
-    r[35] = (rd[10] >>  0);
-    r[36] = (rd[10] >>  8);
-    r[37] = (rd[10] >> 16);
-    r[38] = (rd[10] >> 24) + ((rd[11] >>  0) <<  4);
-    r[39] = (rd[11] >>  4);
-    r[40] = (rd[11] >> 12);
-    r[41] = (rd[11] >> 20);
-    r[42] = (rd[12] >>  0);
-    r[43] = (rd[12] >>  8);
-    r[44] = (rd[12] >> 16);
-    r[45] = (rd[12] >> 24) + ((rd[13] >>  0) <<  4);
-    r[46] = (rd[13] >>  4);
-    r[47] = (rd[13] >> 12);
-    r[48] = (rd[13] >> 20);
-    r[49] = (rd[14] >>  0);
-    r[50] = (rd[14] >>  8);
-    r[51] = (rd[14] >> 16);
-    r[52] = (rd[14] >> 24) + ((rd[15] >>  0) <<  4);
-    r[53] = (rd[15] >>  4);
-    r[54] = (rd[15] >> 12);
-    r[55] = (rd[15] >> 20);
+    r[ 0] = (byte)(rd[0 ] >>  0);
+    r[ 1] = (byte)(rd[0 ] >>  8);
+    r[ 2] = (byte)(rd[0 ] >> 16);
+    r[ 3] = (byte)(rd[0 ] >> 24) + (byte)((rd[1 ] >>  0) <<  4);
+    r[ 4] = (byte)(rd[1 ] >>  4);
+    r[ 5] = (byte)(rd[1 ] >> 12);
+    r[ 6] = (byte)(rd[1 ] >> 20);
+    r[ 7] = (byte)(rd[2 ] >>  0);
+    r[ 8] = (byte)(rd[2 ] >>  8);
+    r[ 9] = (byte)(rd[2 ] >> 16);
+    r[10] = (byte)(rd[2 ] >> 24) + (byte)((rd[3 ] >>  0) <<  4);
+    r[11] = (byte)(rd[3 ] >>  4);
+    r[12] = (byte)(rd[3 ] >> 12);
+    r[13] = (byte)(rd[3 ] >> 20);
+    r[14] = (byte)(rd[4 ] >>  0);
+    r[15] = (byte)(rd[4 ] >>  8);
+    r[16] = (byte)(rd[4 ] >> 16);
+    r[17] = (byte)(rd[4 ] >> 24) + (byte)((rd[5 ] >>  0) <<  4);
+    r[18] = (byte)(rd[5 ] >>  4);
+    r[19] = (byte)(rd[5 ] >> 12);
+    r[20] = (byte)(rd[5 ] >> 20);
+    r[21] = (byte)(rd[6 ] >>  0);
+    r[22] = (byte)(rd[6 ] >>  8);
+    r[23] = (byte)(rd[6 ] >> 16);
+    r[24] = (byte)(rd[6 ] >> 24) + (byte)((rd[7 ] >>  0) <<  4);
+    r[25] = (byte)(rd[7 ] >>  4);
+    r[26] = (byte)(rd[7 ] >> 12);
+    r[27] = (byte)(rd[7 ] >> 20);
+    r[28] = (byte)(rd[8 ] >>  0);
+    r[29] = (byte)(rd[8 ] >>  8);
+    r[30] = (byte)(rd[8 ] >> 16);
+    r[31] = (byte)(rd[8 ] >> 24) + (byte)((rd[9 ] >>  0) <<  4);
+    r[32] = (byte)(rd[9 ] >>  4);
+    r[33] = (byte)(rd[9 ] >> 12);
+    r[34] = (byte)(rd[9 ] >> 20);
+    r[35] = (byte)(rd[10] >>  0);
+    r[36] = (byte)(rd[10] >>  8);
+    r[37] = (byte)(rd[10] >> 16);
+    r[38] = (byte)(rd[10] >> 24) + (byte)((rd[11] >>  0) <<  4);
+    r[39] = (byte)(rd[11] >>  4);
+    r[40] = (byte)(rd[11] >> 12);
+    r[41] = (byte)(rd[11] >> 20);
+    r[42] = (byte)(rd[12] >>  0);
+    r[43] = (byte)(rd[12] >>  8);
+    r[44] = (byte)(rd[12] >> 16);
+    r[45] = (byte)(rd[12] >> 24) + (byte)((rd[13] >>  0) <<  4);
+    r[46] = (byte)(rd[13] >>  4);
+    r[47] = (byte)(rd[13] >> 12);
+    r[48] = (byte)(rd[13] >> 20);
+    r[49] = (byte)(rd[14] >>  0);
+    r[50] = (byte)(rd[14] >>  8);
+    r[51] = (byte)(rd[14] >> 16);
+    r[52] = (byte)(rd[14] >> 24) + (byte)((rd[15] >>  0) <<  4);
+    r[53] = (byte)(rd[15] >>  4);
+    r[54] = (byte)(rd[15] >> 12);
+    r[55] = (byte)(rd[15] >> 20);
     r[56] = 0;
 }
 
@@ -10455,7 +10569,7 @@ void ge448_to_bytes(byte *b, const ge448_p2 *p)
     fe448_mul(x, p->X, recip);
     fe448_mul(y, p->Y, recip);
     fe448_to_bytes(b, y);
-    b[56] = fe448_isnegative(x) << 7;
+    b[56] = (byte)((byte)fe448_isnegative(x) << 7);
 }
 
 /* Convert point to byte array assuming z is 1.
@@ -10466,7 +10580,7 @@ void ge448_to_bytes(byte *b, const ge448_p2 *p)
 static void ge448_p2z1_to_bytes(byte *b, const ge448_p2 *p)
 {
     fe448_to_bytes(b, p->Y);
-    b[56] = fe448_isnegative(p->X) << 7;
+    b[56] = (byte)((byte)fe448_isnegative(p->X) << 7);
 }
 
 /* Compress the point to y-ordinate and negative bit.
@@ -10543,7 +10657,7 @@ static void ge448_select(ge448_precomp* r, int pos, byte b)
 {
     ge448 minusx[16];
     byte bnegative = negative(b);
-    byte babs = b - (((-bnegative) & b) << 1);
+    byte babs = (byte)(b - (((-bnegative) & b) << 1));
 
     ge448_precomp_0(r);
     cmov(r, &base[pos][0], babs, 1);
@@ -10563,36 +10677,52 @@ static void ge448_select(ge448_precomp* r, int pos, byte b)
  * r  [in]  Point to hold result.
  * a  [in]  Scalar to multiply by.
  */
-void ge448_scalarmult_base(ge448_p2* r, const byte* a)
+int ge448_scalarmult_base(ge448_p2* r, const byte* a)
 {
     byte          carry;
-    ge448_precomp t;
-    int           i;
+#ifdef WOLFSSL_SMALL_STACK
+    ge448_precomp *t = NULL;
+    byte          *e = NULL;
+#else
+    ge448_precomp t[1];
     byte          e[113];
+#endif
+    int           i;
+
+#ifdef WOLFSSL_SMALL_STACK
+    t = (ge448_precomp *)XMALLOC(sizeof(*t), NULL, DYNAMIC_TYPE_TMP_BUFFER);
+    if (t == NULL)
+        return MEMORY_E;
+    e = (byte *)XMALLOC(113, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+    if (e == NULL) {
+        XFREE(t, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        return MEMORY_E;
+    }
+#endif
 
     carry = 0;
     for (i = 0; i < 56; ++i) {
-        e[2 * i + 0] = ((a[i] >> 0) & 0xf) + carry;
-        carry = e[2 * i + 0] + 8;
+        e[2 * i + 0] = (byte)(((a[i] >> 0) & 0xf) + carry);
+        carry = (byte)(e[2 * i + 0] + 8);
         carry >>= 4;
-        e[2 * i + 0] -= carry << 4;
+        e[2 * i + 0] = (byte)(e[2 * i + 0] - (byte)(carry << 4));
 
-        e[2 * i + 1] = ((a[i] >> 4) & 0xf) + carry;
-        carry = e[2 * i + 1] + 8;
-        carry >>= 4;
-        e[2 * i + 1] -= carry << 4;
+        e[2 * i + 1] = (byte)(((a[i] >> 4) & 0xf) + carry);
+        carry = (byte)(e[2 * i + 1] + 8);
+        carry = (byte)(carry >> 4);
+        e[2 * i + 1] = (byte)(e[2 * i + 1] - (carry << 4));
     }
     e[112] = carry;
     /* each e[i] is between -8 and 8 */
 
-    /* Odd indeces first - sum based on even index so multiply by 16 */
-    ge448_select(&t, 0, e[1]);
-    fe448_copy(r->X, t.x);
-    fe448_copy(r->Y, t.y);
+    /* Odd indices first - sum based on even index so multiply by 16 */
+    ge448_select(t, 0, e[1]);
+    fe448_copy(r->X, t->x);
+    fe448_copy(r->Y, t->y);
     fe448_1(r->Z);
     for (i = 3; i < 112; i += 2) {
-        ge448_select(&t, i / 2, e[i]);
-        ge448_madd(r, r, &t);
+        ge448_select(t, i / 2, e[i]);
+        ge448_madd(r, r, t);
     }
 
     ge448_dbl(r, r);
@@ -10600,16 +10730,23 @@ void ge448_scalarmult_base(ge448_p2* r, const byte* a)
     ge448_dbl(r, r);
     ge448_dbl(r, r);
 
-    /* Add even indeces */
+    /* Add even indices */
     for (i = 0; i <= 112; i += 2) {
-        ge448_select(&t, i / 2, e[i]);
-        ge448_madd(r, r, &t);
+        ge448_select(t, i / 2, e[i]);
+        ge448_madd(r, r, t);
     }
+
+#ifdef WOLFSSL_SMALL_STACK
+    XFREE(t, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+    XFREE(e, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+#endif
+
+    return 0;
 }
 
 /* Create to a sliding window for the scalar multiplicaton.
  *
- * r  [in]  Array of indeces.
+ * r  [in]  Array of indices.
  * a  [in]  Scalar to break up.
  */
 static void slide(sword8 *r, const byte *a)
@@ -10633,10 +10770,11 @@ static void slide(sword8 *r, const byte *a)
             }
 
             if (r[i] + (r[i + b] << b) <= 31) {
-                r[i] += r[i + b] << b; r[i + b] = 0;
+                r[i] = (sword8)(r[i] + (r[i + b] << b));
+                r[i + b] = 0;
             }
             else if (r[i] - (r[i + b] << b) >= -31) {
-                r[i] -= r[i + b] << b;
+                r[i] = (sword8)(r[i] - (r[i + b] << b));
                 for (k = i + b; k < 448; ++k) {
                     if (!r[k]) {
                         r[k] = 1;
@@ -10756,18 +10894,10 @@ int ge448_double_scalarmult_vartime(ge448_p2 *r, const byte *a,
     }
 
 #if defined(WOLFSSL_SMALL_STACK) && (!defined(WOLFSSL_NO_MALLOC) ||                                                           defined(XMALLOC_USER))
-    if (p2 != NULL) {
-        XFREE(p2, NULL, DYNAMIC_TYPE_TMP_BUFFER);
-    }
-    if (pi != NULL) {
-        XFREE(pi, NULL, DYNAMIC_TYPE_TMP_BUFFER);
-    }
-    if (bslide != NULL) {
-        XFREE(bslide, NULL, DYNAMIC_TYPE_TMP_BUFFER);
-    }
-    if (aslide != NULL) {
-        XFREE(aslide, NULL, DYNAMIC_TYPE_TMP_BUFFER);
-    }
+    XFREE(p2, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+    XFREE(pi, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+    XFREE(bslide, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+    XFREE(aslide, NULL, DYNAMIC_TYPE_TMP_BUFFER);
 #endif
 
     return ret;

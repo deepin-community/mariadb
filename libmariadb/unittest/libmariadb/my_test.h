@@ -76,7 +76,7 @@ if (IS_SKYSQL(hostname)) \
 #endif
 
 #define SKIP_TLS \
-if (force_tls)\
+if (force_tls || fingerprint[0])\
 {\
   diag("Test doesn't work with TLS");\
   return SKIP;\
@@ -219,11 +219,13 @@ MYSQL *my_test_connect(MYSQL *mysql,
                        const char *db,
                        unsigned int port,
                        const char *unix_socket,
-                       unsigned long clientflag);
+                       unsigned long clientflag,
+                       my_bool auto_fingerprint);
 
 static const char *schema = 0;
 static char *hostname = 0;
 static char *password = 0;
+static char fingerprint[129]= {0};
 static unsigned int port = 0;
 static unsigned int ssl_port = 0;
 static char *socketname = 0;
@@ -541,7 +543,7 @@ MYSQL *test_connect(struct my_tests_st *test)
     }
   }
   if (!(my_test_connect(mysql, hostname, username, password,
-                           schema, port, socketname, (test) ? test->connect_flags:0)))
+                           schema, port, socketname, (test) ? test->connect_flags:0, 1)))
   {
     diag("Couldn't establish connection to server %s. Error (%d): %s", 
                    hostname, mysql_errno(mysql), mysql_error(mysql));
@@ -575,6 +577,15 @@ static int reset_connection(MYSQL *mysql) {
   return OK;
 }
 
+static char *check_envvar(const char *envvar)
+{
+  char *p = getenv(envvar);
+
+  if (p && p[0])
+    return p;
+  return NULL;
+}
+
 /*
  * function get_envvars((
  *
@@ -586,58 +597,51 @@ void get_envvars() {
   if (!getenv("MYSQLTEST_VARDIR") &&
       !getenv("MARIADB_CC_TEST"))
   {
-    skip_all("Tests skipped.\nFor running unittest suite outside of MariaDB server tests,\nplease specify MARIADB_CC_TEST environment variable.");
+    skip_all("Tests skipped.\nFor running unittest suite outside of MariaDB server tests,\nplease specify MARIADB_CC_TEST environment variable.\n");
     exit(0);
   }
 
   if (getenv("TRAVIS_JOB_ID"))
     travis_test= 1;
 
-  if (!hostname && (envvar= getenv("MYSQL_TEST_HOST")))
-    hostname= envvar;
+  if (!hostname)
+    hostname= check_envvar("MYSQL_TEST_HOST");
 
+  if (!username && !(username= check_envvar("MYSQL_TEST_USER")))
+    username= (char *)"root";
 
-  if (!username)
-  {
-    if ((envvar= getenv("MYSQL_TEST_USER")))
-      username= envvar;
-    else
-      username= (char *)"root";
-  }
-  if (!password && (envvar= getenv("MYSQL_TEST_PASSWD")))
-    password= envvar;
-  if (!schema && (envvar= getenv("MYSQL_TEST_DB")))
-    schema= envvar;
-  if (!schema)
+  if (!password)
+    password= check_envvar("MYSQL_TEST_PASSWD");
+
+  if (!schema && !(schema= check_envvar("MYSQL_TEST_DB")))
     schema= "test";
+
   if (!port)
   {
-    if ((envvar= getenv("MYSQL_TEST_PORT")))
+    if ((envvar= check_envvar("MYSQL_TEST_PORT")) ||
+        (envvar= check_envvar("MASTER_MYPORT")))
       port= atoi(envvar);
-    else if ((envvar= getenv("MASTER_MYPORT")))
-      port= atoi(envvar);
-    diag("port: %d", port);
   }
   if (!ssl_port)
   {
-    if ((envvar= getenv("MYSQL_TEST_SSL_PORT")))
+    if ((envvar= check_envvar("MYSQL_TEST_SSL_PORT")))
       ssl_port= atoi(envvar);
     else
       ssl_port = port;
     diag("ssl_port: %d", ssl_port);
   }
 
-  if (!force_tls && (envvar= getenv("MYSQL_TEST_TLS")))
+  if (!force_tls && (envvar= check_envvar("MYSQL_TEST_TLS")))
     force_tls= atoi(envvar);
+
   if (!socketname)
   {
-    if ((envvar= getenv("MYSQL_TEST_SOCKET")))
-      socketname= envvar;
-    else if ((envvar= getenv("MASTER_MYSOCK")))
+    if ((envvar= check_envvar("MYSQL_TEST_SOCKET")) ||
+        (envvar= check_envvar("MASTER_MYSOCK")))
       socketname= envvar;
     diag("socketname: %s", socketname);
   }
-  if ((envvar= getenv("MYSQL_TEST_PLUGINDIR")))
+  if ((envvar= check_envvar("MYSQL_TEST_PLUGINDIR")))
     plugindir= envvar;
 
   if (IS_XPAND())
@@ -653,10 +657,17 @@ MYSQL *my_test_connect(MYSQL *mysql,
                        const char *db,
                        unsigned int port,
                        const char *unix_socket,
-                       unsigned long clientflag)
+                       unsigned long clientflag,
+                       my_bool auto_fingerprint)
 {
+  char *have_fp;
   if (force_tls)
-    mysql_options(mysql, MYSQL_OPT_SSL_ENFORCE, &force_tls); 
+    mysql_options(mysql, MYSQL_OPT_SSL_ENFORCE, &force_tls);
+  mysql_get_optionv(mysql, MARIADB_OPT_SSL_FP, &have_fp);
+  if (fingerprint[0] && auto_fingerprint)
+  {
+    mysql_options(mysql, MARIADB_OPT_SSL_FP, fingerprint);
+  }
   if (!mysql_real_connect(mysql, host, user, passwd, db, port, unix_socket, clientflag))
   {
     diag("error: %s", mysql_error(mysql));
@@ -677,6 +688,8 @@ MYSQL *my_test_connect(MYSQL *mysql,
 void run_tests(struct my_tests_st *test) {
   int i, rc, total=0;
   MYSQL *mysql;
+  my_bool verify= 0;
+  MARIADB_X509_INFO *info= NULL;
 
   while (test[total].function)
     total++;
@@ -684,13 +697,15 @@ void run_tests(struct my_tests_st *test) {
 
 /* display TLS stats */
   mysql= mysql_init(NULL);
+  mysql_options(mysql, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify);
   mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 
   if (!mysql_real_connect(mysql, hostname, username, password, schema, port, socketname, 0))
   {
+    diag("Error: %s", mysql_error(mysql));
     BAIL_OUT("Can't establish TLS connection to server.");
   }
-
+  fingerprint[0]= 0;
   if (!mysql_query(mysql, "SHOW VARIABLES LIKE '%ssl%'"))
   {
     MYSQL_RES *res;
@@ -703,8 +718,16 @@ void run_tests(struct my_tests_st *test) {
     while ((row= mysql_fetch_row(res)))
       diag("%s: %s", row[0], row[1]);
     mysql_free_result(res);
-    diag("Cipher in use: %s", mysql_get_ssl_cipher(mysql));
-    diag("--------------------");
+    if (mysql_get_ssl_cipher(mysql))
+      diag("Cipher in use: %s", mysql_get_ssl_cipher(mysql));
+    mariadb_get_infov(mysql, MARIADB_TLS_PEER_CERT_INFO, &info, 384);
+    if (info)
+    {
+      strcpy(fingerprint, info->fingerprint);
+      diag("Peer certificate fingerprint: %s", fingerprint);
+      diag("Subject: %s", info->subject);
+      diag("--------------------");
+    }
   }
   mysql_close(mysql);
 

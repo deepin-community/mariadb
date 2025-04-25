@@ -59,7 +59,7 @@ namespace wsrep
         enum wsrep::provider::status
         certify(wsrep::client_id, wsrep::ws_handle&,
                 int,
-                wsrep::ws_meta&) WSREP_OVERRIDE;
+                wsrep::ws_meta&, const seq_cb_t*) WSREP_OVERRIDE;
         enum wsrep::provider::status
         bf_abort(wsrep::seqno,
                  wsrep::transaction_id,
@@ -100,6 +100,7 @@ namespace wsrep
         void reset_status() WSREP_OVERRIDE;
         std::string options() const WSREP_OVERRIDE;
         enum wsrep::provider::status options(const std::string&) WSREP_OVERRIDE;
+        enum status set_node_isolation(enum node_isolation mode) WSREP_OVERRIDE;
         std::string name() const WSREP_OVERRIDE;
         std::string version() const WSREP_OVERRIDE;
         std::string vendor() const WSREP_OVERRIDE;

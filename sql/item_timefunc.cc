@@ -26,10 +26,6 @@
     Move month and days to language files
 */
 
-#ifdef USE_PRAGMA_IMPLEMENTATION
-#pragma implementation				// gcc: Class implementation
-#endif
-
 #include "mariadb.h"
 #include "sql_priv.h"
 /*
@@ -473,15 +469,17 @@ err:
   Create a formatted date/time value in a string.
 */
 
-static bool make_date_time(const String *format, const MYSQL_TIME *l_time,
-                           timestamp_type type, const MY_LOCALE *locale,
-                           String *str)
+static bool make_date_time(THD *thd, const String *format,
+                           const MYSQL_TIME *l_time, timestamp_type type,
+                           const MY_LOCALE *locale, String *str)
 {
   char intbuff[15];
   uint hours_i;
   uint weekday;
   ulong length;
   const uchar *ptr, *end;
+  struct my_tz curr_tz;
+  Time_zone* curr_timezone= 0;
 
   str->length(0);
 
@@ -694,6 +692,32 @@ static bool make_date_time(const String *format, const MYSQL_TIME *l_time,
 	str->append_zerofill(weekday, 1);
 	break;
 
+      case 'z':
+      {
+        if (!curr_timezone)
+        {
+          curr_timezone= thd->variables.time_zone;
+          curr_timezone->get_timezone_information(&curr_tz, l_time);
+        }
+        long minutes= labs(curr_tz.seconds_offset)/60, diff_hr, diff_min;
+        diff_hr= minutes/60;
+        diff_min= minutes%60;
+
+        str->append(curr_tz.seconds_offset < 0 ? '-' : '+');
+        str->append(static_cast<char>('0' + diff_hr/10));
+        str->append(static_cast<char>('0' + diff_hr%10));
+        str->append(static_cast<char>('0' + diff_min/10));
+        str->append(static_cast<char>('0' + diff_min%10));
+        break;
+      }
+      case 'Z':
+        if (!curr_timezone)
+        {
+          curr_timezone= thd->variables.time_zone;
+          curr_timezone->get_timezone_information(&curr_tz, l_time);
+        }
+        str->append(curr_tz.abbreviation, strlen(curr_tz.abbreviation));
+        break;
       default:
 	str->append_wc(wc);
 	break;
@@ -1225,8 +1249,17 @@ bool Item_func_unix_timestamp::get_timestamp_value(my_time_t *seconds,
   if ((null_value= native.is_null() || native.is_zero_datetime()))
     return true;
   Timestamp tm(native);
-  *seconds= tm.tv().tv_sec;
-  *second_part= tm.tv().tv_usec;
+  *seconds= (my_time_t) tm.tv_sec;
+  *second_part= tm.tv_usec;
+  if ((null_value= (tm.tv_sec == 0 && tm.tv_usec == 0)))
+  {
+    /*
+      The value {0,0}='1970-01-01 00:00:00.000000 GMT' cannot be
+      stored in a TIMESTAMP field. Return SQL NULL.
+      Simmetrically, UNIX_TIMESTAMP(0) also returns SQL NULL.
+    */
+    return true;
+  }
   return false;
 }
 
@@ -1252,8 +1285,7 @@ my_decimal *Item_func_unix_timestamp::decimal_op(my_decimal* buf)
   if (get_timestamp_value(&seconds, &second_part))
     return 0;
 
-  return seconds2my_decimal(seconds < 0, seconds < 0 ? -seconds : seconds,
-                            second_part, buf);
+  return seconds2my_decimal(0, seconds, second_part, buf);
 }
 
 
@@ -1303,6 +1335,15 @@ my_decimal *Item_func_time_to_sec::decimal_op(my_decimal* buf)
 }
 
 
+static inline
+uint32 adjust_interval_field_uint32(ulonglong value, int32 multiplier)
+{
+  return value > ((ulonglong) (uint32) (UINT_MAX32)) / multiplier ?
+         (uint32) UINT_MAX32 :
+         (uint32) (value * multiplier);
+}
+
+
 /**
   Convert a string to a interval value.
 
@@ -1313,7 +1354,7 @@ bool get_interval_value(THD *thd, Item *args,
                         interval_type int_type, INTERVAL *interval)
 {
   ulonglong array[5];
-  longlong UNINIT_VAR(value);
+  ulonglong UNINIT_VAR(value);
   const char *UNINIT_VAR(str);
   size_t UNINIT_VAR(length);
   CHARSET_INFO *UNINIT_VAR(cs);
@@ -1340,14 +1381,17 @@ bool get_interval_value(THD *thd, Item *args,
   }
   else if ((int) int_type <= INTERVAL_MICROSECOND)
   {
-    value= args->val_int();
-    if (args->null_value)
-      return 1;
-    if (value < 0)
-    {
-      interval->neg=1;
-      value= -value;
-    }
+    /*
+      Let's use Longlong_hybrid_null to handle correctly:
+      - signed and unsigned values
+      - the corner case with LONGLONG_MIN
+        (avoid undefined behavior with its negation)
+    */
+    const Longlong_hybrid_null nr= args->to_longlong_hybrid_null();
+    if (nr.is_null())
+      return true;
+    value= nr.abs();
+    interval->neg= nr.neg() ? 1 : 0;
   }
   else
   {
@@ -1374,13 +1418,13 @@ bool get_interval_value(THD *thd, Item *args,
     interval->year= (ulong) value;
     break;
   case INTERVAL_QUARTER:
-    interval->month= (ulong)(value*3);
+    interval->month= adjust_interval_field_uint32(value, 3);
     break;
   case INTERVAL_MONTH:
     interval->month= (ulong) value;
     break;
   case INTERVAL_WEEK:
-    interval->day= (ulong)(value*7);
+    interval->day= adjust_interval_field_uint32(value, 7);
     break;
   case INTERVAL_DAY:
     interval->day= (ulong) value;
@@ -1497,6 +1541,17 @@ bool Item_func_from_days::get_date(THD *thd, MYSQL_TIME *ltime, date_mode_t fuzz
 }
 
 
+bool Item_func_current_timestamp::val_native(THD *thd, Native *to)
+{
+  Timestamp ts(Timeval(thd->query_start(), thd->query_start_sec_part()));
+  /*
+    to_native() can fail in case of EOM. Don't set null_value on EOM,
+    because CURRENT_TIMESTAMP is NOT NULL. The statement will fail anyway.
+  */
+  return ts.trunc(decimals).to_native(to, decimals);
+}
+
+
 /**
     Converts current time in my_time_t to MYSQL_TIME representation for local
     time zone. Defines time zone (local) used for whole CURDATE function.
@@ -1542,13 +1597,8 @@ bool Item_func_curdate::get_date(THD *thd, MYSQL_TIME *res,
 
 bool Item_func_curtime::fix_fields(THD *thd, Item **items)
 {
-  if (decimals > TIME_SECOND_PART_DIGITS)
-  {
-    my_error(ER_TOO_BIG_PRECISION, MYF(0),
-             func_name(), TIME_SECOND_PART_DIGITS);
-    return 1;
-  }
-  return Item_timefunc::fix_fields(thd, items);
+  return check_fsp_or_error() ||
+         Item_timefunc::fix_fields(thd, items);
 }
 
 bool Item_func_curtime::get_date(THD *thd, MYSQL_TIME *res,
@@ -1618,13 +1668,8 @@ void Item_func_curtime_utc::store_now_in_TIME(THD *thd, MYSQL_TIME *now_time)
 
 bool Item_func_now::fix_fields(THD *thd, Item **items)
 {
-  if (decimals > TIME_SECOND_PART_DIGITS)
-  {
-    my_error(ER_TOO_BIG_PRECISION, MYF(0),
-             func_name(), TIME_SECOND_PART_DIGITS);
-    return 1;
-  }
-  return Item_datetimefunc::fix_fields(thd, items);
+  return check_fsp_or_error() ||
+         Item_datetimefunc::fix_fields(thd, items);
 }
 
 void Item_func_now::print(String *str, enum_query_type query_type)
@@ -1634,23 +1679,6 @@ void Item_func_now::print(String *str, enum_query_type query_type)
   if (decimals)
     str->append_ulonglong(decimals);
   str->append(')');
-}
-
-
-int Item_func_now_local::save_in_field(Field *field, bool no_conversions)
-{
-  if (field->type() == MYSQL_TYPE_TIMESTAMP)
-  {
-    THD *thd= field->get_thd();
-    my_time_t ts= thd->query_start();
-    ulong sec_part= decimals ? thd->query_start_sec_part() : 0;
-    sec_part-= my_time_fraction_remainder(sec_part, decimals);
-    field->set_notnull();
-    field->store_timestamp(ts, sec_part);
-    return 0;
-  }
-  else
-    return Item_datetimefunc::save_in_field(field, no_conversions);
 }
 
 
@@ -1700,21 +1728,17 @@ bool Item_func_now::get_date(THD *thd, MYSQL_TIME *res,
     Converts current time in my_time_t to MYSQL_TIME representation for local
     time zone. Defines time zone (local) used for whole SYSDATE function.
 */
-void Item_func_sysdate_local::store_now_in_TIME(THD *thd, MYSQL_TIME *now_time)
+bool Item_func_sysdate_local::val_native(THD *thd, Native *to)
 {
   my_hrtime_t now= my_hrtime();
-  thd->variables.time_zone->gmt_sec_to_TIME(now_time, hrtime_to_my_time(now));
-  set_sec_part(hrtime_sec_part(now), now_time, this);
-  thd->used|= THD::TIME_ZONE_USED;
+  Timestamp ts(hrtime_to_my_time(now), hrtime_sec_part(now));
+  /*
+    to_native() can fail on EOM. Don't set null_value here,
+    because SYSDATE is NOT NULL. The statement will fail anyway.
+  */
+  return ts.trunc(decimals).to_native(to, decimals);
 }
 
-
-bool Item_func_sysdate_local::get_date(THD *thd, MYSQL_TIME *res,
-                                       date_mode_t fuzzydate __attribute__((unused)))
-{
-  store_now_in_TIME(thd, res);
-  return 0;
-}
 
 bool Item_func_sec_to_time::get_date(THD *thd, MYSQL_TIME *ltime, date_mode_t fuzzydate)
 {
@@ -1822,6 +1846,7 @@ uint Item_func_date_format::format_length(const String *format)
       case 'X': /* Year, used with 'v, where week starts with Monday' */
 	size += 4;
 	break;
+      case 'Z': /* time zone abbreviation */
       case 'a': /* locale's abbreviated weekday name (Sun..Sat) */
       case 'b': /* locale's abbreviated month name (Jan.Dec) */
 	size += 32; /* large for UTF8 locale data */
@@ -1860,6 +1885,9 @@ uint Item_func_date_format::format_length(const String *format)
       case 'f': /* microseconds */
 	size += 6;
 	break;
+      case 'z': /* time zone offset */
+        size += 5;
+        break;
       case 'w': /* day (of the week), numeric */
       case '%':
       default:
@@ -1907,7 +1935,7 @@ String *Item_func_date_format::val_str(String *str)
 
   /* Create the result string */
   str->set_charset(collation.collation);
-  if (!make_date_time(format, &l_time,
+  if (!make_date_time(thd, format, &l_time,
                       is_time_format ? MYSQL_TIMESTAMP_TIME :
                                        MYSQL_TIMESTAMP_DATE,
                       lc, str))
@@ -2723,7 +2751,6 @@ null_date:
 
 bool Item_func_from_unixtime::fix_length_and_dec(THD *thd)
 {
-  thd->used|= THD::TIME_ZONE_USED;
   tz= thd->variables.time_zone;
   Type_std_attributes::set(
     Type_temporal_attributes_not_fixed_dec(MAX_DATETIME_WIDTH,
@@ -2734,26 +2761,36 @@ bool Item_func_from_unixtime::fix_length_and_dec(THD *thd)
 }
 
 
-bool Item_func_from_unixtime::get_date(THD *thd, MYSQL_TIME *ltime,
-				       date_mode_t fuzzydate __attribute__((unused)))
+bool Item_func_from_unixtime::val_native(THD *thd, Native *to)
 {
-  bzero((char *)ltime, sizeof(*ltime));
-  ltime->time_type= MYSQL_TIMESTAMP_TIME;
-
   VSec9 sec(thd, args[0], "unixtime", TIMESTAMP_MAX_VALUE);
   DBUG_ASSERT(sec.is_null() || sec.sec() <= TIMESTAMP_MAX_VALUE);
 
   if (sec.is_null() || sec.truncated() || sec.neg())
     return (null_value= 1);
 
-  sec.round(MY_MIN(decimals, TIME_SECOND_PART_DIGITS), thd->temporal_round_mode());
+  // decimals can be NOT_FIXED_DEC
+  decimal_digits_t fixed_decimals= MY_MIN(decimals, TIME_SECOND_PART_DIGITS);
+
+  sec.round(fixed_decimals, thd->temporal_round_mode());
+
+  if (sec.sec() == 0 && sec.usec() == 0)
+  {
+    /*
+      The value {0,0}='1970-01-01 00:00:00.000000 GMT' cannot be
+      stored in a TIMESTAMP field. Return SQL NULL.
+      Simmetrically, UNIX_TIMESTAMP('1970-01-01 00:00:00')
+      also returns SQL NULL (assuming time_zone='+00:00').
+    */
+    thd->push_warning_truncated_wrong_value("unixtime", "0.0");
+    return (null_value= true); // 0.0 after rounding
+  }
+
   if (sec.sec() > TIMESTAMP_MAX_VALUE)
     return (null_value= true); // Went out of range after rounding
 
-  tz->gmt_sec_to_TIME(ltime, (my_time_t) sec.sec());
-  ltime->second_part= sec.usec();
-
-  return (null_value= 0);
+  const Timestamp ts(Timeval(sec.sec(), sec.usec()));
+  return null_value= ts.to_native(to, fixed_decimals);
 }
 
 
@@ -2942,7 +2979,7 @@ bool Item_extract::fix_length_and_dec(THD *thd)
   switch (int_type) {
   case INTERVAL_YEAR:             set_date_length(4); break; // YYYY
   case INTERVAL_YEAR_MONTH:       set_date_length(6); break; // YYYYMM
-  case INTERVAL_QUARTER:          set_date_length(2); break; // 1..4
+  case INTERVAL_QUARTER:          set_date_length(1); break; // 1..4
   case INTERVAL_MONTH:            set_date_length(2); break; // MM
   case INTERVAL_WEEK:             set_date_length(2); break; // 0..52
   case INTERVAL_DAY:              set_day_length(daylen); break; // DD
@@ -3080,6 +3117,13 @@ void Item_char_typecast::print(String *str, enum_query_type query_type)
   {
     str->append(STRING_WITH_LEN(" charset "));
     str->append(cast_cs->cs_name);
+    /*
+      Print the "binary" keyword in cases like:
+        CAST('str' AS CHAR CHARACTER SET latin1 BINARY)
+    */
+    if ((cast_cs->state & MY_CS_BINSORT) &&
+        Charset(cast_cs).can_have_collate_clause())
+      str->append(STRING_WITH_LEN(" binary"));
   }
   str->append(')');
 }
@@ -3242,21 +3286,21 @@ String *Item_char_typecast::val_str_binary_from_native(String *str)
 class Item_char_typecast_func_handler: public Item_handled_func::Handler_str
 {
 public:
-  const Type_handler *return_type_handler(const Item_handled_func *item) const
+  const Type_handler *return_type_handler(const Item_handled_func *item) const override
   {
     return Type_handler::string_type_handler(item->max_length);
   }
   const Type_handler *
-    type_handler_for_create_select(const Item_handled_func *item) const
+    type_handler_for_create_select(const Item_handled_func *item) const override
   {
     return return_type_handler(item)->type_handler_for_tmp_table(item);
   }
 
-  bool fix_length_and_dec(Item_handled_func *item) const
+  bool fix_length_and_dec(Item_handled_func *item) const override
   {
     return false;
   }
-  String *val_str(Item_handled_func *item, String *to) const
+  String *val_str(Item_handled_func *item, String *to) const override
   {
     DBUG_ASSERT(dynamic_cast<const Item_char_typecast*>(item));
     return static_cast<Item_char_typecast*>(item)->val_str_generic(to);
@@ -3337,7 +3381,7 @@ void Item_char_typecast::fix_length_and_dec_internal(CHARSET_INFO *from_cs)
                       (!my_charset_same(from_cs, cast_cs) &&
                        from_cs != &my_charset_bin &&
                        cast_cs != &my_charset_bin);
-  collation.set(cast_cs, DERIVATION_IMPLICIT);
+  collation= DTCollation::string_typecast(cast_cs);
   char_length= ((cast_length != ~0U) ? cast_length :
                 args[0]->max_length /
                 (cast_cs == &my_charset_bin ? 1 :
@@ -3367,7 +3411,8 @@ Sql_mode_dependency Item_time_typecast::value_depends_on_sql_mode() const
 
 bool Item_date_typecast::get_date(THD *thd, MYSQL_TIME *ltime, date_mode_t fuzzydate)
 {
-  date_mode_t tmp= (fuzzydate | sql_mode_for_dates(thd)) & ~TIME_TIME_ONLY;
+  date_mode_t tmp= (fuzzydate | sql_mode_for_dates(thd))
+                    & ~TIME_TIME_ONLY & ~TIME_INTERVAL_DAY;
   // Force truncation
   Date *d= new(ltime) Date(thd, args[0], Date::Options(date_conv_mode_t(tmp)));
   return (null_value= !d->is_valid_date());
@@ -3376,7 +3421,8 @@ bool Item_date_typecast::get_date(THD *thd, MYSQL_TIME *ltime, date_mode_t fuzzy
 
 bool Item_datetime_typecast::get_date(THD *thd, MYSQL_TIME *ltime, date_mode_t fuzzydate)
 {
-  date_mode_t tmp= (fuzzydate | sql_mode_for_dates(thd)) & ~TIME_TIME_ONLY;
+  date_mode_t tmp= (fuzzydate | sql_mode_for_dates(thd))
+                    & ~TIME_TIME_ONLY & ~TIME_INTERVAL_DAY;
   // Force rounding if the current sql_mode says so
   Datetime::Options opt(date_conv_mode_t(tmp), thd);
   Datetime *dt= new(ltime) Datetime(thd, args[0], opt,
@@ -3499,6 +3545,24 @@ bool Item_func_timediff::get_date(THD *thd, MYSQL_TIME *ltime, date_mode_t fuzzy
 
   if (l_time1.neg != l_time2.neg)
     l_sign= -l_sign;
+
+  if (l_time1.time_type == MYSQL_TIMESTAMP_TIME)
+  {
+    /*
+      In case of TIME-alike arguments:
+        TIMEDIFF('38:59:59', '839:00:00')
+      let's truncate extra fractional seconds that might appear if the argument
+      values were out of the supported TIME range. For example, args[n]->get_time()
+      for the string literal '839:00:00' returns TIME'838:59:59.999999'.
+      The fractional part must be truncated according to this->decimals,
+      to avoid returning more fractional seconds than it was detected
+      during this->fix_length_and_dec().
+      Note, the thd rounding mode should not be important here, as we're removing
+      redundant digits from the maximum possible value: '838:59:59.999999'.
+    */
+    my_time_trunc(&l_time1, decimals);
+    my_time_trunc(&l_time2, decimals);
+  }
 
   if (calc_time_diff(&l_time1, &l_time2, l_sign, &l_time3, fuzzydate))
     return (null_value= 1);

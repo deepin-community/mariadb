@@ -1,6 +1,6 @@
 /* caam_qnx.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -27,7 +27,7 @@
  * wolfssl/wolfcrypt/- path includes other than
  * wolfssl/wolfcrypt/port/caam/caam_* should be avoided!! */
 #undef WC_NO_HARDEN
-#define WC_NO_HARDEN /* silence warning, it is irrelavent here */
+#define WC_NO_HARDEN /* silence warning, it is irrelevant here */
 #include <wolfssl/wolfcrypt/settings.h>
 
 #if defined(__QNX__) || defined(__QNXNTO__)
@@ -55,7 +55,7 @@ static void* localMemory = NULL;
 static unsigned int localPhy = 0;
 sem_t localMemSem;
 
-/* Can be overriden, variable for how large of a local buffer to have.
+/* Can be overridden, variable for how large of a local buffer to have.
  * This allows for large performance gains when avoiding mapping new memory
  * for each operation. */
 #ifndef WOLFSSL_CAAM_QNX_MEMORY
@@ -1641,8 +1641,9 @@ int io_close_ocb(resmgr_context_t *ctp, void *reserved, RESMGR_OCB_T *ocb)
 #if 0
 static int getSupported(char* in)
 {
-        //printf("CAAM Status [0x%8.8x]   = 0x%8.8x\n",
-        //    CAAM_STATUS, WC_CAAM_READ(CAAM_STATUS));
+        /* printf("CAAM Status [0x%8.8x]   = 0x%8.8x\n",
+         *    CAAM_STATUS, WC_CAAM_READ(CAAM_STATUS));
+         */
         printf("CAAM Version MS Register [0x%8.8x]  = 0x%8.8x\n",
             CAAM_VERSION_MS, CAAM_READ(CAAM_VERSION_MS));
         printf("CAAM Version LS Register [0x%8.8x]  = 0x%8.8x\n",

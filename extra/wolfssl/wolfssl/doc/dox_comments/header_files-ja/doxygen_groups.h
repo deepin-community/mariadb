@@ -6,6 +6,7 @@
     \defgroup Camellia Algorithms - Camellia
     \defgroup ChaCha Algorithms - ChaCha
     \defgroup ChaCha20Poly1305 Algorithms - ChaCha20_Poly1305
+  　\defgroup CMAC Algorithm - CMAC
     \defgroup Crypto Callbacks - CryptoCb
     \defgroup Curve25519 Algorithms - Curve25519
     \defgroup Curve448 Algorithms - Curve448
@@ -153,7 +154,7 @@
       -# Set the RSK and, optionally precomputation table: wc_SetSakkeRsk()
       -# Derive SSV and auth data: wc_DeriveSakkeSSV()
       -# Free SAKKE Key: wc_FreeSakkeKey()
-    
+
     \defgroup SAKKE_Setup Setup SAKKE Key
     Operations for establishing a SAKKE key.
 
@@ -220,7 +221,7 @@
     key operations and reducing the attack surface by restricting access to certificate and keys
     to the SIM.
 
-    IoT-Safe support can be enabled on an existing WOLFSSL_CTX contex, using wolfSSL_CTX_iotsafe_enable().\n
+    IoT-Safe support can be enabled on an existing WOLFSSL_CTX context, using wolfSSL_CTX_iotsafe_enable().\n
     Session created within the context can set the parameters for IoT-Safe key and files usage, and enable
     the public keys callback, with wolfSSL_iotsafe_on().
 

@@ -61,7 +61,8 @@ using namespace oam;
 namespace dmlpackageprocessor
 {
 // StopWatch timer;
-DMLPackageProcessor::DMLResult UpdatePackageProcessor::processPackage(dmlpackage::CalpontDMLPackage& cpackage)
+DMLPackageProcessor::DMLResult UpdatePackageProcessor::processPackageInternal(
+    dmlpackage::CalpontDMLPackage& cpackage)
 {
   SUMMARY_INFO("UpdatePackageProcessor::processPackage");
 
@@ -98,7 +99,7 @@ DMLPackageProcessor::DMLResult UpdatePackageProcessor::processPackage(dmlpackage
   {
     logging::Message::Args args;
     logging::Message message(9);
-    args.add("Unknown error occured while getting unique number.");
+    args.add("Unknown error occurred while getting unique number.");
     message.format(args);
     result.result = UPDATE_ERROR;
     result.message = message;
@@ -193,9 +194,6 @@ DMLPackageProcessor::DMLResult UpdatePackageProcessor::processPackage(dmlpackage
 
           for (; i < numTries; i++)
           {
-#ifdef _MSC_VER
-            Sleep(rm_ts.tv_sec * 1000);
-#else
             struct timespec abs_ts;
 
             do
@@ -203,8 +201,6 @@ DMLPackageProcessor::DMLResult UpdatePackageProcessor::processPackage(dmlpackage
               abs_ts.tv_sec = rm_ts.tv_sec;
               abs_ts.tv_nsec = rm_ts.tv_nsec;
             } while (nanosleep(&abs_ts, &rm_ts) < 0);
-
-#endif
 
             try
             {
@@ -305,22 +301,28 @@ DMLPackageProcessor::DMLResult UpdatePackageProcessor::processPackage(dmlpackage
   }
   catch (std::exception& ex)
   {
-    cerr << "UpdatePackageProcessor::processPackage:" << ex.what() << endl;
-
-    if (result.result == 0)
+    if (checkPPLostConnection(ex))
     {
-      result.result = UPDATE_ERROR;
+      result.result = PP_LOST_CONNECTION;
     }
+    else
+    {
+      cerr << "UpdatePackageProcessor::processPackage:" << ex.what() << endl;
+      if (result.result == 0)
+      {
+        result.result = UPDATE_ERROR;
+      }
 
-    result.message = Message(ex.what());
-    result.rowCount = 0;
-    LoggingID logid(DMLLoggingId, fSessionID, txnid.id);
-    logging::Message::Args args1;
-    logging::Message msg(1);
-    args1.add("End SQL statement with error");
-    msg.format(args1);
-    logging::Logger logger(logid.fSubsysID);
-    logger.logMessage(LOG_TYPE_DEBUG, msg, logid);
+      result.message = Message(ex.what());
+      result.rowCount = 0;
+      LoggingID logid(DMLLoggingId, fSessionID, txnid.id);
+      logging::Message::Args args1;
+      logging::Message msg(1);
+      args1.add("End SQL statement with error");
+      msg.format(args1);
+      logging::Logger logger(logid.fSubsysID);
+      logger.logMessage(LOG_TYPE_DEBUG, msg, logid);
+    }
   }
   catch (...)
   {
