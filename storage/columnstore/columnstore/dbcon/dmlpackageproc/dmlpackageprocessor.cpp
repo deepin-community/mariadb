@@ -266,6 +266,52 @@ int DMLPackageProcessor::commitTransaction(uint64_t uniqueId, BRM::TxnID txnID)
   return rc;
 }
 
+// Tries to rollback transaction, if network error tries one more time
+// MCOL-5263.
+int32_t DMLPackageProcessor::tryToRollBackTransaction(uint64_t uniqueId, BRM::TxnID txnID, uint32_t sessionID,
+                                                      string& errorMsg)
+{
+  auto weRc = rollBackTransaction(uniqueId, txnID, sessionID, errorMsg);
+  if (weRc)
+  {
+    weRc = rollBackTransaction(uniqueId, txnID, sessionID, errorMsg);
+    if (weRc == 0)
+    {
+      // Setup connection in WE with PS.
+      joblist::ResourceManager* rm = joblist::ResourceManager::instance(true);
+      joblist::DistributedEngineComm* fEc = joblist::DistributedEngineComm::instance(rm);
+      weRc = fEc->Setup();
+    }
+  }
+
+  return weRc;
+}
+
+DMLPackageProcessor::DMLResult DMLPackageProcessor::processPackage(dmlpackage::CalpontDMLPackage& cpackage)
+{
+  auto result = processPackageInternal(cpackage);
+  uint32_t tries = 0;
+  // Try to setup connection and process package one more time.
+  while ((result.result == PP_LOST_CONNECTION) && (tries < 5))
+  {
+    std::cerr << "DMLPackageProcessor: NETWORK ERROR; attempt # " << tries << std::endl;
+    joblist::ResourceManager* rm = joblist::ResourceManager::instance(true);
+    joblist::DistributedEngineComm* fEc = joblist::DistributedEngineComm::instance(rm);
+    if (fEc->Setup())
+      return result;
+
+    result = processPackageInternal(cpackage);
+    ++tries;
+  }
+  return result;
+}
+
+bool DMLPackageProcessor::checkPPLostConnection(std::exception& ex)
+{
+  std::string error = ex.what();
+  return error.find(PPLostConnectionErrorCode) != std::string::npos;
+}
+
 int DMLPackageProcessor::rollBackTransaction(uint64_t uniqueId, BRM::TxnID txnID, uint32_t sessionID,
                                              std::string& errorMsg)
 {
@@ -342,7 +388,7 @@ int DMLPackageProcessor::rollBackTransaction(uint64_t uniqueId, BRM::TxnID txnID
   catch (std::exception& e)
   {
     rc = NETWORK_ERROR;
-    errorMsg = "Network error occured when rolling back blocks";
+    errorMsg = "Network error occurred when rolling back blocks";
     errorMsg += e.what();
     fWEClient->removeQueue(uniqueId);
     cout << "erroring out remove queue id " << uniqueId << endl;
@@ -913,4 +959,3 @@ int DMLPackageProcessor::endTransaction(uint64_t uniqueId, BRM::TxnID txnID, boo
   return rc;
 }
 }  // namespace dmlpackageprocessor
-// vim:ts=4 sw=4:

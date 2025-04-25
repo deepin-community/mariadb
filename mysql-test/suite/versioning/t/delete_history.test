@@ -1,6 +1,7 @@
 --source suite/versioning/common.inc
 --source include/have_partition.inc
 --source suite/versioning/engines.inc
+--source include/word_size.inc
 
 call mtr.add_suppression("need more HISTORY partitions");
 
@@ -195,7 +196,7 @@ drop table t1;
 --echo # MDEV-25004 Missing row in FTS_DOC_ID_INDEX during DELETE HISTORY
 --echo #
 create table t1 (a integer, c0 varchar(255), fulltext key (c0))
-with system versioning engine innodb;
+with system versioning engine innodb stats_persistent=0;
 set system_versioning_alter_history= keep;
 alter table t1 drop system versioning;
 alter table t1 add system versioning;
@@ -206,7 +207,7 @@ delete history from t1;
 drop table t1;
 
 create table t1 (id int primary key, ftx varchar(255))
-with system versioning engine innodb;
+with system versioning engine innodb stats_persistent=0;
 insert into t1 values (1, 'c');
 delete from t1;
 alter table t1 add fulltext key(ftx);
@@ -226,6 +227,19 @@ DROP VIEW v1;
 DROP TABLE t1;
 
 --echo # End of 10.4 tests
+
+--echo #
+--echo # MDEV-33470 Unique hash index is broken on DML for system-versioned table
+--echo #
+create or replace table t (
+  c int, unique (c) using hash)
+with system versioning;
+insert into t values (0);
+delete from t;
+delete history from t;
+drop table t;
+
+--echo # End of 10.5 tests
 
 --echo #
 --echo # MDEV-17554 Auto-create new partition for system versioned tables with history partitioned by INTERVAL/LIMIT

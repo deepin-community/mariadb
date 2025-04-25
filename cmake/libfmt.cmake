@@ -1,4 +1,4 @@
-INCLUDE (CheckCXXSourceCompiles)
+INCLUDE (CheckCXXSourceRuns)
 INCLUDE (ExternalProject)
 
 SET(WITH_LIBFMT "auto" CACHE STRING
@@ -15,8 +15,8 @@ MACRO(BUNDLE_LIBFMT)
   ExternalProject_Add(
     libfmt
     PREFIX   "${dir}"
-    URL      "https://github.com/fmtlib/fmt/archive/refs/tags/8.0.1.zip"
-    URL_MD5  e77873199e897ca9f780479ad68e25b1
+    URL      "https://github.com/fmtlib/fmt/releases/download/11.0.2/fmt-11.0.2.zip"
+    URL_MD5 c622dca45ec3fc95254c48370a9f7a1d
     INSTALL_COMMAND ""
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
@@ -27,17 +27,16 @@ ENDMACRO()
 MACRO (CHECK_LIBFMT)
   IF(WITH_LIBFMT STREQUAL "system" OR WITH_LIBFMT STREQUAL "auto")
     SET(CMAKE_REQUIRED_INCLUDES ${LIBFMT_INCLUDE_DIR})
-    CHECK_CXX_SOURCE_COMPILES(
+    CHECK_CXX_SOURCE_RUNS(
     "#define FMT_STATIC_THOUSANDS_SEPARATOR ','
      #define FMT_HEADER_ONLY 1
-     #include <fmt/format-inl.h>
-     #include <iostream>
+     #include <fmt/args.h>
      int main() {
-       int answer= 42;
-       fmt::format_args::format_arg arg=
-         fmt::detail::make_arg<fmt::format_context>(answer);
-         std::cout << fmt::vformat(\"The answer is {}.\",
-                                   fmt::format_args(&arg, 1));
+       using ArgStore= fmt::dynamic_format_arg_store<fmt::format_context>;
+       ArgStore arg_store;
+       int answer= 4321;
+       arg_store.push_back(answer);
+       return fmt::vformat(\"{:L}\", arg_store).compare(\"4,321\");
      }" HAVE_SYSTEM_LIBFMT)
     SET(CMAKE_REQUIRED_INCLUDES)
   ENDIF()

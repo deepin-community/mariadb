@@ -4,13 +4,13 @@
 installed=`rpm -q --whatprovides mysql-server 2> /dev/null`
 if [ $? -eq 0 -a -n "$installed" ]; then
   installed=`echo "$installed"|sed -n 1p`
-  vendor=`rpm -q --queryformat='%''{VENDOR}' "$installed" 2>&1 | sed 's/Monty Program AB/MariaDB Foundation/'`
-  version=`rpm -q --queryformat='%''{VERSION}' "$installed" 2>&1`
+  vendor=`rpm -q --queryformat='%''{VENDOR}' "$installed" 2> /dev/null | sed 's/Monty Program AB/MariaDB Foundation/'`
+  version=`rpm -q --queryformat='%''{VERSION}' "$installed" 2> /dev/null`
   myvendor='%{mysql_vendor}'
   myversion='%{mysqlversion}'
 
-  old_family=`echo $version   | sed -n -e 's,^\([1-9][0-9]*\.[0-9][0-9]*\)\..*$,\1,p'`
-  new_family=`echo $myversion | sed -n -e 's,^\([1-9][0-9]*\.[0-9][0-9]*\)\..*$,\1,p'`
+  old_family=`echo $version   | sed -n -e 's,^\([1-9][0-9]*\)\..*$,\1,p'`
+  new_family=`echo $myversion | sed -n -e 's,^\([1-9][0-9]*\)\..*$,\1,p'`
 
   [ -z "$vendor" ] && vendor='<unknown>'
   [ -z "$old_family" ] && old_family="<unrecognized version $version>"

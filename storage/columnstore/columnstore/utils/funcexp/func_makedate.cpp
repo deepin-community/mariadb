@@ -101,7 +101,7 @@ uint64_t makedate(rowgroup::Row& row, FunctionParm& parm, bool& isNull)
     case CalpontSystemCatalog::TEXT:
     case CalpontSystemCatalog::VARCHAR:
     {
-      dayofyear = parm[1]->data()->getStrVal(row, isNull);
+      dayofyear = parm[1]->data()->getStrVal(row, isNull).safeString("");
 
       if (atoi(dayofyear.c_str()) < 1)
       {
@@ -190,4 +190,3 @@ string Func_makedate::getStrVal(rowgroup::Row& row, FunctionParm& parm, bool& is
 }
 
 }  // namespace funcexp
-// vim:ts=4 sw=4:

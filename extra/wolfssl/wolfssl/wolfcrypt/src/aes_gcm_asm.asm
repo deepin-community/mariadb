@@ -1,6 +1,6 @@
-; /* aes_gcm_asm
-;  *
-;  * Copyright (C) 2006-2023 wolfSSL Inc.
+; /* aes_gcm_asm.asm */
+; /*
+;  * Copyright (C) 2006-2024 wolfSSL Inc.
 ;  *
 ;  * This file is part of wolfSSL.
 ;  *
@@ -96,7 +96,7 @@ L_aes_gcm_mod2_128 QWORD 1, 13979173243358019584
 ptr_L_aes_gcm_mod2_128 QWORD L_aes_gcm_mod2_128
 _DATA ENDS
 _text SEGMENT READONLY PARA
-AES_GCM_encrypt PROC
+AES_GCM_encrypt_aesni PROC
         push	r13
         push	rdi
         push	rsi
@@ -115,12 +115,22 @@ AES_GCM_encrypt PROC
         mov	r14d, DWORD PTR [rsp+128]
         mov	r15, QWORD PTR [rsp+136]
         mov	r10d, DWORD PTR [rsp+144]
-        sub	rsp, 160
+        sub	rsp, 320
+        movdqu	OWORD PTR [rsp+160], xmm6
+        movdqu	OWORD PTR [rsp+176], xmm7
+        movdqu	OWORD PTR [rsp+192], xmm8
+        movdqu	OWORD PTR [rsp+208], xmm9
+        movdqu	OWORD PTR [rsp+224], xmm10
+        movdqu	OWORD PTR [rsp+240], xmm11
+        movdqu	OWORD PTR [rsp+256], xmm12
+        movdqu	OWORD PTR [rsp+272], xmm13
+        movdqu	OWORD PTR [rsp+288], xmm14
+        movdqu	OWORD PTR [rsp+304], xmm15
         pxor	xmm4, xmm4
         pxor	xmm6, xmm6
         cmp	ebx, 12
         mov	edx, ebx
-        jne	L_AES_GCM_encrypt_iv_not_12
+        jne	L_AES_GCM_encrypt_aesni_iv_not_12
         ; # Calculate values when IV is 12 bytes
         ; Set counter based on IV
         mov	ecx, 16777216
@@ -160,7 +170,7 @@ AES_GCM_encrypt PROC
         aesenc	xmm1, xmm7
         cmp	r10d, 11
         movdqa	xmm7, OWORD PTR [r15+160]
-        jl	L_AES_GCM_encrypt_calc_iv_12_last
+        jl	L_AES_GCM_encrypt_aesni_calc_iv_12_last
         aesenc	xmm5, xmm7
         aesenc	xmm1, xmm7
         movdqa	xmm7, OWORD PTR [r15+176]
@@ -168,20 +178,20 @@ AES_GCM_encrypt PROC
         aesenc	xmm1, xmm7
         cmp	r10d, 13
         movdqa	xmm7, OWORD PTR [r15+192]
-        jl	L_AES_GCM_encrypt_calc_iv_12_last
+        jl	L_AES_GCM_encrypt_aesni_calc_iv_12_last
         aesenc	xmm5, xmm7
         aesenc	xmm1, xmm7
         movdqa	xmm7, OWORD PTR [r15+208]
         aesenc	xmm5, xmm7
         aesenc	xmm1, xmm7
         movdqa	xmm7, OWORD PTR [r15+224]
-L_AES_GCM_encrypt_calc_iv_12_last:
+L_AES_GCM_encrypt_aesni_calc_iv_12_last:
         aesenclast	xmm5, xmm7
         aesenclast	xmm1, xmm7
         pshufb	xmm5, OWORD PTR L_aes_gcm_bswap_mask
-        movdqu	[rsp+144], xmm1
-        jmp	L_AES_GCM_encrypt_iv_done
-L_AES_GCM_encrypt_iv_not_12:
+        movdqu	OWORD PTR [rsp+144], xmm1
+        jmp	L_AES_GCM_encrypt_aesni_iv_done
+L_AES_GCM_encrypt_aesni_iv_not_12:
         ; Calculate values when IV is not 12 bytes
         ; H = Encrypt X(=0)
         movdqa	xmm5, OWORD PTR [r15]
@@ -196,28 +206,28 @@ L_AES_GCM_encrypt_iv_not_12:
         aesenc	xmm5, [r15+144]
         cmp	r10d, 11
         movdqa	xmm9, OWORD PTR [r15+160]
-        jl	L_AES_GCM_encrypt_calc_iv_1_aesenc_avx_last
+        jl	L_AES_GCM_encrypt_aesni_calc_iv_1_aesenc_avx_last
         aesenc	xmm5, xmm9
         aesenc	xmm5, [r15+176]
         cmp	r10d, 13
         movdqa	xmm9, OWORD PTR [r15+192]
-        jl	L_AES_GCM_encrypt_calc_iv_1_aesenc_avx_last
+        jl	L_AES_GCM_encrypt_aesni_calc_iv_1_aesenc_avx_last
         aesenc	xmm5, xmm9
         aesenc	xmm5, [r15+208]
         movdqa	xmm9, OWORD PTR [r15+224]
-L_AES_GCM_encrypt_calc_iv_1_aesenc_avx_last:
+L_AES_GCM_encrypt_aesni_calc_iv_1_aesenc_avx_last:
         aesenclast	xmm5, xmm9
         pshufb	xmm5, OWORD PTR L_aes_gcm_bswap_mask
         ; Calc counter
         ; Initialization vector
         cmp	edx, 0
         mov	rcx, 0
-        je	L_AES_GCM_encrypt_calc_iv_done
+        je	L_AES_GCM_encrypt_aesni_calc_iv_done
         cmp	edx, 16
-        jl	L_AES_GCM_encrypt_calc_iv_lt16
+        jl	L_AES_GCM_encrypt_aesni_calc_iv_lt16
         and	edx, 4294967280
-L_AES_GCM_encrypt_calc_iv_16_loop:
-        movdqu	xmm8, [rax+rcx]
+L_AES_GCM_encrypt_aesni_calc_iv_16_loop:
+        movdqu	xmm8, OWORD PTR [rax+rcx]
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm4, xmm8
         pshufd	xmm1, xmm4, 78
@@ -276,23 +286,23 @@ L_AES_GCM_encrypt_calc_iv_16_loop:
         pxor	xmm4, xmm2
         add	ecx, 16
         cmp	ecx, edx
-        jl	L_AES_GCM_encrypt_calc_iv_16_loop
+        jl	L_AES_GCM_encrypt_aesni_calc_iv_16_loop
         mov	edx, ebx
         cmp	ecx, edx
-        je	L_AES_GCM_encrypt_calc_iv_done
-L_AES_GCM_encrypt_calc_iv_lt16:
+        je	L_AES_GCM_encrypt_aesni_calc_iv_done
+L_AES_GCM_encrypt_aesni_calc_iv_lt16:
         sub	rsp, 16
         pxor	xmm8, xmm8
         xor	ebx, ebx
-        movdqu	[rsp], xmm8
-L_AES_GCM_encrypt_calc_iv_loop:
+        movdqu	OWORD PTR [rsp], xmm8
+L_AES_GCM_encrypt_aesni_calc_iv_loop:
         movzx	r13d, BYTE PTR [rax+rcx]
         mov	BYTE PTR [rsp+rbx], r13b
         inc	ecx
         inc	ebx
         cmp	ecx, edx
-        jl	L_AES_GCM_encrypt_calc_iv_loop
-        movdqu	xmm8, [rsp]
+        jl	L_AES_GCM_encrypt_aesni_calc_iv_loop
+        movdqu	xmm8, OWORD PTR [rsp]
         add	rsp, 16
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm4, xmm8
@@ -350,7 +360,7 @@ L_AES_GCM_encrypt_calc_iv_loop:
         pxor	xmm2, xmm1
         pxor	xmm2, xmm7
         pxor	xmm4, xmm2
-L_AES_GCM_encrypt_calc_iv_done:
+L_AES_GCM_encrypt_aesni_calc_iv_done:
         ; T = Encrypt counter
         pxor	xmm0, xmm0
         shl	edx, 3
@@ -425,29 +435,29 @@ L_AES_GCM_encrypt_calc_iv_done:
         aesenc	xmm8, [r15+144]
         cmp	r10d, 11
         movdqa	xmm9, OWORD PTR [r15+160]
-        jl	L_AES_GCM_encrypt_calc_iv_2_aesenc_avx_last
+        jl	L_AES_GCM_encrypt_aesni_calc_iv_2_aesenc_avx_last
         aesenc	xmm8, xmm9
         aesenc	xmm8, [r15+176]
         cmp	r10d, 13
         movdqa	xmm9, OWORD PTR [r15+192]
-        jl	L_AES_GCM_encrypt_calc_iv_2_aesenc_avx_last
+        jl	L_AES_GCM_encrypt_aesni_calc_iv_2_aesenc_avx_last
         aesenc	xmm8, xmm9
         aesenc	xmm8, [r15+208]
         movdqa	xmm9, OWORD PTR [r15+224]
-L_AES_GCM_encrypt_calc_iv_2_aesenc_avx_last:
+L_AES_GCM_encrypt_aesni_calc_iv_2_aesenc_avx_last:
         aesenclast	xmm8, xmm9
-        movdqu	[rsp+144], xmm8
-L_AES_GCM_encrypt_iv_done:
+        movdqu	OWORD PTR [rsp+144], xmm8
+L_AES_GCM_encrypt_aesni_iv_done:
         ; Additional authentication data
         mov	edx, r11d
         cmp	edx, 0
-        je	L_AES_GCM_encrypt_calc_aad_done
+        je	L_AES_GCM_encrypt_aesni_calc_aad_done
         xor	ecx, ecx
         cmp	edx, 16
-        jl	L_AES_GCM_encrypt_calc_aad_lt16
+        jl	L_AES_GCM_encrypt_aesni_calc_aad_lt16
         and	edx, 4294967280
-L_AES_GCM_encrypt_calc_aad_16_loop:
-        movdqu	xmm8, [r12+rcx]
+L_AES_GCM_encrypt_aesni_calc_aad_16_loop:
+        movdqu	xmm8, OWORD PTR [r12+rcx]
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm6, xmm8
         pshufd	xmm1, xmm6, 78
@@ -506,23 +516,23 @@ L_AES_GCM_encrypt_calc_aad_16_loop:
         pxor	xmm6, xmm2
         add	ecx, 16
         cmp	ecx, edx
-        jl	L_AES_GCM_encrypt_calc_aad_16_loop
+        jl	L_AES_GCM_encrypt_aesni_calc_aad_16_loop
         mov	edx, r11d
         cmp	ecx, edx
-        je	L_AES_GCM_encrypt_calc_aad_done
-L_AES_GCM_encrypt_calc_aad_lt16:
+        je	L_AES_GCM_encrypt_aesni_calc_aad_done
+L_AES_GCM_encrypt_aesni_calc_aad_lt16:
         sub	rsp, 16
         pxor	xmm8, xmm8
         xor	ebx, ebx
-        movdqu	[rsp], xmm8
-L_AES_GCM_encrypt_calc_aad_loop:
+        movdqu	OWORD PTR [rsp], xmm8
+L_AES_GCM_encrypt_aesni_calc_aad_loop:
         movzx	r13d, BYTE PTR [r12+rcx]
         mov	BYTE PTR [rsp+rbx], r13b
         inc	ecx
         inc	ebx
         cmp	ecx, edx
-        jl	L_AES_GCM_encrypt_calc_aad_loop
-        movdqu	xmm8, [rsp]
+        jl	L_AES_GCM_encrypt_aesni_calc_aad_loop
+        movdqu	xmm8, OWORD PTR [rsp]
         add	rsp, 16
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm6, xmm8
@@ -580,13 +590,13 @@ L_AES_GCM_encrypt_calc_aad_loop:
         pxor	xmm2, xmm1
         pxor	xmm2, xmm7
         pxor	xmm6, xmm2
-L_AES_GCM_encrypt_calc_aad_done:
+L_AES_GCM_encrypt_aesni_calc_aad_done:
         ; Calculate counter and H
         pshufb	xmm4, OWORD PTR L_aes_gcm_bswap_epi64
         movdqa	xmm9, xmm5
         paddd	xmm4, OWORD PTR L_aes_gcm_one
         movdqa	xmm8, xmm5
-        movdqu	[rsp+128], xmm4
+        movdqu	OWORD PTR [rsp+128], xmm4
         psrlq	xmm9, 63
         psllq	xmm8, 1
         pslldq	xmm9, 8
@@ -598,11 +608,11 @@ L_AES_GCM_encrypt_calc_aad_done:
         xor	rbx, rbx
         cmp	r9d, 128
         mov	r13d, r9d
-        jl	L_AES_GCM_encrypt_done_128
+        jl	L_AES_GCM_encrypt_aesni_done_128
         and	r13d, 4294967168
         movdqa	xmm2, xmm6
         ; H ^ 1
-        movdqu	[rsp], xmm5
+        movdqu	OWORD PTR [rsp], xmm5
         ; H ^ 2
         pshufd	xmm9, xmm5, 78
         pshufd	xmm10, xmm5, 78
@@ -644,7 +654,7 @@ L_AES_GCM_encrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm0, xmm14
-        movdqu	[rsp+16], xmm0
+        movdqu	OWORD PTR [rsp+16], xmm0
         ; H ^ 3
         pshufd	xmm9, xmm5, 78
         pshufd	xmm10, xmm0, 78
@@ -686,7 +696,7 @@ L_AES_GCM_encrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm1, xmm14
-        movdqu	[rsp+32], xmm1
+        movdqu	OWORD PTR [rsp+32], xmm1
         ; H ^ 4
         pshufd	xmm9, xmm0, 78
         pshufd	xmm10, xmm0, 78
@@ -728,7 +738,7 @@ L_AES_GCM_encrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm3, xmm14
-        movdqu	[rsp+48], xmm3
+        movdqu	OWORD PTR [rsp+48], xmm3
         ; H ^ 5
         pshufd	xmm9, xmm0, 78
         pshufd	xmm10, xmm1, 78
@@ -770,7 +780,7 @@ L_AES_GCM_encrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+64], xmm7
+        movdqu	OWORD PTR [rsp+64], xmm7
         ; H ^ 6
         pshufd	xmm9, xmm1, 78
         pshufd	xmm10, xmm1, 78
@@ -812,7 +822,7 @@ L_AES_GCM_encrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+80], xmm7
+        movdqu	OWORD PTR [rsp+80], xmm7
         ; H ^ 7
         pshufd	xmm9, xmm1, 78
         pshufd	xmm10, xmm3, 78
@@ -854,7 +864,7 @@ L_AES_GCM_encrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+96], xmm7
+        movdqu	OWORD PTR [rsp+96], xmm7
         ; H ^ 8
         pshufd	xmm9, xmm3, 78
         pshufd	xmm10, xmm3, 78
@@ -896,9 +906,9 @@ L_AES_GCM_encrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+112], xmm7
+        movdqu	OWORD PTR [rsp+112], xmm7
         ; First 128 bytes of input
-        movdqu	xmm8, [rsp+128]
+        movdqu	xmm8, OWORD PTR [rsp+128]
         movdqa	xmm1, OWORD PTR L_aes_gcm_bswap_epi64
         movdqa	xmm0, xmm8
         pshufb	xmm8, xmm1
@@ -925,7 +935,7 @@ L_AES_GCM_encrypt_calc_aad_done:
         pshufb	xmm15, xmm1
         paddd	xmm0, OWORD PTR L_aes_gcm_eight
         movdqa	xmm7, OWORD PTR [r15]
-        movdqu	[rsp+128], xmm0
+        movdqu	OWORD PTR [rsp+128], xmm0
         pxor	xmm8, xmm7
         pxor	xmm9, xmm7
         pxor	xmm10, xmm7
@@ -1017,7 +1027,7 @@ L_AES_GCM_encrypt_calc_aad_done:
         aesenc	xmm15, xmm7
         cmp	r10d, 11
         movdqa	xmm7, OWORD PTR [r15+160]
-        jl	L_AES_GCM_encrypt_enc_done
+        jl	L_AES_GCM_encrypt_aesni_enc_done
         aesenc	xmm8, xmm7
         aesenc	xmm9, xmm7
         aesenc	xmm10, xmm7
@@ -1037,7 +1047,7 @@ L_AES_GCM_encrypt_calc_aad_done:
         aesenc	xmm15, xmm7
         cmp	r10d, 13
         movdqa	xmm7, OWORD PTR [r15+192]
-        jl	L_AES_GCM_encrypt_enc_done
+        jl	L_AES_GCM_encrypt_aesni_enc_done
         aesenc	xmm8, xmm7
         aesenc	xmm9, xmm7
         aesenc	xmm10, xmm7
@@ -1056,47 +1066,47 @@ L_AES_GCM_encrypt_calc_aad_done:
         aesenc	xmm14, xmm7
         aesenc	xmm15, xmm7
         movdqa	xmm7, OWORD PTR [r15+224]
-L_AES_GCM_encrypt_enc_done:
+L_AES_GCM_encrypt_aesni_enc_done:
         aesenclast	xmm8, xmm7
         aesenclast	xmm9, xmm7
-        movdqu	xmm0, [rdi]
-        movdqu	xmm1, [rdi+16]
+        movdqu	xmm0, OWORD PTR [rdi]
+        movdqu	xmm1, OWORD PTR [rdi+16]
         pxor	xmm8, xmm0
         pxor	xmm9, xmm1
-        movdqu	[rsi], xmm8
-        movdqu	[rsi+16], xmm9
+        movdqu	OWORD PTR [rsi], xmm8
+        movdqu	OWORD PTR [rsi+16], xmm9
         aesenclast	xmm10, xmm7
         aesenclast	xmm11, xmm7
-        movdqu	xmm0, [rdi+32]
-        movdqu	xmm1, [rdi+48]
+        movdqu	xmm0, OWORD PTR [rdi+32]
+        movdqu	xmm1, OWORD PTR [rdi+48]
         pxor	xmm10, xmm0
         pxor	xmm11, xmm1
-        movdqu	[rsi+32], xmm10
-        movdqu	[rsi+48], xmm11
+        movdqu	OWORD PTR [rsi+32], xmm10
+        movdqu	OWORD PTR [rsi+48], xmm11
         aesenclast	xmm12, xmm7
         aesenclast	xmm13, xmm7
-        movdqu	xmm0, [rdi+64]
-        movdqu	xmm1, [rdi+80]
+        movdqu	xmm0, OWORD PTR [rdi+64]
+        movdqu	xmm1, OWORD PTR [rdi+80]
         pxor	xmm12, xmm0
         pxor	xmm13, xmm1
-        movdqu	[rsi+64], xmm12
-        movdqu	[rsi+80], xmm13
+        movdqu	OWORD PTR [rsi+64], xmm12
+        movdqu	OWORD PTR [rsi+80], xmm13
         aesenclast	xmm14, xmm7
         aesenclast	xmm15, xmm7
-        movdqu	xmm0, [rdi+96]
-        movdqu	xmm1, [rdi+112]
+        movdqu	xmm0, OWORD PTR [rdi+96]
+        movdqu	xmm1, OWORD PTR [rdi+112]
         pxor	xmm14, xmm0
         pxor	xmm15, xmm1
-        movdqu	[rsi+96], xmm14
-        movdqu	[rsi+112], xmm15
+        movdqu	OWORD PTR [rsi+96], xmm14
+        movdqu	OWORD PTR [rsi+112], xmm15
         cmp	r13d, 128
         mov	ebx, 128
-        jle	L_AES_GCM_encrypt_end_128
+        jle	L_AES_GCM_encrypt_aesni_end_128
         ; More 128 bytes of input
-L_AES_GCM_encrypt_ghash_128:
+L_AES_GCM_encrypt_aesni_ghash_128:
         lea	rcx, QWORD PTR [rdi+rbx]
         lea	rdx, QWORD PTR [rsi+rbx]
-        movdqu	xmm8, [rsp+128]
+        movdqu	xmm8, OWORD PTR [rsp+128]
         movdqa	xmm1, OWORD PTR L_aes_gcm_bswap_epi64
         movdqa	xmm0, xmm8
         pshufb	xmm8, xmm1
@@ -1123,7 +1133,7 @@ L_AES_GCM_encrypt_ghash_128:
         pshufb	xmm15, xmm1
         paddd	xmm0, OWORD PTR L_aes_gcm_eight
         movdqa	xmm7, OWORD PTR [r15]
-        movdqu	[rsp+128], xmm0
+        movdqu	OWORD PTR [rsp+128], xmm0
         pxor	xmm8, xmm7
         pxor	xmm9, xmm7
         pxor	xmm10, xmm7
@@ -1132,8 +1142,8 @@ L_AES_GCM_encrypt_ghash_128:
         pxor	xmm13, xmm7
         pxor	xmm14, xmm7
         pxor	xmm15, xmm7
-        movdqu	xmm7, [rsp+112]
-        movdqu	xmm0, [rdx+-128]
+        movdqu	xmm7, OWORD PTR [rsp+112]
+        movdqu	xmm0, OWORD PTR [rdx+-128]
         aesenc	xmm8, [r15+16]
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm0, xmm2
@@ -1155,8 +1165,8 @@ L_AES_GCM_encrypt_ghash_128:
         aesenc	xmm15, [r15+16]
         pxor	xmm1, xmm2
         pxor	xmm1, xmm3
-        movdqu	xmm7, [rsp+96]
-        movdqu	xmm0, [rdx+-112]
+        movdqu	xmm7, OWORD PTR [rsp+96]
+        movdqu	xmm0, OWORD PTR [rdx+-112]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+32]
@@ -1179,8 +1189,8 @@ L_AES_GCM_encrypt_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+80]
-        movdqu	xmm0, [rdx+-96]
+        movdqu	xmm7, OWORD PTR [rsp+80]
+        movdqu	xmm0, OWORD PTR [rdx+-96]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+48]
@@ -1203,8 +1213,8 @@ L_AES_GCM_encrypt_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+64]
-        movdqu	xmm0, [rdx+-80]
+        movdqu	xmm7, OWORD PTR [rsp+64]
+        movdqu	xmm0, OWORD PTR [rdx+-80]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+64]
@@ -1227,8 +1237,8 @@ L_AES_GCM_encrypt_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+48]
-        movdqu	xmm0, [rdx+-64]
+        movdqu	xmm7, OWORD PTR [rsp+48]
+        movdqu	xmm0, OWORD PTR [rdx+-64]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+80]
@@ -1251,8 +1261,8 @@ L_AES_GCM_encrypt_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+32]
-        movdqu	xmm0, [rdx+-48]
+        movdqu	xmm7, OWORD PTR [rsp+32]
+        movdqu	xmm0, OWORD PTR [rdx+-48]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+96]
@@ -1275,8 +1285,8 @@ L_AES_GCM_encrypt_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+16]
-        movdqu	xmm0, [rdx+-32]
+        movdqu	xmm7, OWORD PTR [rsp+16]
+        movdqu	xmm0, OWORD PTR [rdx+-32]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+112]
@@ -1299,8 +1309,8 @@ L_AES_GCM_encrypt_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp]
-        movdqu	xmm0, [rdx+-16]
+        movdqu	xmm7, OWORD PTR [rsp]
+        movdqu	xmm0, OWORD PTR [rdx+-16]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+128]
@@ -1361,7 +1371,7 @@ L_AES_GCM_encrypt_ghash_128:
         pxor	xmm2, xmm3
         cmp	r10d, 11
         movdqa	xmm7, OWORD PTR [r15+160]
-        jl	L_AES_GCM_encrypt_aesenc_128_ghash_avx_done
+        jl	L_AES_GCM_encrypt_aesni_aesenc_128_ghash_avx_done
         aesenc	xmm8, xmm7
         aesenc	xmm9, xmm7
         aesenc	xmm10, xmm7
@@ -1381,7 +1391,7 @@ L_AES_GCM_encrypt_ghash_128:
         aesenc	xmm15, xmm7
         cmp	r10d, 13
         movdqa	xmm7, OWORD PTR [r15+192]
-        jl	L_AES_GCM_encrypt_aesenc_128_ghash_avx_done
+        jl	L_AES_GCM_encrypt_aesni_aesenc_128_ghash_avx_done
         aesenc	xmm8, xmm7
         aesenc	xmm9, xmm7
         aesenc	xmm10, xmm7
@@ -1400,43 +1410,43 @@ L_AES_GCM_encrypt_ghash_128:
         aesenc	xmm14, xmm7
         aesenc	xmm15, xmm7
         movdqa	xmm7, OWORD PTR [r15+224]
-L_AES_GCM_encrypt_aesenc_128_ghash_avx_done:
+L_AES_GCM_encrypt_aesni_aesenc_128_ghash_avx_done:
         aesenclast	xmm8, xmm7
         aesenclast	xmm9, xmm7
-        movdqu	xmm0, [rcx]
-        movdqu	xmm1, [rcx+16]
+        movdqu	xmm0, OWORD PTR [rcx]
+        movdqu	xmm1, OWORD PTR [rcx+16]
         pxor	xmm8, xmm0
         pxor	xmm9, xmm1
-        movdqu	[rdx], xmm8
-        movdqu	[rdx+16], xmm9
+        movdqu	OWORD PTR [rdx], xmm8
+        movdqu	OWORD PTR [rdx+16], xmm9
         aesenclast	xmm10, xmm7
         aesenclast	xmm11, xmm7
-        movdqu	xmm0, [rcx+32]
-        movdqu	xmm1, [rcx+48]
+        movdqu	xmm0, OWORD PTR [rcx+32]
+        movdqu	xmm1, OWORD PTR [rcx+48]
         pxor	xmm10, xmm0
         pxor	xmm11, xmm1
-        movdqu	[rdx+32], xmm10
-        movdqu	[rdx+48], xmm11
+        movdqu	OWORD PTR [rdx+32], xmm10
+        movdqu	OWORD PTR [rdx+48], xmm11
         aesenclast	xmm12, xmm7
         aesenclast	xmm13, xmm7
-        movdqu	xmm0, [rcx+64]
-        movdqu	xmm1, [rcx+80]
+        movdqu	xmm0, OWORD PTR [rcx+64]
+        movdqu	xmm1, OWORD PTR [rcx+80]
         pxor	xmm12, xmm0
         pxor	xmm13, xmm1
-        movdqu	[rdx+64], xmm12
-        movdqu	[rdx+80], xmm13
+        movdqu	OWORD PTR [rdx+64], xmm12
+        movdqu	OWORD PTR [rdx+80], xmm13
         aesenclast	xmm14, xmm7
         aesenclast	xmm15, xmm7
-        movdqu	xmm0, [rcx+96]
-        movdqu	xmm1, [rcx+112]
+        movdqu	xmm0, OWORD PTR [rcx+96]
+        movdqu	xmm1, OWORD PTR [rcx+112]
         pxor	xmm14, xmm0
         pxor	xmm15, xmm1
-        movdqu	[rdx+96], xmm14
-        movdqu	[rdx+112], xmm15
+        movdqu	OWORD PTR [rdx+96], xmm14
+        movdqu	OWORD PTR [rdx+112], xmm15
         add	ebx, 128
         cmp	ebx, r13d
-        jl	L_AES_GCM_encrypt_ghash_128
-L_AES_GCM_encrypt_end_128:
+        jl	L_AES_GCM_encrypt_aesni_ghash_128
+L_AES_GCM_encrypt_aesni_end_128:
         movdqa	xmm4, OWORD PTR L_aes_gcm_bswap_mask
         pshufb	xmm8, xmm4
         pshufb	xmm9, xmm4
@@ -1447,7 +1457,7 @@ L_AES_GCM_encrypt_end_128:
         pshufb	xmm13, xmm4
         pshufb	xmm14, xmm4
         pshufb	xmm15, xmm4
-        movdqu	xmm7, [rsp+112]
+        movdqu	xmm7, OWORD PTR [rsp+112]
         pshufd	xmm1, xmm8, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -1466,7 +1476,7 @@ L_AES_GCM_encrypt_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp+96]
+        movdqu	xmm7, OWORD PTR [rsp+96]
         pshufd	xmm1, xmm9, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -1485,7 +1495,7 @@ L_AES_GCM_encrypt_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp+80]
+        movdqu	xmm7, OWORD PTR [rsp+80]
         pshufd	xmm1, xmm10, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -1504,7 +1514,7 @@ L_AES_GCM_encrypt_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp+64]
+        movdqu	xmm7, OWORD PTR [rsp+64]
         pshufd	xmm1, xmm11, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -1523,7 +1533,7 @@ L_AES_GCM_encrypt_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp+48]
+        movdqu	xmm7, OWORD PTR [rsp+48]
         pshufd	xmm1, xmm12, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -1542,7 +1552,7 @@ L_AES_GCM_encrypt_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp+32]
+        movdqu	xmm7, OWORD PTR [rsp+32]
         pshufd	xmm1, xmm13, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -1561,7 +1571,7 @@ L_AES_GCM_encrypt_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp+16]
+        movdqu	xmm7, OWORD PTR [rsp+16]
         pshufd	xmm1, xmm14, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -1580,7 +1590,7 @@ L_AES_GCM_encrypt_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp]
+        movdqu	xmm7, OWORD PTR [rsp]
         pshufd	xmm1, xmm15, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -1622,23 +1632,23 @@ L_AES_GCM_encrypt_end_128:
         pxor	xmm2, xmm1
         pxor	xmm2, xmm4
         pxor	xmm6, xmm2
-        movdqu	xmm5, [rsp]
-L_AES_GCM_encrypt_done_128:
+        movdqu	xmm5, OWORD PTR [rsp]
+L_AES_GCM_encrypt_aesni_done_128:
         mov	edx, r9d
         cmp	ebx, edx
-        jge	L_AES_GCM_encrypt_done_enc
+        jge	L_AES_GCM_encrypt_aesni_done_enc
         mov	r13d, r9d
         and	r13d, 4294967280
         cmp	ebx, r13d
-        jge	L_AES_GCM_encrypt_last_block_done
+        jge	L_AES_GCM_encrypt_aesni_last_block_done
         lea	rcx, QWORD PTR [rdi+rbx]
         lea	rdx, QWORD PTR [rsi+rbx]
-        movdqu	xmm8, [rsp+128]
+        movdqu	xmm8, OWORD PTR [rsp+128]
         movdqa	xmm9, xmm8
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_epi64
         paddd	xmm9, OWORD PTR L_aes_gcm_one
         pxor	xmm8, [r15]
-        movdqu	[rsp+128], xmm9
+        movdqu	OWORD PTR [rsp+128], xmm9
         aesenc	xmm8, [r15+16]
         aesenc	xmm8, [r15+32]
         aesenc	xmm8, [r15+48]
@@ -1650,34 +1660,34 @@ L_AES_GCM_encrypt_done_128:
         aesenc	xmm8, [r15+144]
         cmp	r10d, 11
         movdqa	xmm9, OWORD PTR [r15+160]
-        jl	L_AES_GCM_encrypt_aesenc_block_aesenc_avx_last
+        jl	L_AES_GCM_encrypt_aesni_aesenc_block_aesenc_avx_last
         aesenc	xmm8, xmm9
         aesenc	xmm8, [r15+176]
         cmp	r10d, 13
         movdqa	xmm9, OWORD PTR [r15+192]
-        jl	L_AES_GCM_encrypt_aesenc_block_aesenc_avx_last
+        jl	L_AES_GCM_encrypt_aesni_aesenc_block_aesenc_avx_last
         aesenc	xmm8, xmm9
         aesenc	xmm8, [r15+208]
         movdqa	xmm9, OWORD PTR [r15+224]
-L_AES_GCM_encrypt_aesenc_block_aesenc_avx_last:
+L_AES_GCM_encrypt_aesni_aesenc_block_aesenc_avx_last:
         aesenclast	xmm8, xmm9
-        movdqu	xmm9, [rcx]
+        movdqu	xmm9, OWORD PTR [rcx]
         pxor	xmm8, xmm9
-        movdqu	[rdx], xmm8
+        movdqu	OWORD PTR [rdx], xmm8
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm6, xmm8
         add	ebx, 16
         cmp	ebx, r13d
-        jge	L_AES_GCM_encrypt_last_block_ghash
-L_AES_GCM_encrypt_last_block_start:
+        jge	L_AES_GCM_encrypt_aesni_last_block_ghash
+L_AES_GCM_encrypt_aesni_last_block_start:
         lea	rcx, QWORD PTR [rdi+rbx]
         lea	rdx, QWORD PTR [rsi+rbx]
-        movdqu	xmm8, [rsp+128]
+        movdqu	xmm8, OWORD PTR [rsp+128]
         movdqa	xmm9, xmm8
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_epi64
         paddd	xmm9, OWORD PTR L_aes_gcm_one
         pxor	xmm8, [r15]
-        movdqu	[rsp+128], xmm9
+        movdqu	OWORD PTR [rsp+128], xmm9
         movdqa	xmm10, xmm6
         pclmulqdq	xmm10, xmm5, 16
         aesenc	xmm8, [r15+16]
@@ -1714,26 +1724,26 @@ L_AES_GCM_encrypt_last_block_start:
         pxor	xmm6, xmm3
         cmp	r10d, 11
         movdqa	xmm9, OWORD PTR [r15+160]
-        jl	L_AES_GCM_encrypt_aesenc_gfmul_last
+        jl	L_AES_GCM_encrypt_aesni_aesenc_gfmul_last
         aesenc	xmm8, xmm9
         aesenc	xmm8, [r15+176]
         cmp	r10d, 13
         movdqa	xmm9, OWORD PTR [r15+192]
-        jl	L_AES_GCM_encrypt_aesenc_gfmul_last
+        jl	L_AES_GCM_encrypt_aesni_aesenc_gfmul_last
         aesenc	xmm8, xmm9
         aesenc	xmm8, [r15+208]
         movdqa	xmm9, OWORD PTR [r15+224]
-L_AES_GCM_encrypt_aesenc_gfmul_last:
+L_AES_GCM_encrypt_aesni_aesenc_gfmul_last:
         aesenclast	xmm8, xmm9
-        movdqu	xmm9, [rcx]
+        movdqu	xmm9, OWORD PTR [rcx]
         pxor	xmm8, xmm9
-        movdqu	[rdx], xmm8
+        movdqu	OWORD PTR [rdx], xmm8
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm6, xmm8
         add	ebx, 16
         cmp	ebx, r13d
-        jl	L_AES_GCM_encrypt_last_block_start
-L_AES_GCM_encrypt_last_block_ghash:
+        jl	L_AES_GCM_encrypt_aesni_last_block_start
+L_AES_GCM_encrypt_aesni_last_block_ghash:
         pshufd	xmm9, xmm5, 78
         pshufd	xmm10, xmm6, 78
         movdqa	xmm11, xmm6
@@ -1774,12 +1784,12 @@ L_AES_GCM_encrypt_last_block_ghash:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm6, xmm14
-L_AES_GCM_encrypt_last_block_done:
+L_AES_GCM_encrypt_aesni_last_block_done:
         mov	ecx, r9d
         mov	edx, ecx
         and	ecx, 15
-        jz	L_AES_GCM_encrypt_aesenc_last15_enc_avx_done
-        movdqu	xmm4, [rsp+128]
+        jz	L_AES_GCM_encrypt_aesni_aesenc_last15_enc_avx_done
+        movdqu	xmm4, OWORD PTR [rsp+128]
         pshufb	xmm4, OWORD PTR L_aes_gcm_bswap_epi64
         pxor	xmm4, [r15]
         aesenc	xmm4, [r15+16]
@@ -1793,21 +1803,21 @@ L_AES_GCM_encrypt_last_block_done:
         aesenc	xmm4, [r15+144]
         cmp	r10d, 11
         movdqa	xmm9, OWORD PTR [r15+160]
-        jl	L_AES_GCM_encrypt_aesenc_last15_enc_avx_aesenc_avx_last
+        jl	L_AES_GCM_encrypt_aesni_aesenc_last15_enc_avx_aesenc_avx_last
         aesenc	xmm4, xmm9
         aesenc	xmm4, [r15+176]
         cmp	r10d, 13
         movdqa	xmm9, OWORD PTR [r15+192]
-        jl	L_AES_GCM_encrypt_aesenc_last15_enc_avx_aesenc_avx_last
+        jl	L_AES_GCM_encrypt_aesni_aesenc_last15_enc_avx_aesenc_avx_last
         aesenc	xmm4, xmm9
         aesenc	xmm4, [r15+208]
         movdqa	xmm9, OWORD PTR [r15+224]
-L_AES_GCM_encrypt_aesenc_last15_enc_avx_aesenc_avx_last:
+L_AES_GCM_encrypt_aesni_aesenc_last15_enc_avx_aesenc_avx_last:
         aesenclast	xmm4, xmm9
         sub	rsp, 16
         xor	ecx, ecx
-        movdqu	[rsp], xmm4
-L_AES_GCM_encrypt_aesenc_last15_enc_avx_loop:
+        movdqu	OWORD PTR [rsp], xmm4
+L_AES_GCM_encrypt_aesni_aesenc_last15_enc_avx_loop:
         movzx	r13d, BYTE PTR [rdi+rbx]
         xor	r13b, BYTE PTR [rsp+rcx]
         mov	BYTE PTR [rsi+rbx], r13b
@@ -1815,17 +1825,17 @@ L_AES_GCM_encrypt_aesenc_last15_enc_avx_loop:
         inc	ebx
         inc	ecx
         cmp	ebx, edx
-        jl	L_AES_GCM_encrypt_aesenc_last15_enc_avx_loop
+        jl	L_AES_GCM_encrypt_aesni_aesenc_last15_enc_avx_loop
         xor	r13, r13
         cmp	ecx, 16
-        je	L_AES_GCM_encrypt_aesenc_last15_enc_avx_finish_enc
-L_AES_GCM_encrypt_aesenc_last15_enc_avx_byte_loop:
+        je	L_AES_GCM_encrypt_aesni_aesenc_last15_enc_avx_finish_enc
+L_AES_GCM_encrypt_aesni_aesenc_last15_enc_avx_byte_loop:
         mov	BYTE PTR [rsp+rcx], r13b
         inc	ecx
         cmp	ecx, 16
-        jl	L_AES_GCM_encrypt_aesenc_last15_enc_avx_byte_loop
-L_AES_GCM_encrypt_aesenc_last15_enc_avx_finish_enc:
-        movdqu	xmm4, [rsp]
+        jl	L_AES_GCM_encrypt_aesni_aesenc_last15_enc_avx_byte_loop
+L_AES_GCM_encrypt_aesni_aesenc_last15_enc_avx_finish_enc:
+        movdqu	xmm4, OWORD PTR [rsp]
         add	rsp, 16
         pshufb	xmm4, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm6, xmm4
@@ -1869,8 +1879,8 @@ L_AES_GCM_encrypt_aesenc_last15_enc_avx_finish_enc:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm6, xmm14
-L_AES_GCM_encrypt_aesenc_last15_enc_avx_done:
-L_AES_GCM_encrypt_done_enc:
+L_AES_GCM_encrypt_aesni_aesenc_last15_enc_avx_done:
+L_AES_GCM_encrypt_aesni_done_enc:
         mov	edx, r9d
         mov	ecx, r11d
         shl	rdx, 3
@@ -1919,23 +1929,33 @@ L_AES_GCM_encrypt_done_enc:
         pxor	xmm14, xmm8
         pxor	xmm6, xmm14
         pshufb	xmm6, OWORD PTR L_aes_gcm_bswap_mask
-        movdqu	xmm0, [rsp+144]
+        movdqu	xmm0, OWORD PTR [rsp+144]
         pxor	xmm0, xmm6
         cmp	r14d, 16
-        je	L_AES_GCM_encrypt_store_tag_16
+        je	L_AES_GCM_encrypt_aesni_store_tag_16
         xor	rcx, rcx
-        movdqu	[rsp], xmm0
-L_AES_GCM_encrypt_store_tag_loop:
+        movdqu	OWORD PTR [rsp], xmm0
+L_AES_GCM_encrypt_aesni_store_tag_loop:
         movzx	r13d, BYTE PTR [rsp+rcx]
         mov	BYTE PTR [r8+rcx], r13b
         inc	ecx
         cmp	ecx, r14d
-        jne	L_AES_GCM_encrypt_store_tag_loop
-        jmp	L_AES_GCM_encrypt_store_tag_done
-L_AES_GCM_encrypt_store_tag_16:
-        movdqu	[r8], xmm0
-L_AES_GCM_encrypt_store_tag_done:
-        add	rsp, 160
+        jne	L_AES_GCM_encrypt_aesni_store_tag_loop
+        jmp	L_AES_GCM_encrypt_aesni_store_tag_done
+L_AES_GCM_encrypt_aesni_store_tag_16:
+        movdqu	OWORD PTR [r8], xmm0
+L_AES_GCM_encrypt_aesni_store_tag_done:
+        movdqu	xmm6, OWORD PTR [rsp+160]
+        movdqu	xmm7, OWORD PTR [rsp+176]
+        movdqu	xmm8, OWORD PTR [rsp+192]
+        movdqu	xmm9, OWORD PTR [rsp+208]
+        movdqu	xmm10, OWORD PTR [rsp+224]
+        movdqu	xmm11, OWORD PTR [rsp+240]
+        movdqu	xmm12, OWORD PTR [rsp+256]
+        movdqu	xmm13, OWORD PTR [rsp+272]
+        movdqu	xmm14, OWORD PTR [rsp+288]
+        movdqu	xmm15, OWORD PTR [rsp+304]
+        add	rsp, 320
         pop	r15
         pop	r14
         pop	rbx
@@ -1944,10 +1964,10 @@ L_AES_GCM_encrypt_store_tag_done:
         pop	rdi
         pop	r13
         ret
-AES_GCM_encrypt ENDP
+AES_GCM_encrypt_aesni ENDP
 _text ENDS
 _text SEGMENT READONLY PARA
-AES_GCM_decrypt PROC
+AES_GCM_decrypt_aesni PROC
         push	r13
         push	rdi
         push	rsi
@@ -1968,12 +1988,22 @@ AES_GCM_decrypt PROC
         mov	r15, QWORD PTR [rsp+144]
         mov	r10d, DWORD PTR [rsp+152]
         mov	rbp, QWORD PTR [rsp+160]
-        sub	rsp, 168
+        sub	rsp, 328
+        movdqu	OWORD PTR [rsp+168], xmm6
+        movdqu	OWORD PTR [rsp+184], xmm7
+        movdqu	OWORD PTR [rsp+200], xmm8
+        movdqu	OWORD PTR [rsp+216], xmm9
+        movdqu	OWORD PTR [rsp+232], xmm10
+        movdqu	OWORD PTR [rsp+248], xmm11
+        movdqu	OWORD PTR [rsp+264], xmm12
+        movdqu	OWORD PTR [rsp+280], xmm13
+        movdqu	OWORD PTR [rsp+296], xmm14
+        movdqu	OWORD PTR [rsp+312], xmm15
         pxor	xmm4, xmm4
         pxor	xmm6, xmm6
         cmp	ebx, 12
         mov	edx, ebx
-        jne	L_AES_GCM_decrypt_iv_not_12
+        jne	L_AES_GCM_decrypt_aesni_iv_not_12
         ; # Calculate values when IV is 12 bytes
         ; Set counter based on IV
         mov	ecx, 16777216
@@ -2013,7 +2043,7 @@ AES_GCM_decrypt PROC
         aesenc	xmm1, xmm7
         cmp	r10d, 11
         movdqa	xmm7, OWORD PTR [r15+160]
-        jl	L_AES_GCM_decrypt_calc_iv_12_last
+        jl	L_AES_GCM_decrypt_aesni_calc_iv_12_last
         aesenc	xmm5, xmm7
         aesenc	xmm1, xmm7
         movdqa	xmm7, OWORD PTR [r15+176]
@@ -2021,20 +2051,20 @@ AES_GCM_decrypt PROC
         aesenc	xmm1, xmm7
         cmp	r10d, 13
         movdqa	xmm7, OWORD PTR [r15+192]
-        jl	L_AES_GCM_decrypt_calc_iv_12_last
+        jl	L_AES_GCM_decrypt_aesni_calc_iv_12_last
         aesenc	xmm5, xmm7
         aesenc	xmm1, xmm7
         movdqa	xmm7, OWORD PTR [r15+208]
         aesenc	xmm5, xmm7
         aesenc	xmm1, xmm7
         movdqa	xmm7, OWORD PTR [r15+224]
-L_AES_GCM_decrypt_calc_iv_12_last:
+L_AES_GCM_decrypt_aesni_calc_iv_12_last:
         aesenclast	xmm5, xmm7
         aesenclast	xmm1, xmm7
         pshufb	xmm5, OWORD PTR L_aes_gcm_bswap_mask
-        movdqu	[rsp+144], xmm1
-        jmp	L_AES_GCM_decrypt_iv_done
-L_AES_GCM_decrypt_iv_not_12:
+        movdqu	OWORD PTR [rsp+144], xmm1
+        jmp	L_AES_GCM_decrypt_aesni_iv_done
+L_AES_GCM_decrypt_aesni_iv_not_12:
         ; Calculate values when IV is not 12 bytes
         ; H = Encrypt X(=0)
         movdqa	xmm5, OWORD PTR [r15]
@@ -2049,28 +2079,28 @@ L_AES_GCM_decrypt_iv_not_12:
         aesenc	xmm5, [r15+144]
         cmp	r10d, 11
         movdqa	xmm9, OWORD PTR [r15+160]
-        jl	L_AES_GCM_decrypt_calc_iv_1_aesenc_avx_last
+        jl	L_AES_GCM_decrypt_aesni_calc_iv_1_aesenc_avx_last
         aesenc	xmm5, xmm9
         aesenc	xmm5, [r15+176]
         cmp	r10d, 13
         movdqa	xmm9, OWORD PTR [r15+192]
-        jl	L_AES_GCM_decrypt_calc_iv_1_aesenc_avx_last
+        jl	L_AES_GCM_decrypt_aesni_calc_iv_1_aesenc_avx_last
         aesenc	xmm5, xmm9
         aesenc	xmm5, [r15+208]
         movdqa	xmm9, OWORD PTR [r15+224]
-L_AES_GCM_decrypt_calc_iv_1_aesenc_avx_last:
+L_AES_GCM_decrypt_aesni_calc_iv_1_aesenc_avx_last:
         aesenclast	xmm5, xmm9
         pshufb	xmm5, OWORD PTR L_aes_gcm_bswap_mask
         ; Calc counter
         ; Initialization vector
         cmp	edx, 0
         mov	rcx, 0
-        je	L_AES_GCM_decrypt_calc_iv_done
+        je	L_AES_GCM_decrypt_aesni_calc_iv_done
         cmp	edx, 16
-        jl	L_AES_GCM_decrypt_calc_iv_lt16
+        jl	L_AES_GCM_decrypt_aesni_calc_iv_lt16
         and	edx, 4294967280
-L_AES_GCM_decrypt_calc_iv_16_loop:
-        movdqu	xmm8, [rax+rcx]
+L_AES_GCM_decrypt_aesni_calc_iv_16_loop:
+        movdqu	xmm8, OWORD PTR [rax+rcx]
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm4, xmm8
         pshufd	xmm1, xmm4, 78
@@ -2129,23 +2159,23 @@ L_AES_GCM_decrypt_calc_iv_16_loop:
         pxor	xmm4, xmm2
         add	ecx, 16
         cmp	ecx, edx
-        jl	L_AES_GCM_decrypt_calc_iv_16_loop
+        jl	L_AES_GCM_decrypt_aesni_calc_iv_16_loop
         mov	edx, ebx
         cmp	ecx, edx
-        je	L_AES_GCM_decrypt_calc_iv_done
-L_AES_GCM_decrypt_calc_iv_lt16:
+        je	L_AES_GCM_decrypt_aesni_calc_iv_done
+L_AES_GCM_decrypt_aesni_calc_iv_lt16:
         sub	rsp, 16
         pxor	xmm8, xmm8
         xor	ebx, ebx
-        movdqu	[rsp], xmm8
-L_AES_GCM_decrypt_calc_iv_loop:
+        movdqu	OWORD PTR [rsp], xmm8
+L_AES_GCM_decrypt_aesni_calc_iv_loop:
         movzx	r13d, BYTE PTR [rax+rcx]
         mov	BYTE PTR [rsp+rbx], r13b
         inc	ecx
         inc	ebx
         cmp	ecx, edx
-        jl	L_AES_GCM_decrypt_calc_iv_loop
-        movdqu	xmm8, [rsp]
+        jl	L_AES_GCM_decrypt_aesni_calc_iv_loop
+        movdqu	xmm8, OWORD PTR [rsp]
         add	rsp, 16
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm4, xmm8
@@ -2203,7 +2233,7 @@ L_AES_GCM_decrypt_calc_iv_loop:
         pxor	xmm2, xmm1
         pxor	xmm2, xmm7
         pxor	xmm4, xmm2
-L_AES_GCM_decrypt_calc_iv_done:
+L_AES_GCM_decrypt_aesni_calc_iv_done:
         ; T = Encrypt counter
         pxor	xmm0, xmm0
         shl	edx, 3
@@ -2278,29 +2308,29 @@ L_AES_GCM_decrypt_calc_iv_done:
         aesenc	xmm8, [r15+144]
         cmp	r10d, 11
         movdqa	xmm9, OWORD PTR [r15+160]
-        jl	L_AES_GCM_decrypt_calc_iv_2_aesenc_avx_last
+        jl	L_AES_GCM_decrypt_aesni_calc_iv_2_aesenc_avx_last
         aesenc	xmm8, xmm9
         aesenc	xmm8, [r15+176]
         cmp	r10d, 13
         movdqa	xmm9, OWORD PTR [r15+192]
-        jl	L_AES_GCM_decrypt_calc_iv_2_aesenc_avx_last
+        jl	L_AES_GCM_decrypt_aesni_calc_iv_2_aesenc_avx_last
         aesenc	xmm8, xmm9
         aesenc	xmm8, [r15+208]
         movdqa	xmm9, OWORD PTR [r15+224]
-L_AES_GCM_decrypt_calc_iv_2_aesenc_avx_last:
+L_AES_GCM_decrypt_aesni_calc_iv_2_aesenc_avx_last:
         aesenclast	xmm8, xmm9
-        movdqu	[rsp+144], xmm8
-L_AES_GCM_decrypt_iv_done:
+        movdqu	OWORD PTR [rsp+144], xmm8
+L_AES_GCM_decrypt_aesni_iv_done:
         ; Additional authentication data
         mov	edx, r11d
         cmp	edx, 0
-        je	L_AES_GCM_decrypt_calc_aad_done
+        je	L_AES_GCM_decrypt_aesni_calc_aad_done
         xor	ecx, ecx
         cmp	edx, 16
-        jl	L_AES_GCM_decrypt_calc_aad_lt16
+        jl	L_AES_GCM_decrypt_aesni_calc_aad_lt16
         and	edx, 4294967280
-L_AES_GCM_decrypt_calc_aad_16_loop:
-        movdqu	xmm8, [r12+rcx]
+L_AES_GCM_decrypt_aesni_calc_aad_16_loop:
+        movdqu	xmm8, OWORD PTR [r12+rcx]
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm6, xmm8
         pshufd	xmm1, xmm6, 78
@@ -2359,23 +2389,23 @@ L_AES_GCM_decrypt_calc_aad_16_loop:
         pxor	xmm6, xmm2
         add	ecx, 16
         cmp	ecx, edx
-        jl	L_AES_GCM_decrypt_calc_aad_16_loop
+        jl	L_AES_GCM_decrypt_aesni_calc_aad_16_loop
         mov	edx, r11d
         cmp	ecx, edx
-        je	L_AES_GCM_decrypt_calc_aad_done
-L_AES_GCM_decrypt_calc_aad_lt16:
+        je	L_AES_GCM_decrypt_aesni_calc_aad_done
+L_AES_GCM_decrypt_aesni_calc_aad_lt16:
         sub	rsp, 16
         pxor	xmm8, xmm8
         xor	ebx, ebx
-        movdqu	[rsp], xmm8
-L_AES_GCM_decrypt_calc_aad_loop:
+        movdqu	OWORD PTR [rsp], xmm8
+L_AES_GCM_decrypt_aesni_calc_aad_loop:
         movzx	r13d, BYTE PTR [r12+rcx]
         mov	BYTE PTR [rsp+rbx], r13b
         inc	ecx
         inc	ebx
         cmp	ecx, edx
-        jl	L_AES_GCM_decrypt_calc_aad_loop
-        movdqu	xmm8, [rsp]
+        jl	L_AES_GCM_decrypt_aesni_calc_aad_loop
+        movdqu	xmm8, OWORD PTR [rsp]
         add	rsp, 16
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm6, xmm8
@@ -2433,13 +2463,13 @@ L_AES_GCM_decrypt_calc_aad_loop:
         pxor	xmm2, xmm1
         pxor	xmm2, xmm7
         pxor	xmm6, xmm2
-L_AES_GCM_decrypt_calc_aad_done:
+L_AES_GCM_decrypt_aesni_calc_aad_done:
         ; Calculate counter and H
         pshufb	xmm4, OWORD PTR L_aes_gcm_bswap_epi64
         movdqa	xmm9, xmm5
         paddd	xmm4, OWORD PTR L_aes_gcm_one
         movdqa	xmm8, xmm5
-        movdqu	[rsp+128], xmm4
+        movdqu	OWORD PTR [rsp+128], xmm4
         psrlq	xmm9, 63
         psllq	xmm8, 1
         pslldq	xmm9, 8
@@ -2451,11 +2481,11 @@ L_AES_GCM_decrypt_calc_aad_done:
         xor	ebx, ebx
         cmp	r9d, 128
         mov	r13d, r9d
-        jl	L_AES_GCM_decrypt_done_128
+        jl	L_AES_GCM_decrypt_aesni_done_128
         and	r13d, 4294967168
         movdqa	xmm2, xmm6
         ; H ^ 1
-        movdqu	[rsp], xmm5
+        movdqu	OWORD PTR [rsp], xmm5
         ; H ^ 2
         pshufd	xmm9, xmm5, 78
         pshufd	xmm10, xmm5, 78
@@ -2497,7 +2527,7 @@ L_AES_GCM_decrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm0, xmm14
-        movdqu	[rsp+16], xmm0
+        movdqu	OWORD PTR [rsp+16], xmm0
         ; H ^ 3
         pshufd	xmm9, xmm5, 78
         pshufd	xmm10, xmm0, 78
@@ -2539,7 +2569,7 @@ L_AES_GCM_decrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm1, xmm14
-        movdqu	[rsp+32], xmm1
+        movdqu	OWORD PTR [rsp+32], xmm1
         ; H ^ 4
         pshufd	xmm9, xmm0, 78
         pshufd	xmm10, xmm0, 78
@@ -2581,7 +2611,7 @@ L_AES_GCM_decrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm3, xmm14
-        movdqu	[rsp+48], xmm3
+        movdqu	OWORD PTR [rsp+48], xmm3
         ; H ^ 5
         pshufd	xmm9, xmm0, 78
         pshufd	xmm10, xmm1, 78
@@ -2623,7 +2653,7 @@ L_AES_GCM_decrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+64], xmm7
+        movdqu	OWORD PTR [rsp+64], xmm7
         ; H ^ 6
         pshufd	xmm9, xmm1, 78
         pshufd	xmm10, xmm1, 78
@@ -2665,7 +2695,7 @@ L_AES_GCM_decrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+80], xmm7
+        movdqu	OWORD PTR [rsp+80], xmm7
         ; H ^ 7
         pshufd	xmm9, xmm1, 78
         pshufd	xmm10, xmm3, 78
@@ -2707,7 +2737,7 @@ L_AES_GCM_decrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+96], xmm7
+        movdqu	OWORD PTR [rsp+96], xmm7
         ; H ^ 8
         pshufd	xmm9, xmm3, 78
         pshufd	xmm10, xmm3, 78
@@ -2749,11 +2779,11 @@ L_AES_GCM_decrypt_calc_aad_done:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+112], xmm7
-L_AES_GCM_decrypt_ghash_128:
+        movdqu	OWORD PTR [rsp+112], xmm7
+L_AES_GCM_decrypt_aesni_ghash_128:
         lea	rcx, QWORD PTR [rdi+rbx]
         lea	rdx, QWORD PTR [rsi+rbx]
-        movdqu	xmm8, [rsp+128]
+        movdqu	xmm8, OWORD PTR [rsp+128]
         movdqa	xmm1, OWORD PTR L_aes_gcm_bswap_epi64
         movdqa	xmm0, xmm8
         pshufb	xmm8, xmm1
@@ -2780,7 +2810,7 @@ L_AES_GCM_decrypt_ghash_128:
         pshufb	xmm15, xmm1
         paddd	xmm0, OWORD PTR L_aes_gcm_eight
         movdqa	xmm7, OWORD PTR [r15]
-        movdqu	[rsp+128], xmm0
+        movdqu	OWORD PTR [rsp+128], xmm0
         pxor	xmm8, xmm7
         pxor	xmm9, xmm7
         pxor	xmm10, xmm7
@@ -2789,8 +2819,8 @@ L_AES_GCM_decrypt_ghash_128:
         pxor	xmm13, xmm7
         pxor	xmm14, xmm7
         pxor	xmm15, xmm7
-        movdqu	xmm7, [rsp+112]
-        movdqu	xmm0, [rcx]
+        movdqu	xmm7, OWORD PTR [rsp+112]
+        movdqu	xmm0, OWORD PTR [rcx]
         aesenc	xmm8, [r15+16]
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm0, xmm2
@@ -2812,8 +2842,8 @@ L_AES_GCM_decrypt_ghash_128:
         aesenc	xmm15, [r15+16]
         pxor	xmm1, xmm2
         pxor	xmm1, xmm3
-        movdqu	xmm7, [rsp+96]
-        movdqu	xmm0, [rcx+16]
+        movdqu	xmm7, OWORD PTR [rsp+96]
+        movdqu	xmm0, OWORD PTR [rcx+16]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+32]
@@ -2836,8 +2866,8 @@ L_AES_GCM_decrypt_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+80]
-        movdqu	xmm0, [rcx+32]
+        movdqu	xmm7, OWORD PTR [rsp+80]
+        movdqu	xmm0, OWORD PTR [rcx+32]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+48]
@@ -2860,8 +2890,8 @@ L_AES_GCM_decrypt_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+64]
-        movdqu	xmm0, [rcx+48]
+        movdqu	xmm7, OWORD PTR [rsp+64]
+        movdqu	xmm0, OWORD PTR [rcx+48]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+64]
@@ -2884,8 +2914,8 @@ L_AES_GCM_decrypt_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+48]
-        movdqu	xmm0, [rcx+64]
+        movdqu	xmm7, OWORD PTR [rsp+48]
+        movdqu	xmm0, OWORD PTR [rcx+64]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+80]
@@ -2908,8 +2938,8 @@ L_AES_GCM_decrypt_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+32]
-        movdqu	xmm0, [rcx+80]
+        movdqu	xmm7, OWORD PTR [rsp+32]
+        movdqu	xmm0, OWORD PTR [rcx+80]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+96]
@@ -2932,8 +2962,8 @@ L_AES_GCM_decrypt_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+16]
-        movdqu	xmm0, [rcx+96]
+        movdqu	xmm7, OWORD PTR [rsp+16]
+        movdqu	xmm0, OWORD PTR [rcx+96]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+112]
@@ -2956,8 +2986,8 @@ L_AES_GCM_decrypt_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp]
-        movdqu	xmm0, [rcx+112]
+        movdqu	xmm7, OWORD PTR [rsp]
+        movdqu	xmm0, OWORD PTR [rcx+112]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [r15+128]
@@ -3018,7 +3048,7 @@ L_AES_GCM_decrypt_ghash_128:
         pxor	xmm2, xmm3
         cmp	r10d, 11
         movdqa	xmm7, OWORD PTR [r15+160]
-        jl	L_AES_GCM_decrypt_aesenc_128_ghash_avx_done
+        jl	L_AES_GCM_decrypt_aesni_aesenc_128_ghash_avx_done
         aesenc	xmm8, xmm7
         aesenc	xmm9, xmm7
         aesenc	xmm10, xmm7
@@ -3038,7 +3068,7 @@ L_AES_GCM_decrypt_ghash_128:
         aesenc	xmm15, xmm7
         cmp	r10d, 13
         movdqa	xmm7, OWORD PTR [r15+192]
-        jl	L_AES_GCM_decrypt_aesenc_128_ghash_avx_done
+        jl	L_AES_GCM_decrypt_aesni_aesenc_128_ghash_avx_done
         aesenc	xmm8, xmm7
         aesenc	xmm9, xmm7
         aesenc	xmm10, xmm7
@@ -3057,65 +3087,65 @@ L_AES_GCM_decrypt_ghash_128:
         aesenc	xmm14, xmm7
         aesenc	xmm15, xmm7
         movdqa	xmm7, OWORD PTR [r15+224]
-L_AES_GCM_decrypt_aesenc_128_ghash_avx_done:
+L_AES_GCM_decrypt_aesni_aesenc_128_ghash_avx_done:
         aesenclast	xmm8, xmm7
         aesenclast	xmm9, xmm7
-        movdqu	xmm0, [rcx]
-        movdqu	xmm1, [rcx+16]
+        movdqu	xmm0, OWORD PTR [rcx]
+        movdqu	xmm1, OWORD PTR [rcx+16]
         pxor	xmm8, xmm0
         pxor	xmm9, xmm1
-        movdqu	[rdx], xmm8
-        movdqu	[rdx+16], xmm9
+        movdqu	OWORD PTR [rdx], xmm8
+        movdqu	OWORD PTR [rdx+16], xmm9
         aesenclast	xmm10, xmm7
         aesenclast	xmm11, xmm7
-        movdqu	xmm0, [rcx+32]
-        movdqu	xmm1, [rcx+48]
+        movdqu	xmm0, OWORD PTR [rcx+32]
+        movdqu	xmm1, OWORD PTR [rcx+48]
         pxor	xmm10, xmm0
         pxor	xmm11, xmm1
-        movdqu	[rdx+32], xmm10
-        movdqu	[rdx+48], xmm11
+        movdqu	OWORD PTR [rdx+32], xmm10
+        movdqu	OWORD PTR [rdx+48], xmm11
         aesenclast	xmm12, xmm7
         aesenclast	xmm13, xmm7
-        movdqu	xmm0, [rcx+64]
-        movdqu	xmm1, [rcx+80]
+        movdqu	xmm0, OWORD PTR [rcx+64]
+        movdqu	xmm1, OWORD PTR [rcx+80]
         pxor	xmm12, xmm0
         pxor	xmm13, xmm1
-        movdqu	[rdx+64], xmm12
-        movdqu	[rdx+80], xmm13
+        movdqu	OWORD PTR [rdx+64], xmm12
+        movdqu	OWORD PTR [rdx+80], xmm13
         aesenclast	xmm14, xmm7
         aesenclast	xmm15, xmm7
-        movdqu	xmm0, [rcx+96]
-        movdqu	xmm1, [rcx+112]
+        movdqu	xmm0, OWORD PTR [rcx+96]
+        movdqu	xmm1, OWORD PTR [rcx+112]
         pxor	xmm14, xmm0
         pxor	xmm15, xmm1
-        movdqu	[rdx+96], xmm14
-        movdqu	[rdx+112], xmm15
+        movdqu	OWORD PTR [rdx+96], xmm14
+        movdqu	OWORD PTR [rdx+112], xmm15
         add	ebx, 128
         cmp	ebx, r13d
-        jl	L_AES_GCM_decrypt_ghash_128
+        jl	L_AES_GCM_decrypt_aesni_ghash_128
         movdqa	xmm6, xmm2
-        movdqu	xmm5, [rsp]
-L_AES_GCM_decrypt_done_128:
+        movdqu	xmm5, OWORD PTR [rsp]
+L_AES_GCM_decrypt_aesni_done_128:
         mov	edx, r9d
         cmp	ebx, edx
-        jge	L_AES_GCM_decrypt_done_dec
+        jge	L_AES_GCM_decrypt_aesni_done_dec
         mov	r13d, r9d
         and	r13d, 4294967280
         cmp	ebx, r13d
-        jge	L_AES_GCM_decrypt_last_block_done
-L_AES_GCM_decrypt_last_block_start:
+        jge	L_AES_GCM_decrypt_aesni_last_block_done
+L_AES_GCM_decrypt_aesni_last_block_start:
         lea	rcx, QWORD PTR [rdi+rbx]
         lea	rdx, QWORD PTR [rsi+rbx]
-        movdqu	xmm1, [rcx]
+        movdqu	xmm1, OWORD PTR [rcx]
         movdqa	xmm0, xmm5
         pshufb	xmm1, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm1, xmm6
-        movdqu	xmm8, [rsp+128]
+        movdqu	xmm8, OWORD PTR [rsp+128]
         movdqa	xmm9, xmm8
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_epi64
         paddd	xmm9, OWORD PTR L_aes_gcm_one
         pxor	xmm8, [r15]
-        movdqu	[rsp+128], xmm9
+        movdqu	OWORD PTR [rsp+128], xmm9
         movdqa	xmm10, xmm1
         pclmulqdq	xmm10, xmm0, 16
         aesenc	xmm8, [r15+16]
@@ -3152,29 +3182,29 @@ L_AES_GCM_decrypt_last_block_start:
         pxor	xmm6, xmm3
         cmp	r10d, 11
         movdqa	xmm9, OWORD PTR [r15+160]
-        jl	L_AES_GCM_decrypt_aesenc_gfmul_last
+        jl	L_AES_GCM_decrypt_aesni_aesenc_gfmul_last
         aesenc	xmm8, xmm9
         aesenc	xmm8, [r15+176]
         cmp	r10d, 13
         movdqa	xmm9, OWORD PTR [r15+192]
-        jl	L_AES_GCM_decrypt_aesenc_gfmul_last
+        jl	L_AES_GCM_decrypt_aesni_aesenc_gfmul_last
         aesenc	xmm8, xmm9
         aesenc	xmm8, [r15+208]
         movdqa	xmm9, OWORD PTR [r15+224]
-L_AES_GCM_decrypt_aesenc_gfmul_last:
+L_AES_GCM_decrypt_aesni_aesenc_gfmul_last:
         aesenclast	xmm8, xmm9
-        movdqu	xmm9, [rcx]
+        movdqu	xmm9, OWORD PTR [rcx]
         pxor	xmm8, xmm9
-        movdqu	[rdx], xmm8
+        movdqu	OWORD PTR [rdx], xmm8
         add	ebx, 16
         cmp	ebx, r13d
-        jl	L_AES_GCM_decrypt_last_block_start
-L_AES_GCM_decrypt_last_block_done:
+        jl	L_AES_GCM_decrypt_aesni_last_block_start
+L_AES_GCM_decrypt_aesni_last_block_done:
         mov	ecx, r9d
         mov	edx, ecx
         and	ecx, 15
-        jz	L_AES_GCM_decrypt_aesenc_last15_dec_avx_done
-        movdqu	xmm4, [rsp+128]
+        jz	L_AES_GCM_decrypt_aesni_aesenc_last15_dec_avx_done
+        movdqu	xmm4, OWORD PTR [rsp+128]
         pshufb	xmm4, OWORD PTR L_aes_gcm_bswap_epi64
         pxor	xmm4, [r15]
         aesenc	xmm4, [r15+16]
@@ -3188,23 +3218,23 @@ L_AES_GCM_decrypt_last_block_done:
         aesenc	xmm4, [r15+144]
         cmp	r10d, 11
         movdqa	xmm9, OWORD PTR [r15+160]
-        jl	L_AES_GCM_decrypt_aesenc_last15_dec_avx_aesenc_avx_last
+        jl	L_AES_GCM_decrypt_aesni_aesenc_last15_dec_avx_aesenc_avx_last
         aesenc	xmm4, xmm9
         aesenc	xmm4, [r15+176]
         cmp	r10d, 13
         movdqa	xmm9, OWORD PTR [r15+192]
-        jl	L_AES_GCM_decrypt_aesenc_last15_dec_avx_aesenc_avx_last
+        jl	L_AES_GCM_decrypt_aesni_aesenc_last15_dec_avx_aesenc_avx_last
         aesenc	xmm4, xmm9
         aesenc	xmm4, [r15+208]
         movdqa	xmm9, OWORD PTR [r15+224]
-L_AES_GCM_decrypt_aesenc_last15_dec_avx_aesenc_avx_last:
+L_AES_GCM_decrypt_aesni_aesenc_last15_dec_avx_aesenc_avx_last:
         aesenclast	xmm4, xmm9
         sub	rsp, 32
         xor	ecx, ecx
-        movdqu	[rsp], xmm4
+        movdqu	OWORD PTR [rsp], xmm4
         pxor	xmm0, xmm0
-        movdqu	[rsp+16], xmm0
-L_AES_GCM_decrypt_aesenc_last15_dec_avx_loop:
+        movdqu	OWORD PTR [rsp+16], xmm0
+L_AES_GCM_decrypt_aesni_aesenc_last15_dec_avx_loop:
         movzx	r13d, BYTE PTR [rdi+rbx]
         mov	BYTE PTR [rsp+rcx+16], r13b
         xor	r13b, BYTE PTR [rsp+rcx]
@@ -3212,8 +3242,8 @@ L_AES_GCM_decrypt_aesenc_last15_dec_avx_loop:
         inc	ebx
         inc	ecx
         cmp	ebx, edx
-        jl	L_AES_GCM_decrypt_aesenc_last15_dec_avx_loop
-        movdqu	xmm4, [rsp+16]
+        jl	L_AES_GCM_decrypt_aesni_aesenc_last15_dec_avx_loop
+        movdqu	xmm4, OWORD PTR [rsp+16]
         add	rsp, 32
         pshufb	xmm4, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm6, xmm4
@@ -3257,8 +3287,8 @@ L_AES_GCM_decrypt_aesenc_last15_dec_avx_loop:
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm6, xmm14
-L_AES_GCM_decrypt_aesenc_last15_dec_avx_done:
-L_AES_GCM_decrypt_done_dec:
+L_AES_GCM_decrypt_aesni_aesenc_last15_dec_avx_done:
+L_AES_GCM_decrypt_aesni_done_dec:
         mov	edx, r9d
         mov	ecx, r11d
         shl	rdx, 3
@@ -3307,37 +3337,47 @@ L_AES_GCM_decrypt_done_dec:
         pxor	xmm14, xmm8
         pxor	xmm6, xmm14
         pshufb	xmm6, OWORD PTR L_aes_gcm_bswap_mask
-        movdqu	xmm0, [rsp+144]
+        movdqu	xmm0, OWORD PTR [rsp+144]
         pxor	xmm0, xmm6
         cmp	r14d, 16
-        je	L_AES_GCM_decrypt_cmp_tag_16
+        je	L_AES_GCM_decrypt_aesni_cmp_tag_16
         sub	rsp, 16
         xor	rcx, rcx
         xor	rbx, rbx
-        movdqu	[rsp], xmm0
-L_AES_GCM_decrypt_cmp_tag_loop:
+        movdqu	OWORD PTR [rsp], xmm0
+L_AES_GCM_decrypt_aesni_cmp_tag_loop:
         movzx	r13d, BYTE PTR [rsp+rcx]
         xor	r13b, BYTE PTR [r8+rcx]
         or	bl, r13b
         inc	ecx
         cmp	ecx, r14d
-        jne	L_AES_GCM_decrypt_cmp_tag_loop
-        cmp	rbx, 0
+        jne	L_AES_GCM_decrypt_aesni_cmp_tag_loop
+        cmp	bl, 0
         sete	bl
         add	rsp, 16
         xor	rcx, rcx
-        jmp	L_AES_GCM_decrypt_cmp_tag_done
-L_AES_GCM_decrypt_cmp_tag_16:
-        movdqu	xmm1, [r8]
+        jmp	L_AES_GCM_decrypt_aesni_cmp_tag_done
+L_AES_GCM_decrypt_aesni_cmp_tag_16:
+        movdqu	xmm1, OWORD PTR [r8]
         pcmpeqb	xmm0, xmm1
         pmovmskb	rdx, xmm0
         ; %%edx == 0xFFFF then return 1 else => return 0
         xor	ebx, ebx
         cmp	edx, 65535
         sete	bl
-L_AES_GCM_decrypt_cmp_tag_done:
+L_AES_GCM_decrypt_aesni_cmp_tag_done:
         mov	DWORD PTR [rbp], ebx
-        add	rsp, 168
+        movdqu	xmm6, OWORD PTR [rsp+168]
+        movdqu	xmm7, OWORD PTR [rsp+184]
+        movdqu	xmm8, OWORD PTR [rsp+200]
+        movdqu	xmm9, OWORD PTR [rsp+216]
+        movdqu	xmm10, OWORD PTR [rsp+232]
+        movdqu	xmm11, OWORD PTR [rsp+248]
+        movdqu	xmm12, OWORD PTR [rsp+264]
+        movdqu	xmm13, OWORD PTR [rsp+280]
+        movdqu	xmm14, OWORD PTR [rsp+296]
+        movdqu	xmm15, OWORD PTR [rsp+312]
+        add	rsp, 328
         pop	rbp
         pop	r15
         pop	r14
@@ -3347,7 +3387,7 @@ L_AES_GCM_decrypt_cmp_tag_done:
         pop	rdi
         pop	r13
         ret
-AES_GCM_decrypt ENDP
+AES_GCM_decrypt_aesni ENDP
 _text ENDS
 _text SEGMENT READONLY PARA
 AES_GCM_init_aesni PROC
@@ -3363,7 +3403,11 @@ AES_GCM_init_aesni PROC
         mov	rax, QWORD PTR [rsp+80]
         mov	r8, QWORD PTR [rsp+88]
         mov	r9, QWORD PTR [rsp+96]
-        sub	rsp, 16
+        sub	rsp, 80
+        movdqu	OWORD PTR [rsp+16], xmm6
+        movdqu	OWORD PTR [rsp+32], xmm7
+        movdqu	OWORD PTR [rsp+48], xmm8
+        movdqu	OWORD PTR [rsp+64], xmm15
         pxor	xmm4, xmm4
         mov	edx, r11d
         cmp	edx, 12
@@ -3378,53 +3422,53 @@ AES_GCM_init_aesni PROC
         movdqa	xmm1, xmm4
         movdqa	xmm5, OWORD PTR [rdi]
         pxor	xmm1, xmm5
-        movdqa	xmm7, OWORD PTR [rdi+16]
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
-        movdqa	xmm7, OWORD PTR [rdi+32]
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
-        movdqa	xmm7, OWORD PTR [rdi+48]
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
-        movdqa	xmm7, OWORD PTR [rdi+64]
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
-        movdqa	xmm7, OWORD PTR [rdi+80]
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
-        movdqa	xmm7, OWORD PTR [rdi+96]
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
-        movdqa	xmm7, OWORD PTR [rdi+112]
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
-        movdqa	xmm7, OWORD PTR [rdi+128]
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
-        movdqa	xmm7, OWORD PTR [rdi+144]
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
+        movdqa	xmm6, OWORD PTR [rdi+16]
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
+        movdqa	xmm6, OWORD PTR [rdi+32]
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
+        movdqa	xmm6, OWORD PTR [rdi+48]
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
+        movdqa	xmm6, OWORD PTR [rdi+64]
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
+        movdqa	xmm6, OWORD PTR [rdi+80]
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
+        movdqa	xmm6, OWORD PTR [rdi+96]
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
+        movdqa	xmm6, OWORD PTR [rdi+112]
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
+        movdqa	xmm6, OWORD PTR [rdi+128]
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
+        movdqa	xmm6, OWORD PTR [rdi+144]
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
         cmp	esi, 11
-        movdqa	xmm7, OWORD PTR [rdi+160]
+        movdqa	xmm6, OWORD PTR [rdi+160]
         jl	L_AES_GCM_init_aesni_calc_iv_12_last
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
-        movdqa	xmm7, OWORD PTR [rdi+176]
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
+        movdqa	xmm6, OWORD PTR [rdi+176]
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
         cmp	esi, 13
-        movdqa	xmm7, OWORD PTR [rdi+192]
+        movdqa	xmm6, OWORD PTR [rdi+192]
         jl	L_AES_GCM_init_aesni_calc_iv_12_last
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
-        movdqa	xmm7, OWORD PTR [rdi+208]
-        aesenc	xmm5, xmm7
-        aesenc	xmm1, xmm7
-        movdqa	xmm7, OWORD PTR [rdi+224]
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
+        movdqa	xmm6, OWORD PTR [rdi+208]
+        aesenc	xmm5, xmm6
+        aesenc	xmm1, xmm6
+        movdqa	xmm6, OWORD PTR [rdi+224]
 L_AES_GCM_init_aesni_calc_iv_12_last:
-        aesenclast	xmm5, xmm7
-        aesenclast	xmm1, xmm7
+        aesenclast	xmm5, xmm6
+        aesenclast	xmm1, xmm6
         pshufb	xmm5, OWORD PTR L_aes_gcm_bswap_mask
         movdqu	xmm15, xmm1
         jmp	L_AES_GCM_init_aesni_iv_done
@@ -3442,18 +3486,18 @@ L_AES_GCM_init_aesni_iv_not_12:
         aesenc	xmm5, [rdi+128]
         aesenc	xmm5, [rdi+144]
         cmp	esi, 11
-        movdqa	xmm9, OWORD PTR [rdi+160]
+        movdqa	xmm8, OWORD PTR [rdi+160]
         jl	L_AES_GCM_init_aesni_calc_iv_1_aesenc_avx_last
-        aesenc	xmm5, xmm9
+        aesenc	xmm5, xmm8
         aesenc	xmm5, [rdi+176]
         cmp	esi, 13
-        movdqa	xmm9, OWORD PTR [rdi+192]
+        movdqa	xmm8, OWORD PTR [rdi+192]
         jl	L_AES_GCM_init_aesni_calc_iv_1_aesenc_avx_last
-        aesenc	xmm5, xmm9
+        aesenc	xmm5, xmm8
         aesenc	xmm5, [rdi+208]
-        movdqa	xmm9, OWORD PTR [rdi+224]
+        movdqa	xmm8, OWORD PTR [rdi+224]
 L_AES_GCM_init_aesni_calc_iv_1_aesenc_avx_last:
-        aesenclast	xmm5, xmm9
+        aesenclast	xmm5, xmm8
         pshufb	xmm5, OWORD PTR L_aes_gcm_bswap_mask
         ; Calc counter
         ; Initialization vector
@@ -3464,9 +3508,9 @@ L_AES_GCM_init_aesni_calc_iv_1_aesenc_avx_last:
         jl	L_AES_GCM_init_aesni_calc_iv_lt16
         and	edx, 4294967280
 L_AES_GCM_init_aesni_calc_iv_16_loop:
-        movdqu	xmm8, [r10+rcx]
-        pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
-        pxor	xmm4, xmm8
+        movdqu	xmm7, OWORD PTR [r10+rcx]
+        pshufb	xmm7, OWORD PTR L_aes_gcm_bswap_mask
+        pxor	xmm4, xmm7
         pshufd	xmm1, xmm4, 78
         pshufd	xmm2, xmm5, 78
         movdqa	xmm3, xmm5
@@ -3479,28 +3523,28 @@ L_AES_GCM_init_aesni_calc_iv_16_loop:
         pxor	xmm1, xmm0
         pxor	xmm1, xmm3
         movdqa	xmm2, xmm1
-        movdqa	xmm7, xmm0
+        movdqa	xmm6, xmm0
         movdqa	xmm4, xmm3
         pslldq	xmm2, 8
         psrldq	xmm1, 8
-        pxor	xmm7, xmm2
+        pxor	xmm6, xmm2
         pxor	xmm4, xmm1
-        movdqa	xmm0, xmm7
+        movdqa	xmm0, xmm6
         movdqa	xmm1, xmm4
         psrld	xmm0, 31
         psrld	xmm1, 31
-        pslld	xmm7, 1
+        pslld	xmm6, 1
         pslld	xmm4, 1
         movdqa	xmm2, xmm0
         pslldq	xmm0, 4
         psrldq	xmm2, 12
         pslldq	xmm1, 4
         por	xmm4, xmm2
-        por	xmm7, xmm0
+        por	xmm6, xmm0
         por	xmm4, xmm1
-        movdqa	xmm0, xmm7
-        movdqa	xmm1, xmm7
-        movdqa	xmm2, xmm7
+        movdqa	xmm0, xmm6
+        movdqa	xmm1, xmm6
+        movdqa	xmm2, xmm6
         pslld	xmm0, 31
         pslld	xmm1, 30
         pslld	xmm2, 25
@@ -3509,17 +3553,17 @@ L_AES_GCM_init_aesni_calc_iv_16_loop:
         movdqa	xmm1, xmm0
         psrldq	xmm1, 4
         pslldq	xmm0, 12
-        pxor	xmm7, xmm0
-        movdqa	xmm2, xmm7
-        movdqa	xmm3, xmm7
-        movdqa	xmm0, xmm7
+        pxor	xmm6, xmm0
+        movdqa	xmm2, xmm6
+        movdqa	xmm3, xmm6
+        movdqa	xmm0, xmm6
         psrld	xmm2, 1
         psrld	xmm3, 2
         psrld	xmm0, 7
         pxor	xmm2, xmm3
         pxor	xmm2, xmm0
         pxor	xmm2, xmm1
-        pxor	xmm2, xmm7
+        pxor	xmm2, xmm6
         pxor	xmm4, xmm2
         add	ecx, 16
         cmp	ecx, edx
@@ -3529,9 +3573,9 @@ L_AES_GCM_init_aesni_calc_iv_16_loop:
         je	L_AES_GCM_init_aesni_calc_iv_done
 L_AES_GCM_init_aesni_calc_iv_lt16:
         sub	rsp, 16
-        pxor	xmm8, xmm8
+        pxor	xmm7, xmm7
         xor	r13d, r13d
-        movdqu	[rsp], xmm8
+        movdqu	OWORD PTR [rsp], xmm7
 L_AES_GCM_init_aesni_calc_iv_loop:
         movzx	r12d, BYTE PTR [r10+rcx]
         mov	BYTE PTR [rsp+r13], r12b
@@ -3539,10 +3583,10 @@ L_AES_GCM_init_aesni_calc_iv_loop:
         inc	r13d
         cmp	ecx, edx
         jl	L_AES_GCM_init_aesni_calc_iv_loop
-        movdqu	xmm8, [rsp]
+        movdqu	xmm7, OWORD PTR [rsp]
         add	rsp, 16
-        pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
-        pxor	xmm4, xmm8
+        pshufb	xmm7, OWORD PTR L_aes_gcm_bswap_mask
+        pxor	xmm4, xmm7
         pshufd	xmm1, xmm4, 78
         pshufd	xmm2, xmm5, 78
         movdqa	xmm3, xmm5
@@ -3555,28 +3599,28 @@ L_AES_GCM_init_aesni_calc_iv_loop:
         pxor	xmm1, xmm0
         pxor	xmm1, xmm3
         movdqa	xmm2, xmm1
-        movdqa	xmm7, xmm0
+        movdqa	xmm6, xmm0
         movdqa	xmm4, xmm3
         pslldq	xmm2, 8
         psrldq	xmm1, 8
-        pxor	xmm7, xmm2
+        pxor	xmm6, xmm2
         pxor	xmm4, xmm1
-        movdqa	xmm0, xmm7
+        movdqa	xmm0, xmm6
         movdqa	xmm1, xmm4
         psrld	xmm0, 31
         psrld	xmm1, 31
-        pslld	xmm7, 1
+        pslld	xmm6, 1
         pslld	xmm4, 1
         movdqa	xmm2, xmm0
         pslldq	xmm0, 4
         psrldq	xmm2, 12
         pslldq	xmm1, 4
         por	xmm4, xmm2
-        por	xmm7, xmm0
+        por	xmm6, xmm0
         por	xmm4, xmm1
-        movdqa	xmm0, xmm7
-        movdqa	xmm1, xmm7
-        movdqa	xmm2, xmm7
+        movdqa	xmm0, xmm6
+        movdqa	xmm1, xmm6
+        movdqa	xmm2, xmm6
         pslld	xmm0, 31
         pslld	xmm1, 30
         pslld	xmm2, 25
@@ -3585,17 +3629,17 @@ L_AES_GCM_init_aesni_calc_iv_loop:
         movdqa	xmm1, xmm0
         psrldq	xmm1, 4
         pslldq	xmm0, 12
-        pxor	xmm7, xmm0
-        movdqa	xmm2, xmm7
-        movdqa	xmm3, xmm7
-        movdqa	xmm0, xmm7
+        pxor	xmm6, xmm0
+        movdqa	xmm2, xmm6
+        movdqa	xmm3, xmm6
+        movdqa	xmm0, xmm6
         psrld	xmm2, 1
         psrld	xmm3, 2
         psrld	xmm0, 7
         pxor	xmm2, xmm3
         pxor	xmm2, xmm0
         pxor	xmm2, xmm1
-        pxor	xmm2, xmm7
+        pxor	xmm2, xmm6
         pxor	xmm4, xmm2
 L_AES_GCM_init_aesni_calc_iv_done:
         ; T = Encrypt counter
@@ -3615,28 +3659,28 @@ L_AES_GCM_init_aesni_calc_iv_done:
         pxor	xmm1, xmm0
         pxor	xmm1, xmm3
         movdqa	xmm2, xmm1
-        movdqa	xmm7, xmm0
+        movdqa	xmm6, xmm0
         movdqa	xmm4, xmm3
         pslldq	xmm2, 8
         psrldq	xmm1, 8
-        pxor	xmm7, xmm2
+        pxor	xmm6, xmm2
         pxor	xmm4, xmm1
-        movdqa	xmm0, xmm7
+        movdqa	xmm0, xmm6
         movdqa	xmm1, xmm4
         psrld	xmm0, 31
         psrld	xmm1, 31
-        pslld	xmm7, 1
+        pslld	xmm6, 1
         pslld	xmm4, 1
         movdqa	xmm2, xmm0
         pslldq	xmm0, 4
         psrldq	xmm2, 12
         pslldq	xmm1, 4
         por	xmm4, xmm2
-        por	xmm7, xmm0
+        por	xmm6, xmm0
         por	xmm4, xmm1
-        movdqa	xmm0, xmm7
-        movdqa	xmm1, xmm7
-        movdqa	xmm2, xmm7
+        movdqa	xmm0, xmm6
+        movdqa	xmm1, xmm6
+        movdqa	xmm2, xmm6
         pslld	xmm0, 31
         pslld	xmm1, 30
         pslld	xmm2, 25
@@ -3645,52 +3689,56 @@ L_AES_GCM_init_aesni_calc_iv_done:
         movdqa	xmm1, xmm0
         psrldq	xmm1, 4
         pslldq	xmm0, 12
-        pxor	xmm7, xmm0
-        movdqa	xmm2, xmm7
-        movdqa	xmm3, xmm7
-        movdqa	xmm0, xmm7
+        pxor	xmm6, xmm0
+        movdqa	xmm2, xmm6
+        movdqa	xmm3, xmm6
+        movdqa	xmm0, xmm6
         psrld	xmm2, 1
         psrld	xmm3, 2
         psrld	xmm0, 7
         pxor	xmm2, xmm3
         pxor	xmm2, xmm0
         pxor	xmm2, xmm1
-        pxor	xmm2, xmm7
+        pxor	xmm2, xmm6
         pxor	xmm4, xmm2
         pshufb	xmm4, OWORD PTR L_aes_gcm_bswap_mask
         ;   Encrypt counter
-        movdqa	xmm8, OWORD PTR [rdi]
-        pxor	xmm8, xmm4
-        aesenc	xmm8, [rdi+16]
-        aesenc	xmm8, [rdi+32]
-        aesenc	xmm8, [rdi+48]
-        aesenc	xmm8, [rdi+64]
-        aesenc	xmm8, [rdi+80]
-        aesenc	xmm8, [rdi+96]
-        aesenc	xmm8, [rdi+112]
-        aesenc	xmm8, [rdi+128]
-        aesenc	xmm8, [rdi+144]
+        movdqa	xmm7, OWORD PTR [rdi]
+        pxor	xmm7, xmm4
+        aesenc	xmm7, [rdi+16]
+        aesenc	xmm7, [rdi+32]
+        aesenc	xmm7, [rdi+48]
+        aesenc	xmm7, [rdi+64]
+        aesenc	xmm7, [rdi+80]
+        aesenc	xmm7, [rdi+96]
+        aesenc	xmm7, [rdi+112]
+        aesenc	xmm7, [rdi+128]
+        aesenc	xmm7, [rdi+144]
         cmp	esi, 11
-        movdqa	xmm9, OWORD PTR [rdi+160]
+        movdqa	xmm8, OWORD PTR [rdi+160]
         jl	L_AES_GCM_init_aesni_calc_iv_2_aesenc_avx_last
-        aesenc	xmm8, xmm9
-        aesenc	xmm8, [rdi+176]
+        aesenc	xmm7, xmm8
+        aesenc	xmm7, [rdi+176]
         cmp	esi, 13
-        movdqa	xmm9, OWORD PTR [rdi+192]
+        movdqa	xmm8, OWORD PTR [rdi+192]
         jl	L_AES_GCM_init_aesni_calc_iv_2_aesenc_avx_last
-        aesenc	xmm8, xmm9
-        aesenc	xmm8, [rdi+208]
-        movdqa	xmm9, OWORD PTR [rdi+224]
+        aesenc	xmm7, xmm8
+        aesenc	xmm7, [rdi+208]
+        movdqa	xmm8, OWORD PTR [rdi+224]
 L_AES_GCM_init_aesni_calc_iv_2_aesenc_avx_last:
-        aesenclast	xmm8, xmm9
-        movdqu	xmm15, xmm8
+        aesenclast	xmm7, xmm8
+        movdqu	xmm15, xmm7
 L_AES_GCM_init_aesni_iv_done:
         movdqa	OWORD PTR [r9], xmm15
         pshufb	xmm4, OWORD PTR L_aes_gcm_bswap_epi64
         paddd	xmm4, OWORD PTR L_aes_gcm_one
         movdqa	OWORD PTR [rax], xmm5
         movdqa	OWORD PTR [r8], xmm4
-        add	rsp, 16
+        movdqu	xmm6, OWORD PTR [rsp+16]
+        movdqu	xmm7, OWORD PTR [rsp+32]
+        movdqu	xmm8, OWORD PTR [rsp+48]
+        movdqu	xmm15, OWORD PTR [rsp+64]
+        add	rsp, 80
         pop	r14
         pop	r13
         pop	r12
@@ -3702,13 +3750,16 @@ _text ENDS
 _text SEGMENT READONLY PARA
 AES_GCM_aad_update_aesni PROC
         mov	rax, rcx
+        sub	rsp, 32
+        movdqu	OWORD PTR [rsp], xmm6
+        movdqu	OWORD PTR [rsp+16], xmm7
         movdqa	xmm5, OWORD PTR [r8]
         movdqa	xmm6, OWORD PTR [r9]
         xor	ecx, ecx
 L_AES_GCM_aad_update_aesni_16_loop:
-        movdqu	xmm8, [rax+rcx]
-        pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
-        pxor	xmm5, xmm8
+        movdqu	xmm7, OWORD PTR [rax+rcx]
+        pshufb	xmm7, OWORD PTR L_aes_gcm_bswap_mask
+        pxor	xmm5, xmm7
         pshufd	xmm1, xmm5, 78
         pshufd	xmm2, xmm6, 78
         movdqa	xmm3, xmm6
@@ -3767,6 +3818,9 @@ L_AES_GCM_aad_update_aesni_16_loop:
         cmp	ecx, edx
         jl	L_AES_GCM_aad_update_aesni_16_loop
         movdqa	OWORD PTR [r8], xmm5
+        movdqu	xmm6, OWORD PTR [rsp]
+        movdqu	xmm7, OWORD PTR [rsp+16]
+        add	rsp, 32
         ret
 AES_GCM_aad_update_aesni ENDP
 _text ENDS
@@ -3775,48 +3829,51 @@ AES_GCM_encrypt_block_aesni PROC
         mov	r10, r8
         mov	r11, r9
         mov	rax, QWORD PTR [rsp+40]
-        movdqu	xmm8, [rax]
-        movdqa	xmm9, xmm8
-        pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_epi64
-        paddd	xmm9, OWORD PTR L_aes_gcm_one
-        pxor	xmm8, [rcx]
-        movdqu	[rax], xmm9
-        aesenc	xmm8, [rcx+16]
-        aesenc	xmm8, [rcx+32]
-        aesenc	xmm8, [rcx+48]
-        aesenc	xmm8, [rcx+64]
-        aesenc	xmm8, [rcx+80]
-        aesenc	xmm8, [rcx+96]
-        aesenc	xmm8, [rcx+112]
-        aesenc	xmm8, [rcx+128]
-        aesenc	xmm8, [rcx+144]
+        movdqu	xmm0, OWORD PTR [rax]
+        movdqa	xmm1, xmm0
+        pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_epi64
+        paddd	xmm1, OWORD PTR L_aes_gcm_one
+        pxor	xmm0, [rcx]
+        movdqu	OWORD PTR [rax], xmm1
+        aesenc	xmm0, [rcx+16]
+        aesenc	xmm0, [rcx+32]
+        aesenc	xmm0, [rcx+48]
+        aesenc	xmm0, [rcx+64]
+        aesenc	xmm0, [rcx+80]
+        aesenc	xmm0, [rcx+96]
+        aesenc	xmm0, [rcx+112]
+        aesenc	xmm0, [rcx+128]
+        aesenc	xmm0, [rcx+144]
         cmp	edx, 11
-        movdqa	xmm9, OWORD PTR [rcx+160]
+        movdqa	xmm1, OWORD PTR [rcx+160]
         jl	L_AES_GCM_encrypt_block_aesni_aesenc_block_aesenc_avx_last
-        aesenc	xmm8, xmm9
-        aesenc	xmm8, [rcx+176]
+        aesenc	xmm0, xmm1
+        aesenc	xmm0, [rcx+176]
         cmp	edx, 13
-        movdqa	xmm9, OWORD PTR [rcx+192]
+        movdqa	xmm1, OWORD PTR [rcx+192]
         jl	L_AES_GCM_encrypt_block_aesni_aesenc_block_aesenc_avx_last
-        aesenc	xmm8, xmm9
-        aesenc	xmm8, [rcx+208]
-        movdqa	xmm9, OWORD PTR [rcx+224]
+        aesenc	xmm0, xmm1
+        aesenc	xmm0, [rcx+208]
+        movdqa	xmm1, OWORD PTR [rcx+224]
 L_AES_GCM_encrypt_block_aesni_aesenc_block_aesenc_avx_last:
-        aesenclast	xmm8, xmm9
-        movdqu	xmm9, [r11]
-        pxor	xmm8, xmm9
-        movdqu	[r10], xmm8
-        pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
+        aesenclast	xmm0, xmm1
+        movdqu	xmm1, OWORD PTR [r11]
+        pxor	xmm0, xmm1
+        movdqu	OWORD PTR [r10], xmm0
+        pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         ret
 AES_GCM_encrypt_block_aesni ENDP
 _text ENDS
 _text SEGMENT READONLY PARA
 AES_GCM_ghash_block_aesni PROC
+        sub	rsp, 32
+        movdqu	OWORD PTR [rsp], xmm6
+        movdqu	OWORD PTR [rsp+16], xmm7
         movdqa	xmm4, OWORD PTR [rdx]
         movdqa	xmm5, OWORD PTR [r8]
-        movdqu	xmm8, [rcx]
-        pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
-        pxor	xmm4, xmm8
+        movdqu	xmm7, OWORD PTR [rcx]
+        pshufb	xmm7, OWORD PTR L_aes_gcm_bswap_mask
+        pxor	xmm4, xmm7
         pshufd	xmm1, xmm4, 78
         pshufd	xmm2, xmm5, 78
         movdqa	xmm3, xmm5
@@ -3872,6 +3929,9 @@ AES_GCM_ghash_block_aesni PROC
         pxor	xmm2, xmm6
         pxor	xmm4, xmm2
         movdqa	OWORD PTR [rdx], xmm4
+        movdqu	xmm6, OWORD PTR [rsp]
+        movdqu	xmm7, OWORD PTR [rsp+16]
+        add	rsp, 32
         ret
 AES_GCM_ghash_block_aesni ENDP
 _text ENDS
@@ -3890,7 +3950,17 @@ AES_GCM_encrypt_update_aesni PROC
         mov	r12, QWORD PTR [rsp+88]
         mov	r14, QWORD PTR [rsp+96]
         mov	r15, QWORD PTR [rsp+104]
-        sub	rsp, 160
+        sub	rsp, 320
+        movdqu	OWORD PTR [rsp+160], xmm6
+        movdqu	OWORD PTR [rsp+176], xmm7
+        movdqu	OWORD PTR [rsp+192], xmm8
+        movdqu	OWORD PTR [rsp+208], xmm9
+        movdqu	OWORD PTR [rsp+224], xmm10
+        movdqu	OWORD PTR [rsp+240], xmm11
+        movdqu	OWORD PTR [rsp+256], xmm12
+        movdqu	OWORD PTR [rsp+272], xmm13
+        movdqu	OWORD PTR [rsp+288], xmm14
+        movdqu	OWORD PTR [rsp+304], xmm15
         movdqa	xmm6, OWORD PTR [r12]
         movdqa	xmm5, OWORD PTR [r14]
         movdqa	xmm9, xmm5
@@ -3910,7 +3980,7 @@ AES_GCM_encrypt_update_aesni PROC
         and	r13d, 4294967168
         movdqa	xmm2, xmm6
         ; H ^ 1
-        movdqu	[rsp], xmm5
+        movdqu	OWORD PTR [rsp], xmm5
         ; H ^ 2
         pshufd	xmm9, xmm5, 78
         pshufd	xmm10, xmm5, 78
@@ -3952,7 +4022,7 @@ AES_GCM_encrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm0, xmm14
-        movdqu	[rsp+16], xmm0
+        movdqu	OWORD PTR [rsp+16], xmm0
         ; H ^ 3
         pshufd	xmm9, xmm5, 78
         pshufd	xmm10, xmm0, 78
@@ -3994,7 +4064,7 @@ AES_GCM_encrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm1, xmm14
-        movdqu	[rsp+32], xmm1
+        movdqu	OWORD PTR [rsp+32], xmm1
         ; H ^ 4
         pshufd	xmm9, xmm0, 78
         pshufd	xmm10, xmm0, 78
@@ -4036,7 +4106,7 @@ AES_GCM_encrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm3, xmm14
-        movdqu	[rsp+48], xmm3
+        movdqu	OWORD PTR [rsp+48], xmm3
         ; H ^ 5
         pshufd	xmm9, xmm0, 78
         pshufd	xmm10, xmm1, 78
@@ -4078,7 +4148,7 @@ AES_GCM_encrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+64], xmm7
+        movdqu	OWORD PTR [rsp+64], xmm7
         ; H ^ 6
         pshufd	xmm9, xmm1, 78
         pshufd	xmm10, xmm1, 78
@@ -4120,7 +4190,7 @@ AES_GCM_encrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+80], xmm7
+        movdqu	OWORD PTR [rsp+80], xmm7
         ; H ^ 7
         pshufd	xmm9, xmm1, 78
         pshufd	xmm10, xmm3, 78
@@ -4162,7 +4232,7 @@ AES_GCM_encrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+96], xmm7
+        movdqu	OWORD PTR [rsp+96], xmm7
         ; H ^ 8
         pshufd	xmm9, xmm3, 78
         pshufd	xmm10, xmm3, 78
@@ -4204,9 +4274,9 @@ AES_GCM_encrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+112], xmm7
+        movdqu	OWORD PTR [rsp+112], xmm7
         ; First 128 bytes of input
-        movdqu	xmm8, [r15]
+        movdqu	xmm8, OWORD PTR [r15]
         movdqa	xmm1, OWORD PTR L_aes_gcm_bswap_epi64
         movdqa	xmm0, xmm8
         pshufb	xmm8, xmm1
@@ -4233,7 +4303,7 @@ AES_GCM_encrypt_update_aesni PROC
         pshufb	xmm15, xmm1
         paddd	xmm0, OWORD PTR L_aes_gcm_eight
         movdqa	xmm7, OWORD PTR [rax]
-        movdqu	[r15], xmm0
+        movdqu	OWORD PTR [r15], xmm0
         pxor	xmm8, xmm7
         pxor	xmm9, xmm7
         pxor	xmm10, xmm7
@@ -4367,36 +4437,36 @@ AES_GCM_encrypt_update_aesni PROC
 L_AES_GCM_encrypt_update_aesni_enc_done:
         aesenclast	xmm8, xmm7
         aesenclast	xmm9, xmm7
-        movdqu	xmm0, [r11]
-        movdqu	xmm1, [r11+16]
+        movdqu	xmm0, OWORD PTR [r11]
+        movdqu	xmm1, OWORD PTR [r11+16]
         pxor	xmm8, xmm0
         pxor	xmm9, xmm1
-        movdqu	[r10], xmm8
-        movdqu	[r10+16], xmm9
+        movdqu	OWORD PTR [r10], xmm8
+        movdqu	OWORD PTR [r10+16], xmm9
         aesenclast	xmm10, xmm7
         aesenclast	xmm11, xmm7
-        movdqu	xmm0, [r11+32]
-        movdqu	xmm1, [r11+48]
+        movdqu	xmm0, OWORD PTR [r11+32]
+        movdqu	xmm1, OWORD PTR [r11+48]
         pxor	xmm10, xmm0
         pxor	xmm11, xmm1
-        movdqu	[r10+32], xmm10
-        movdqu	[r10+48], xmm11
+        movdqu	OWORD PTR [r10+32], xmm10
+        movdqu	OWORD PTR [r10+48], xmm11
         aesenclast	xmm12, xmm7
         aesenclast	xmm13, xmm7
-        movdqu	xmm0, [r11+64]
-        movdqu	xmm1, [r11+80]
+        movdqu	xmm0, OWORD PTR [r11+64]
+        movdqu	xmm1, OWORD PTR [r11+80]
         pxor	xmm12, xmm0
         pxor	xmm13, xmm1
-        movdqu	[r10+64], xmm12
-        movdqu	[r10+80], xmm13
+        movdqu	OWORD PTR [r10+64], xmm12
+        movdqu	OWORD PTR [r10+80], xmm13
         aesenclast	xmm14, xmm7
         aesenclast	xmm15, xmm7
-        movdqu	xmm0, [r11+96]
-        movdqu	xmm1, [r11+112]
+        movdqu	xmm0, OWORD PTR [r11+96]
+        movdqu	xmm1, OWORD PTR [r11+112]
         pxor	xmm14, xmm0
         pxor	xmm15, xmm1
-        movdqu	[r10+96], xmm14
-        movdqu	[r10+112], xmm15
+        movdqu	OWORD PTR [r10+96], xmm14
+        movdqu	OWORD PTR [r10+112], xmm15
         cmp	r13d, 128
         mov	edi, 128
         jle	L_AES_GCM_encrypt_update_aesni_end_128
@@ -4404,7 +4474,7 @@ L_AES_GCM_encrypt_update_aesni_enc_done:
 L_AES_GCM_encrypt_update_aesni_ghash_128:
         lea	rcx, QWORD PTR [r11+rdi]
         lea	rdx, QWORD PTR [r10+rdi]
-        movdqu	xmm8, [r15]
+        movdqu	xmm8, OWORD PTR [r15]
         movdqa	xmm1, OWORD PTR L_aes_gcm_bswap_epi64
         movdqa	xmm0, xmm8
         pshufb	xmm8, xmm1
@@ -4431,7 +4501,7 @@ L_AES_GCM_encrypt_update_aesni_ghash_128:
         pshufb	xmm15, xmm1
         paddd	xmm0, OWORD PTR L_aes_gcm_eight
         movdqa	xmm7, OWORD PTR [rax]
-        movdqu	[r15], xmm0
+        movdqu	OWORD PTR [r15], xmm0
         pxor	xmm8, xmm7
         pxor	xmm9, xmm7
         pxor	xmm10, xmm7
@@ -4440,8 +4510,8 @@ L_AES_GCM_encrypt_update_aesni_ghash_128:
         pxor	xmm13, xmm7
         pxor	xmm14, xmm7
         pxor	xmm15, xmm7
-        movdqu	xmm7, [rsp+112]
-        movdqu	xmm0, [rdx+-128]
+        movdqu	xmm7, OWORD PTR [rsp+112]
+        movdqu	xmm0, OWORD PTR [rdx+-128]
         aesenc	xmm8, [rax+16]
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm0, xmm2
@@ -4463,8 +4533,8 @@ L_AES_GCM_encrypt_update_aesni_ghash_128:
         aesenc	xmm15, [rax+16]
         pxor	xmm1, xmm2
         pxor	xmm1, xmm3
-        movdqu	xmm7, [rsp+96]
-        movdqu	xmm0, [rdx+-112]
+        movdqu	xmm7, OWORD PTR [rsp+96]
+        movdqu	xmm0, OWORD PTR [rdx+-112]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+32]
@@ -4487,8 +4557,8 @@ L_AES_GCM_encrypt_update_aesni_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+80]
-        movdqu	xmm0, [rdx+-96]
+        movdqu	xmm7, OWORD PTR [rsp+80]
+        movdqu	xmm0, OWORD PTR [rdx+-96]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+48]
@@ -4511,8 +4581,8 @@ L_AES_GCM_encrypt_update_aesni_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+64]
-        movdqu	xmm0, [rdx+-80]
+        movdqu	xmm7, OWORD PTR [rsp+64]
+        movdqu	xmm0, OWORD PTR [rdx+-80]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+64]
@@ -4535,8 +4605,8 @@ L_AES_GCM_encrypt_update_aesni_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+48]
-        movdqu	xmm0, [rdx+-64]
+        movdqu	xmm7, OWORD PTR [rsp+48]
+        movdqu	xmm0, OWORD PTR [rdx+-64]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+80]
@@ -4559,8 +4629,8 @@ L_AES_GCM_encrypt_update_aesni_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+32]
-        movdqu	xmm0, [rdx+-48]
+        movdqu	xmm7, OWORD PTR [rsp+32]
+        movdqu	xmm0, OWORD PTR [rdx+-48]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+96]
@@ -4583,8 +4653,8 @@ L_AES_GCM_encrypt_update_aesni_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+16]
-        movdqu	xmm0, [rdx+-32]
+        movdqu	xmm7, OWORD PTR [rsp+16]
+        movdqu	xmm0, OWORD PTR [rdx+-32]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+112]
@@ -4607,8 +4677,8 @@ L_AES_GCM_encrypt_update_aesni_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp]
-        movdqu	xmm0, [rdx+-16]
+        movdqu	xmm7, OWORD PTR [rsp]
+        movdqu	xmm0, OWORD PTR [rdx+-16]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+128]
@@ -4711,36 +4781,36 @@ L_AES_GCM_encrypt_update_aesni_ghash_128:
 L_AES_GCM_encrypt_update_aesni_aesenc_128_ghash_avx_done:
         aesenclast	xmm8, xmm7
         aesenclast	xmm9, xmm7
-        movdqu	xmm0, [rcx]
-        movdqu	xmm1, [rcx+16]
+        movdqu	xmm0, OWORD PTR [rcx]
+        movdqu	xmm1, OWORD PTR [rcx+16]
         pxor	xmm8, xmm0
         pxor	xmm9, xmm1
-        movdqu	[rdx], xmm8
-        movdqu	[rdx+16], xmm9
+        movdqu	OWORD PTR [rdx], xmm8
+        movdqu	OWORD PTR [rdx+16], xmm9
         aesenclast	xmm10, xmm7
         aesenclast	xmm11, xmm7
-        movdqu	xmm0, [rcx+32]
-        movdqu	xmm1, [rcx+48]
+        movdqu	xmm0, OWORD PTR [rcx+32]
+        movdqu	xmm1, OWORD PTR [rcx+48]
         pxor	xmm10, xmm0
         pxor	xmm11, xmm1
-        movdqu	[rdx+32], xmm10
-        movdqu	[rdx+48], xmm11
+        movdqu	OWORD PTR [rdx+32], xmm10
+        movdqu	OWORD PTR [rdx+48], xmm11
         aesenclast	xmm12, xmm7
         aesenclast	xmm13, xmm7
-        movdqu	xmm0, [rcx+64]
-        movdqu	xmm1, [rcx+80]
+        movdqu	xmm0, OWORD PTR [rcx+64]
+        movdqu	xmm1, OWORD PTR [rcx+80]
         pxor	xmm12, xmm0
         pxor	xmm13, xmm1
-        movdqu	[rdx+64], xmm12
-        movdqu	[rdx+80], xmm13
+        movdqu	OWORD PTR [rdx+64], xmm12
+        movdqu	OWORD PTR [rdx+80], xmm13
         aesenclast	xmm14, xmm7
         aesenclast	xmm15, xmm7
-        movdqu	xmm0, [rcx+96]
-        movdqu	xmm1, [rcx+112]
+        movdqu	xmm0, OWORD PTR [rcx+96]
+        movdqu	xmm1, OWORD PTR [rcx+112]
         pxor	xmm14, xmm0
         pxor	xmm15, xmm1
-        movdqu	[rdx+96], xmm14
-        movdqu	[rdx+112], xmm15
+        movdqu	OWORD PTR [rdx+96], xmm14
+        movdqu	OWORD PTR [rdx+112], xmm15
         add	edi, 128
         cmp	edi, r13d
         jl	L_AES_GCM_encrypt_update_aesni_ghash_128
@@ -4755,7 +4825,7 @@ L_AES_GCM_encrypt_update_aesni_end_128:
         pshufb	xmm13, xmm4
         pshufb	xmm14, xmm4
         pshufb	xmm15, xmm4
-        movdqu	xmm7, [rsp+112]
+        movdqu	xmm7, OWORD PTR [rsp+112]
         pshufd	xmm1, xmm8, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -4774,7 +4844,7 @@ L_AES_GCM_encrypt_update_aesni_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp+96]
+        movdqu	xmm7, OWORD PTR [rsp+96]
         pshufd	xmm1, xmm9, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -4793,7 +4863,7 @@ L_AES_GCM_encrypt_update_aesni_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp+80]
+        movdqu	xmm7, OWORD PTR [rsp+80]
         pshufd	xmm1, xmm10, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -4812,7 +4882,7 @@ L_AES_GCM_encrypt_update_aesni_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp+64]
+        movdqu	xmm7, OWORD PTR [rsp+64]
         pshufd	xmm1, xmm11, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -4831,7 +4901,7 @@ L_AES_GCM_encrypt_update_aesni_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp+48]
+        movdqu	xmm7, OWORD PTR [rsp+48]
         pshufd	xmm1, xmm12, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -4850,7 +4920,7 @@ L_AES_GCM_encrypt_update_aesni_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp+32]
+        movdqu	xmm7, OWORD PTR [rsp+32]
         pshufd	xmm1, xmm13, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -4869,7 +4939,7 @@ L_AES_GCM_encrypt_update_aesni_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp+16]
+        movdqu	xmm7, OWORD PTR [rsp+16]
         pshufd	xmm1, xmm14, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -4888,7 +4958,7 @@ L_AES_GCM_encrypt_update_aesni_end_128:
         psrldq	xmm1, 8
         pxor	xmm4, xmm2
         pxor	xmm6, xmm1
-        movdqu	xmm7, [rsp]
+        movdqu	xmm7, OWORD PTR [rsp]
         pshufd	xmm1, xmm15, 78
         pshufd	xmm2, xmm7, 78
         movdqa	xmm3, xmm7
@@ -4930,7 +5000,7 @@ L_AES_GCM_encrypt_update_aesni_end_128:
         pxor	xmm2, xmm1
         pxor	xmm2, xmm4
         pxor	xmm6, xmm2
-        movdqu	xmm5, [rsp]
+        movdqu	xmm5, OWORD PTR [rsp]
 L_AES_GCM_encrypt_update_aesni_done_128:
         mov	edx, r9d
         cmp	edi, edx
@@ -4941,12 +5011,12 @@ L_AES_GCM_encrypt_update_aesni_done_128:
         jge	L_AES_GCM_encrypt_update_aesni_last_block_done
         lea	rcx, QWORD PTR [r11+rdi]
         lea	rdx, QWORD PTR [r10+rdi]
-        movdqu	xmm8, [r15]
+        movdqu	xmm8, OWORD PTR [r15]
         movdqa	xmm9, xmm8
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_epi64
         paddd	xmm9, OWORD PTR L_aes_gcm_one
         pxor	xmm8, [rax]
-        movdqu	[r15], xmm9
+        movdqu	OWORD PTR [r15], xmm9
         aesenc	xmm8, [rax+16]
         aesenc	xmm8, [rax+32]
         aesenc	xmm8, [rax+48]
@@ -4969,9 +5039,9 @@ L_AES_GCM_encrypt_update_aesni_done_128:
         movdqa	xmm9, OWORD PTR [rax+224]
 L_AES_GCM_encrypt_update_aesni_aesenc_block_aesenc_avx_last:
         aesenclast	xmm8, xmm9
-        movdqu	xmm9, [rcx]
+        movdqu	xmm9, OWORD PTR [rcx]
         pxor	xmm8, xmm9
-        movdqu	[rdx], xmm8
+        movdqu	OWORD PTR [rdx], xmm8
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm6, xmm8
         add	edi, 16
@@ -4980,12 +5050,12 @@ L_AES_GCM_encrypt_update_aesni_aesenc_block_aesenc_avx_last:
 L_AES_GCM_encrypt_update_aesni_last_block_start:
         lea	rcx, QWORD PTR [r11+rdi]
         lea	rdx, QWORD PTR [r10+rdi]
-        movdqu	xmm8, [r15]
+        movdqu	xmm8, OWORD PTR [r15]
         movdqa	xmm9, xmm8
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_epi64
         paddd	xmm9, OWORD PTR L_aes_gcm_one
         pxor	xmm8, [rax]
-        movdqu	[r15], xmm9
+        movdqu	OWORD PTR [r15], xmm9
         movdqa	xmm10, xmm6
         pclmulqdq	xmm10, xmm5, 16
         aesenc	xmm8, [rax+16]
@@ -5033,9 +5103,9 @@ L_AES_GCM_encrypt_update_aesni_last_block_start:
         movdqa	xmm9, OWORD PTR [rax+224]
 L_AES_GCM_encrypt_update_aesni_aesenc_gfmul_last:
         aesenclast	xmm8, xmm9
-        movdqu	xmm9, [rcx]
+        movdqu	xmm9, OWORD PTR [rcx]
         pxor	xmm8, xmm9
-        movdqu	[rdx], xmm8
+        movdqu	OWORD PTR [rdx], xmm8
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm6, xmm8
         add	edi, 16
@@ -5085,7 +5155,17 @@ L_AES_GCM_encrypt_update_aesni_last_block_ghash:
 L_AES_GCM_encrypt_update_aesni_last_block_done:
 L_AES_GCM_encrypt_update_aesni_done_enc:
         movdqa	OWORD PTR [r12], xmm6
-        add	rsp, 160
+        movdqu	xmm6, OWORD PTR [rsp+160]
+        movdqu	xmm7, OWORD PTR [rsp+176]
+        movdqu	xmm8, OWORD PTR [rsp+192]
+        movdqu	xmm9, OWORD PTR [rsp+208]
+        movdqu	xmm10, OWORD PTR [rsp+224]
+        movdqu	xmm11, OWORD PTR [rsp+240]
+        movdqu	xmm12, OWORD PTR [rsp+256]
+        movdqu	xmm13, OWORD PTR [rsp+272]
+        movdqu	xmm14, OWORD PTR [rsp+288]
+        movdqu	xmm15, OWORD PTR [rsp+304]
+        add	rsp, 320
         pop	rdi
         pop	r15
         pop	r14
@@ -5105,20 +5185,28 @@ AES_GCM_encrypt_final_aesni PROC
         mov	r11d, DWORD PTR [rsp+64]
         mov	r12, QWORD PTR [rsp+72]
         mov	r14, QWORD PTR [rsp+80]
-        sub	rsp, 16
+        sub	rsp, 144
+        movdqu	OWORD PTR [rsp+16], xmm6
+        movdqu	OWORD PTR [rsp+32], xmm7
+        movdqu	OWORD PTR [rsp+48], xmm8
+        movdqu	OWORD PTR [rsp+64], xmm9
+        movdqu	OWORD PTR [rsp+80], xmm10
+        movdqu	OWORD PTR [rsp+96], xmm11
+        movdqu	OWORD PTR [rsp+112], xmm12
+        movdqu	OWORD PTR [rsp+128], xmm13
         movdqa	xmm4, OWORD PTR [rax]
         movdqa	xmm5, OWORD PTR [r12]
         movdqa	xmm6, OWORD PTR [r14]
-        movdqa	xmm9, xmm5
         movdqa	xmm8, xmm5
-        psrlq	xmm9, 63
-        psllq	xmm8, 1
-        pslldq	xmm9, 8
-        por	xmm8, xmm9
+        movdqa	xmm7, xmm5
+        psrlq	xmm8, 63
+        psllq	xmm7, 1
+        pslldq	xmm8, 8
+        por	xmm7, xmm8
         pshufd	xmm5, xmm5, 255
         psrad	xmm5, 31
         pand	xmm5, OWORD PTR L_aes_gcm_mod2_128
-        pxor	xmm5, xmm8
+        pxor	xmm5, xmm7
         mov	edx, r10d
         mov	ecx, r11d
         shl	rdx, 3
@@ -5126,53 +5214,53 @@ AES_GCM_encrypt_final_aesni PROC
         pinsrq	xmm0, rdx, 0
         pinsrq	xmm0, rcx, 1
         pxor	xmm4, xmm0
-        pshufd	xmm9, xmm5, 78
-        pshufd	xmm10, xmm4, 78
-        movdqa	xmm11, xmm4
-        movdqa	xmm8, xmm4
-        pclmulqdq	xmm11, xmm5, 17
-        pclmulqdq	xmm8, xmm5, 0
-        pxor	xmm9, xmm5
-        pxor	xmm10, xmm4
-        pclmulqdq	xmm9, xmm10, 0
-        pxor	xmm9, xmm8
-        pxor	xmm9, xmm11
-        movdqa	xmm10, xmm9
-        movdqa	xmm4, xmm11
-        pslldq	xmm10, 8
-        psrldq	xmm9, 8
+        pshufd	xmm8, xmm5, 78
+        pshufd	xmm9, xmm4, 78
+        movdqa	xmm10, xmm4
+        movdqa	xmm7, xmm4
+        pclmulqdq	xmm10, xmm5, 17
+        pclmulqdq	xmm7, xmm5, 0
+        pxor	xmm8, xmm5
+        pxor	xmm9, xmm4
+        pclmulqdq	xmm8, xmm9, 0
+        pxor	xmm8, xmm7
         pxor	xmm8, xmm10
-        pxor	xmm4, xmm9
-        movdqa	xmm12, xmm8
-        movdqa	xmm13, xmm8
-        movdqa	xmm14, xmm8
-        pslld	xmm12, 31
-        pslld	xmm13, 30
-        pslld	xmm14, 25
-        pxor	xmm12, xmm13
-        pxor	xmm12, xmm14
-        movdqa	xmm13, xmm12
-        psrldq	xmm13, 4
-        pslldq	xmm12, 12
-        pxor	xmm8, xmm12
-        movdqa	xmm14, xmm8
-        movdqa	xmm10, xmm8
         movdqa	xmm9, xmm8
-        psrld	xmm14, 1
-        psrld	xmm10, 2
-        psrld	xmm9, 7
-        pxor	xmm14, xmm10
-        pxor	xmm14, xmm9
-        pxor	xmm14, xmm13
-        pxor	xmm14, xmm8
-        pxor	xmm4, xmm14
+        movdqa	xmm4, xmm10
+        pslldq	xmm9, 8
+        psrldq	xmm8, 8
+        pxor	xmm7, xmm9
+        pxor	xmm4, xmm8
+        movdqa	xmm11, xmm7
+        movdqa	xmm12, xmm7
+        movdqa	xmm13, xmm7
+        pslld	xmm11, 31
+        pslld	xmm12, 30
+        pslld	xmm13, 25
+        pxor	xmm11, xmm12
+        pxor	xmm11, xmm13
+        movdqa	xmm12, xmm11
+        psrldq	xmm12, 4
+        pslldq	xmm11, 12
+        pxor	xmm7, xmm11
+        movdqa	xmm13, xmm7
+        movdqa	xmm9, xmm7
+        movdqa	xmm8, xmm7
+        psrld	xmm13, 1
+        psrld	xmm9, 2
+        psrld	xmm8, 7
+        pxor	xmm13, xmm9
+        pxor	xmm13, xmm8
+        pxor	xmm13, xmm12
+        pxor	xmm13, xmm7
+        pxor	xmm4, xmm13
         pshufb	xmm4, OWORD PTR L_aes_gcm_bswap_mask
         movdqu	xmm0, xmm6
         pxor	xmm0, xmm4
         cmp	r8d, 16
         je	L_AES_GCM_encrypt_final_aesni_store_tag_16
         xor	rcx, rcx
-        movdqu	[rsp], xmm0
+        movdqu	OWORD PTR [rsp], xmm0
 L_AES_GCM_encrypt_final_aesni_store_tag_loop:
         movzx	r13d, BYTE PTR [rsp+rcx]
         mov	BYTE PTR [r9+rcx], r13b
@@ -5181,9 +5269,17 @@ L_AES_GCM_encrypt_final_aesni_store_tag_loop:
         jne	L_AES_GCM_encrypt_final_aesni_store_tag_loop
         jmp	L_AES_GCM_encrypt_final_aesni_store_tag_done
 L_AES_GCM_encrypt_final_aesni_store_tag_16:
-        movdqu	[r9], xmm0
+        movdqu	OWORD PTR [r9], xmm0
 L_AES_GCM_encrypt_final_aesni_store_tag_done:
-        add	rsp, 16
+        movdqu	xmm6, OWORD PTR [rsp+16]
+        movdqu	xmm7, OWORD PTR [rsp+32]
+        movdqu	xmm8, OWORD PTR [rsp+48]
+        movdqu	xmm9, OWORD PTR [rsp+64]
+        movdqu	xmm10, OWORD PTR [rsp+80]
+        movdqu	xmm11, OWORD PTR [rsp+96]
+        movdqu	xmm12, OWORD PTR [rsp+112]
+        movdqu	xmm13, OWORD PTR [rsp+128]
+        add	rsp, 144
         pop	r14
         pop	r12
         pop	r13
@@ -5206,7 +5302,17 @@ AES_GCM_decrypt_update_aesni PROC
         mov	r12, QWORD PTR [rsp+96]
         mov	r14, QWORD PTR [rsp+104]
         mov	r15, QWORD PTR [rsp+112]
-        sub	rsp, 168
+        sub	rsp, 328
+        movdqu	OWORD PTR [rsp+168], xmm6
+        movdqu	OWORD PTR [rsp+184], xmm7
+        movdqu	OWORD PTR [rsp+200], xmm8
+        movdqu	OWORD PTR [rsp+216], xmm9
+        movdqu	OWORD PTR [rsp+232], xmm10
+        movdqu	OWORD PTR [rsp+248], xmm11
+        movdqu	OWORD PTR [rsp+264], xmm12
+        movdqu	OWORD PTR [rsp+280], xmm13
+        movdqu	OWORD PTR [rsp+296], xmm14
+        movdqu	OWORD PTR [rsp+312], xmm15
         movdqa	xmm6, OWORD PTR [r12]
         movdqa	xmm5, OWORD PTR [r14]
         movdqa	xmm9, xmm5
@@ -5226,7 +5332,7 @@ AES_GCM_decrypt_update_aesni PROC
         and	r13d, 4294967168
         movdqa	xmm2, xmm6
         ; H ^ 1
-        movdqu	[rsp], xmm5
+        movdqu	OWORD PTR [rsp], xmm5
         ; H ^ 2
         pshufd	xmm9, xmm5, 78
         pshufd	xmm10, xmm5, 78
@@ -5268,7 +5374,7 @@ AES_GCM_decrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm0, xmm14
-        movdqu	[rsp+16], xmm0
+        movdqu	OWORD PTR [rsp+16], xmm0
         ; H ^ 3
         pshufd	xmm9, xmm5, 78
         pshufd	xmm10, xmm0, 78
@@ -5310,7 +5416,7 @@ AES_GCM_decrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm1, xmm14
-        movdqu	[rsp+32], xmm1
+        movdqu	OWORD PTR [rsp+32], xmm1
         ; H ^ 4
         pshufd	xmm9, xmm0, 78
         pshufd	xmm10, xmm0, 78
@@ -5352,7 +5458,7 @@ AES_GCM_decrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm3, xmm14
-        movdqu	[rsp+48], xmm3
+        movdqu	OWORD PTR [rsp+48], xmm3
         ; H ^ 5
         pshufd	xmm9, xmm0, 78
         pshufd	xmm10, xmm1, 78
@@ -5394,7 +5500,7 @@ AES_GCM_decrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+64], xmm7
+        movdqu	OWORD PTR [rsp+64], xmm7
         ; H ^ 6
         pshufd	xmm9, xmm1, 78
         pshufd	xmm10, xmm1, 78
@@ -5436,7 +5542,7 @@ AES_GCM_decrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+80], xmm7
+        movdqu	OWORD PTR [rsp+80], xmm7
         ; H ^ 7
         pshufd	xmm9, xmm1, 78
         pshufd	xmm10, xmm3, 78
@@ -5478,7 +5584,7 @@ AES_GCM_decrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+96], xmm7
+        movdqu	OWORD PTR [rsp+96], xmm7
         ; H ^ 8
         pshufd	xmm9, xmm3, 78
         pshufd	xmm10, xmm3, 78
@@ -5520,11 +5626,11 @@ AES_GCM_decrypt_update_aesni PROC
         pxor	xmm14, xmm13
         pxor	xmm14, xmm8
         pxor	xmm7, xmm14
-        movdqu	[rsp+112], xmm7
+        movdqu	OWORD PTR [rsp+112], xmm7
 L_AES_GCM_decrypt_update_aesni_ghash_128:
         lea	rcx, QWORD PTR [r11+rdi]
         lea	rdx, QWORD PTR [r10+rdi]
-        movdqu	xmm8, [r15]
+        movdqu	xmm8, OWORD PTR [r15]
         movdqa	xmm1, OWORD PTR L_aes_gcm_bswap_epi64
         movdqa	xmm0, xmm8
         pshufb	xmm8, xmm1
@@ -5551,7 +5657,7 @@ L_AES_GCM_decrypt_update_aesni_ghash_128:
         pshufb	xmm15, xmm1
         paddd	xmm0, OWORD PTR L_aes_gcm_eight
         movdqa	xmm7, OWORD PTR [rax]
-        movdqu	[r15], xmm0
+        movdqu	OWORD PTR [r15], xmm0
         pxor	xmm8, xmm7
         pxor	xmm9, xmm7
         pxor	xmm10, xmm7
@@ -5560,8 +5666,8 @@ L_AES_GCM_decrypt_update_aesni_ghash_128:
         pxor	xmm13, xmm7
         pxor	xmm14, xmm7
         pxor	xmm15, xmm7
-        movdqu	xmm7, [rsp+112]
-        movdqu	xmm0, [rcx]
+        movdqu	xmm7, OWORD PTR [rsp+112]
+        movdqu	xmm0, OWORD PTR [rcx]
         aesenc	xmm8, [rax+16]
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm0, xmm2
@@ -5583,8 +5689,8 @@ L_AES_GCM_decrypt_update_aesni_ghash_128:
         aesenc	xmm15, [rax+16]
         pxor	xmm1, xmm2
         pxor	xmm1, xmm3
-        movdqu	xmm7, [rsp+96]
-        movdqu	xmm0, [rcx+16]
+        movdqu	xmm7, OWORD PTR [rsp+96]
+        movdqu	xmm0, OWORD PTR [rcx+16]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+32]
@@ -5607,8 +5713,8 @@ L_AES_GCM_decrypt_update_aesni_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+80]
-        movdqu	xmm0, [rcx+32]
+        movdqu	xmm7, OWORD PTR [rsp+80]
+        movdqu	xmm0, OWORD PTR [rcx+32]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+48]
@@ -5631,8 +5737,8 @@ L_AES_GCM_decrypt_update_aesni_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+64]
-        movdqu	xmm0, [rcx+48]
+        movdqu	xmm7, OWORD PTR [rsp+64]
+        movdqu	xmm0, OWORD PTR [rcx+48]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+64]
@@ -5655,8 +5761,8 @@ L_AES_GCM_decrypt_update_aesni_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+48]
-        movdqu	xmm0, [rcx+64]
+        movdqu	xmm7, OWORD PTR [rsp+48]
+        movdqu	xmm0, OWORD PTR [rcx+64]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+80]
@@ -5679,8 +5785,8 @@ L_AES_GCM_decrypt_update_aesni_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+32]
-        movdqu	xmm0, [rcx+80]
+        movdqu	xmm7, OWORD PTR [rsp+32]
+        movdqu	xmm0, OWORD PTR [rcx+80]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+96]
@@ -5703,8 +5809,8 @@ L_AES_GCM_decrypt_update_aesni_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp+16]
-        movdqu	xmm0, [rcx+96]
+        movdqu	xmm7, OWORD PTR [rsp+16]
+        movdqu	xmm0, OWORD PTR [rcx+96]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+112]
@@ -5727,8 +5833,8 @@ L_AES_GCM_decrypt_update_aesni_ghash_128:
         pxor	xmm1, xmm6
         pxor	xmm3, xmm6
         pxor	xmm1, xmm4
-        movdqu	xmm7, [rsp]
-        movdqu	xmm0, [rcx+112]
+        movdqu	xmm7, OWORD PTR [rsp]
+        movdqu	xmm0, OWORD PTR [rcx+112]
         pshufd	xmm4, xmm7, 78
         pshufb	xmm0, OWORD PTR L_aes_gcm_bswap_mask
         aesenc	xmm8, [rax+128]
@@ -5831,41 +5937,41 @@ L_AES_GCM_decrypt_update_aesni_ghash_128:
 L_AES_GCM_decrypt_update_aesni_aesenc_128_ghash_avx_done:
         aesenclast	xmm8, xmm7
         aesenclast	xmm9, xmm7
-        movdqu	xmm0, [rcx]
-        movdqu	xmm1, [rcx+16]
+        movdqu	xmm0, OWORD PTR [rcx]
+        movdqu	xmm1, OWORD PTR [rcx+16]
         pxor	xmm8, xmm0
         pxor	xmm9, xmm1
-        movdqu	[rdx], xmm8
-        movdqu	[rdx+16], xmm9
+        movdqu	OWORD PTR [rdx], xmm8
+        movdqu	OWORD PTR [rdx+16], xmm9
         aesenclast	xmm10, xmm7
         aesenclast	xmm11, xmm7
-        movdqu	xmm0, [rcx+32]
-        movdqu	xmm1, [rcx+48]
+        movdqu	xmm0, OWORD PTR [rcx+32]
+        movdqu	xmm1, OWORD PTR [rcx+48]
         pxor	xmm10, xmm0
         pxor	xmm11, xmm1
-        movdqu	[rdx+32], xmm10
-        movdqu	[rdx+48], xmm11
+        movdqu	OWORD PTR [rdx+32], xmm10
+        movdqu	OWORD PTR [rdx+48], xmm11
         aesenclast	xmm12, xmm7
         aesenclast	xmm13, xmm7
-        movdqu	xmm0, [rcx+64]
-        movdqu	xmm1, [rcx+80]
+        movdqu	xmm0, OWORD PTR [rcx+64]
+        movdqu	xmm1, OWORD PTR [rcx+80]
         pxor	xmm12, xmm0
         pxor	xmm13, xmm1
-        movdqu	[rdx+64], xmm12
-        movdqu	[rdx+80], xmm13
+        movdqu	OWORD PTR [rdx+64], xmm12
+        movdqu	OWORD PTR [rdx+80], xmm13
         aesenclast	xmm14, xmm7
         aesenclast	xmm15, xmm7
-        movdqu	xmm0, [rcx+96]
-        movdqu	xmm1, [rcx+112]
+        movdqu	xmm0, OWORD PTR [rcx+96]
+        movdqu	xmm1, OWORD PTR [rcx+112]
         pxor	xmm14, xmm0
         pxor	xmm15, xmm1
-        movdqu	[rdx+96], xmm14
-        movdqu	[rdx+112], xmm15
+        movdqu	OWORD PTR [rdx+96], xmm14
+        movdqu	OWORD PTR [rdx+112], xmm15
         add	edi, 128
         cmp	edi, r13d
         jl	L_AES_GCM_decrypt_update_aesni_ghash_128
         movdqa	xmm6, xmm2
-        movdqu	xmm5, [rsp]
+        movdqu	xmm5, OWORD PTR [rsp]
 L_AES_GCM_decrypt_update_aesni_done_128:
         mov	edx, r9d
         cmp	edi, edx
@@ -5877,16 +5983,16 @@ L_AES_GCM_decrypt_update_aesni_done_128:
 L_AES_GCM_decrypt_update_aesni_last_block_start:
         lea	rcx, QWORD PTR [r11+rdi]
         lea	rdx, QWORD PTR [r10+rdi]
-        movdqu	xmm1, [rcx]
+        movdqu	xmm1, OWORD PTR [rcx]
         movdqa	xmm0, xmm5
         pshufb	xmm1, OWORD PTR L_aes_gcm_bswap_mask
         pxor	xmm1, xmm6
-        movdqu	xmm8, [r15]
+        movdqu	xmm8, OWORD PTR [r15]
         movdqa	xmm9, xmm8
         pshufb	xmm8, OWORD PTR L_aes_gcm_bswap_epi64
         paddd	xmm9, OWORD PTR L_aes_gcm_one
         pxor	xmm8, [rax]
-        movdqu	[r15], xmm9
+        movdqu	OWORD PTR [r15], xmm9
         movdqa	xmm10, xmm1
         pclmulqdq	xmm10, xmm0, 16
         aesenc	xmm8, [rax+16]
@@ -5934,16 +6040,26 @@ L_AES_GCM_decrypt_update_aesni_last_block_start:
         movdqa	xmm9, OWORD PTR [rax+224]
 L_AES_GCM_decrypt_update_aesni_aesenc_gfmul_last:
         aesenclast	xmm8, xmm9
-        movdqu	xmm9, [rcx]
+        movdqu	xmm9, OWORD PTR [rcx]
         pxor	xmm8, xmm9
-        movdqu	[rdx], xmm8
+        movdqu	OWORD PTR [rdx], xmm8
         add	edi, 16
         cmp	edi, r13d
         jl	L_AES_GCM_decrypt_update_aesni_last_block_start
 L_AES_GCM_decrypt_update_aesni_last_block_done:
 L_AES_GCM_decrypt_update_aesni_done_dec:
         movdqa	OWORD PTR [r12], xmm6
-        add	rsp, 168
+        movdqu	xmm6, OWORD PTR [rsp+168]
+        movdqu	xmm7, OWORD PTR [rsp+184]
+        movdqu	xmm8, OWORD PTR [rsp+200]
+        movdqu	xmm9, OWORD PTR [rsp+216]
+        movdqu	xmm10, OWORD PTR [rsp+232]
+        movdqu	xmm11, OWORD PTR [rsp+248]
+        movdqu	xmm12, OWORD PTR [rsp+264]
+        movdqu	xmm13, OWORD PTR [rsp+280]
+        movdqu	xmm14, OWORD PTR [rsp+296]
+        movdqu	xmm15, OWORD PTR [rsp+312]
+        add	rsp, 328
         pop	rsi
         pop	rdi
         pop	r15
@@ -5967,20 +6083,29 @@ AES_GCM_decrypt_final_aesni PROC
         mov	r12, QWORD PTR [rsp+88]
         mov	r14, QWORD PTR [rsp+96]
         mov	rbp, QWORD PTR [rsp+104]
-        sub	rsp, 16
+        sub	rsp, 160
+        movdqu	OWORD PTR [rsp+16], xmm6
+        movdqu	OWORD PTR [rsp+32], xmm7
+        movdqu	OWORD PTR [rsp+48], xmm8
+        movdqu	OWORD PTR [rsp+64], xmm9
+        movdqu	OWORD PTR [rsp+80], xmm10
+        movdqu	OWORD PTR [rsp+96], xmm11
+        movdqu	OWORD PTR [rsp+112], xmm12
+        movdqu	OWORD PTR [rsp+128], xmm13
+        movdqu	OWORD PTR [rsp+144], xmm15
         movdqa	xmm6, OWORD PTR [rax]
         movdqa	xmm5, OWORD PTR [r12]
         movdqa	xmm15, OWORD PTR [r14]
-        movdqa	xmm9, xmm5
         movdqa	xmm8, xmm5
-        psrlq	xmm9, 63
-        psllq	xmm8, 1
-        pslldq	xmm9, 8
-        por	xmm8, xmm9
+        movdqa	xmm7, xmm5
+        psrlq	xmm8, 63
+        psllq	xmm7, 1
+        pslldq	xmm8, 8
+        por	xmm7, xmm8
         pshufd	xmm5, xmm5, 255
         psrad	xmm5, 31
         pand	xmm5, OWORD PTR L_aes_gcm_mod2_128
-        pxor	xmm5, xmm8
+        pxor	xmm5, xmm7
         mov	edx, r10d
         mov	ecx, r11d
         shl	rdx, 3
@@ -5988,46 +6113,46 @@ AES_GCM_decrypt_final_aesni PROC
         pinsrq	xmm0, rdx, 0
         pinsrq	xmm0, rcx, 1
         pxor	xmm6, xmm0
-        pshufd	xmm9, xmm5, 78
-        pshufd	xmm10, xmm6, 78
-        movdqa	xmm11, xmm6
-        movdqa	xmm8, xmm6
-        pclmulqdq	xmm11, xmm5, 17
-        pclmulqdq	xmm8, xmm5, 0
-        pxor	xmm9, xmm5
-        pxor	xmm10, xmm6
-        pclmulqdq	xmm9, xmm10, 0
-        pxor	xmm9, xmm8
-        pxor	xmm9, xmm11
-        movdqa	xmm10, xmm9
-        movdqa	xmm6, xmm11
-        pslldq	xmm10, 8
-        psrldq	xmm9, 8
+        pshufd	xmm8, xmm5, 78
+        pshufd	xmm9, xmm6, 78
+        movdqa	xmm10, xmm6
+        movdqa	xmm7, xmm6
+        pclmulqdq	xmm10, xmm5, 17
+        pclmulqdq	xmm7, xmm5, 0
+        pxor	xmm8, xmm5
+        pxor	xmm9, xmm6
+        pclmulqdq	xmm8, xmm9, 0
+        pxor	xmm8, xmm7
         pxor	xmm8, xmm10
-        pxor	xmm6, xmm9
-        movdqa	xmm12, xmm8
-        movdqa	xmm13, xmm8
-        movdqa	xmm14, xmm8
-        pslld	xmm12, 31
-        pslld	xmm13, 30
-        pslld	xmm14, 25
-        pxor	xmm12, xmm13
-        pxor	xmm12, xmm14
-        movdqa	xmm13, xmm12
-        psrldq	xmm13, 4
-        pslldq	xmm12, 12
-        pxor	xmm8, xmm12
-        movdqa	xmm14, xmm8
-        movdqa	xmm10, xmm8
         movdqa	xmm9, xmm8
-        psrld	xmm14, 1
-        psrld	xmm10, 2
-        psrld	xmm9, 7
-        pxor	xmm14, xmm10
-        pxor	xmm14, xmm9
-        pxor	xmm14, xmm13
-        pxor	xmm14, xmm8
-        pxor	xmm6, xmm14
+        movdqa	xmm6, xmm10
+        pslldq	xmm9, 8
+        psrldq	xmm8, 8
+        pxor	xmm7, xmm9
+        pxor	xmm6, xmm8
+        movdqa	xmm11, xmm7
+        movdqa	xmm12, xmm7
+        movdqa	xmm13, xmm7
+        pslld	xmm11, 31
+        pslld	xmm12, 30
+        pslld	xmm13, 25
+        pxor	xmm11, xmm12
+        pxor	xmm11, xmm13
+        movdqa	xmm12, xmm11
+        psrldq	xmm12, 4
+        pslldq	xmm11, 12
+        pxor	xmm7, xmm11
+        movdqa	xmm13, xmm7
+        movdqa	xmm9, xmm7
+        movdqa	xmm8, xmm7
+        psrld	xmm13, 1
+        psrld	xmm9, 2
+        psrld	xmm8, 7
+        pxor	xmm13, xmm9
+        pxor	xmm13, xmm8
+        pxor	xmm13, xmm12
+        pxor	xmm13, xmm7
+        pxor	xmm6, xmm13
         pshufb	xmm6, OWORD PTR L_aes_gcm_bswap_mask
         movdqu	xmm0, xmm15
         pxor	xmm0, xmm6
@@ -6036,7 +6161,7 @@ AES_GCM_decrypt_final_aesni PROC
         sub	rsp, 16
         xor	rcx, rcx
         xor	r15, r15
-        movdqu	[rsp], xmm0
+        movdqu	OWORD PTR [rsp], xmm0
 L_AES_GCM_decrypt_final_aesni_cmp_tag_loop:
         movzx	r13d, BYTE PTR [rsp+rcx]
         xor	r13b, BYTE PTR [r9+rcx]
@@ -6044,13 +6169,13 @@ L_AES_GCM_decrypt_final_aesni_cmp_tag_loop:
         inc	ecx
         cmp	ecx, r8d
         jne	L_AES_GCM_decrypt_final_aesni_cmp_tag_loop
-        cmp	r15, 0
+        cmp	r15b, 0
         sete	r15b
         add	rsp, 16
         xor	rcx, rcx
         jmp	L_AES_GCM_decrypt_final_aesni_cmp_tag_done
 L_AES_GCM_decrypt_final_aesni_cmp_tag_16:
-        movdqu	xmm1, [r9]
+        movdqu	xmm1, OWORD PTR [r9]
         pcmpeqb	xmm0, xmm1
         pmovmskb	rdx, xmm0
         ; %%edx == 0xFFFF then return 1 else => return 0
@@ -6059,7 +6184,16 @@ L_AES_GCM_decrypt_final_aesni_cmp_tag_16:
         sete	r15b
 L_AES_GCM_decrypt_final_aesni_cmp_tag_done:
         mov	DWORD PTR [rbp], r15d
-        add	rsp, 16
+        movdqu	xmm6, OWORD PTR [rsp+16]
+        movdqu	xmm7, OWORD PTR [rsp+32]
+        movdqu	xmm8, OWORD PTR [rsp+48]
+        movdqu	xmm9, OWORD PTR [rsp+64]
+        movdqu	xmm10, OWORD PTR [rsp+80]
+        movdqu	xmm11, OWORD PTR [rsp+96]
+        movdqu	xmm12, OWORD PTR [rsp+112]
+        movdqu	xmm13, OWORD PTR [rsp+128]
+        movdqu	xmm15, OWORD PTR [rsp+144]
+        add	rsp, 160
         pop	r15
         pop	rbp
         pop	r14
@@ -6144,7 +6278,17 @@ AES_GCM_encrypt_avx1 PROC
         mov	r14d, DWORD PTR [rsp+128]
         mov	r15, QWORD PTR [rsp+136]
         mov	r10d, DWORD PTR [rsp+144]
-        sub	rsp, 160
+        sub	rsp, 320
+        vmovdqu	OWORD PTR [rsp+160], xmm6
+        vmovdqu	OWORD PTR [rsp+176], xmm7
+        vmovdqu	OWORD PTR [rsp+192], xmm8
+        vmovdqu	OWORD PTR [rsp+208], xmm9
+        vmovdqu	OWORD PTR [rsp+224], xmm10
+        vmovdqu	OWORD PTR [rsp+240], xmm11
+        vmovdqu	OWORD PTR [rsp+256], xmm12
+        vmovdqu	OWORD PTR [rsp+272], xmm13
+        vmovdqu	OWORD PTR [rsp+288], xmm14
+        vmovdqu	OWORD PTR [rsp+304], xmm15
         vpxor	xmm4, xmm4, xmm4
         vpxor	xmm6, xmm6, xmm6
         mov	edx, ebx
@@ -7692,7 +7836,17 @@ L_AES_GCM_encrypt_avx1_store_tag_16:
         vmovdqu	OWORD PTR [r8], xmm0
 L_AES_GCM_encrypt_avx1_store_tag_done:
         vzeroupper
-        add	rsp, 160
+        vmovdqu	xmm6, OWORD PTR [rsp+160]
+        vmovdqu	xmm7, OWORD PTR [rsp+176]
+        vmovdqu	xmm8, OWORD PTR [rsp+192]
+        vmovdqu	xmm9, OWORD PTR [rsp+208]
+        vmovdqu	xmm10, OWORD PTR [rsp+224]
+        vmovdqu	xmm11, OWORD PTR [rsp+240]
+        vmovdqu	xmm12, OWORD PTR [rsp+256]
+        vmovdqu	xmm13, OWORD PTR [rsp+272]
+        vmovdqu	xmm14, OWORD PTR [rsp+288]
+        vmovdqu	xmm15, OWORD PTR [rsp+304]
+        add	rsp, 320
         pop	r15
         pop	r14
         pop	rbx
@@ -7725,7 +7879,17 @@ AES_GCM_decrypt_avx1 PROC
         mov	r15, QWORD PTR [rsp+144]
         mov	r10d, DWORD PTR [rsp+152]
         mov	rbp, QWORD PTR [rsp+160]
-        sub	rsp, 168
+        sub	rsp, 328
+        vmovdqu	OWORD PTR [rsp+168], xmm6
+        vmovdqu	OWORD PTR [rsp+184], xmm7
+        vmovdqu	OWORD PTR [rsp+200], xmm8
+        vmovdqu	OWORD PTR [rsp+216], xmm9
+        vmovdqu	OWORD PTR [rsp+232], xmm10
+        vmovdqu	OWORD PTR [rsp+248], xmm11
+        vmovdqu	OWORD PTR [rsp+264], xmm12
+        vmovdqu	OWORD PTR [rsp+280], xmm13
+        vmovdqu	OWORD PTR [rsp+296], xmm14
+        vmovdqu	OWORD PTR [rsp+312], xmm15
         vpxor	xmm4, xmm4, xmm4
         vpxor	xmm6, xmm6, xmm6
         cmp	ebx, 12
@@ -8848,7 +9012,7 @@ L_AES_GCM_decrypt_avx1_cmp_tag_loop:
         inc	ecx
         cmp	ecx, r14d
         jne	L_AES_GCM_decrypt_avx1_cmp_tag_loop
-        cmp	rbx, 0
+        cmp	bl, 0
         sete	bl
         add	rsp, 16
         xor	rcx, rcx
@@ -8864,7 +9028,17 @@ L_AES_GCM_decrypt_avx1_cmp_tag_16:
 L_AES_GCM_decrypt_avx1_cmp_tag_done:
         mov	DWORD PTR [rbp], ebx
         vzeroupper
-        add	rsp, 168
+        vmovdqu	xmm6, OWORD PTR [rsp+168]
+        vmovdqu	xmm7, OWORD PTR [rsp+184]
+        vmovdqu	xmm8, OWORD PTR [rsp+200]
+        vmovdqu	xmm9, OWORD PTR [rsp+216]
+        vmovdqu	xmm10, OWORD PTR [rsp+232]
+        vmovdqu	xmm11, OWORD PTR [rsp+248]
+        vmovdqu	xmm12, OWORD PTR [rsp+264]
+        vmovdqu	xmm13, OWORD PTR [rsp+280]
+        vmovdqu	xmm14, OWORD PTR [rsp+296]
+        vmovdqu	xmm15, OWORD PTR [rsp+312]
+        add	rsp, 328
         pop	rbp
         pop	r15
         pop	r14
@@ -8889,7 +9063,11 @@ AES_GCM_init_avx1 PROC
         mov	rax, QWORD PTR [rsp+72]
         mov	r8, QWORD PTR [rsp+80]
         mov	r9, QWORD PTR [rsp+88]
-        sub	rsp, 16
+        sub	rsp, 80
+        vmovdqu	OWORD PTR [rsp+16], xmm6
+        vmovdqu	OWORD PTR [rsp+32], xmm7
+        vmovdqu	OWORD PTR [rsp+48], xmm8
+        vmovdqu	OWORD PTR [rsp+64], xmm15
         vpxor	xmm4, xmm4, xmm4
         mov	edx, r11d
         cmp	edx, 12
@@ -8903,53 +9081,53 @@ AES_GCM_init_avx1 PROC
         ; H = Encrypt X(=0) and T = Encrypt counter
         vmovdqa	xmm5, OWORD PTR [rdi]
         vpxor	xmm1, xmm4, xmm5
-        vmovdqa	xmm7, OWORD PTR [rdi+16]
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
-        vmovdqa	xmm7, OWORD PTR [rdi+32]
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
-        vmovdqa	xmm7, OWORD PTR [rdi+48]
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
-        vmovdqa	xmm7, OWORD PTR [rdi+64]
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
-        vmovdqa	xmm7, OWORD PTR [rdi+80]
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
-        vmovdqa	xmm7, OWORD PTR [rdi+96]
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
-        vmovdqa	xmm7, OWORD PTR [rdi+112]
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
-        vmovdqa	xmm7, OWORD PTR [rdi+128]
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
-        vmovdqa	xmm7, OWORD PTR [rdi+144]
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
+        vmovdqa	xmm6, OWORD PTR [rdi+16]
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
+        vmovdqa	xmm6, OWORD PTR [rdi+32]
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
+        vmovdqa	xmm6, OWORD PTR [rdi+48]
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
+        vmovdqa	xmm6, OWORD PTR [rdi+64]
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
+        vmovdqa	xmm6, OWORD PTR [rdi+80]
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
+        vmovdqa	xmm6, OWORD PTR [rdi+96]
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
+        vmovdqa	xmm6, OWORD PTR [rdi+112]
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
+        vmovdqa	xmm6, OWORD PTR [rdi+128]
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
+        vmovdqa	xmm6, OWORD PTR [rdi+144]
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
         cmp	esi, 11
-        vmovdqa	xmm7, OWORD PTR [rdi+160]
+        vmovdqa	xmm6, OWORD PTR [rdi+160]
         jl	L_AES_GCM_init_avx1_calc_iv_12_last
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
-        vmovdqa	xmm7, OWORD PTR [rdi+176]
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
+        vmovdqa	xmm6, OWORD PTR [rdi+176]
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
         cmp	esi, 13
-        vmovdqa	xmm7, OWORD PTR [rdi+192]
+        vmovdqa	xmm6, OWORD PTR [rdi+192]
         jl	L_AES_GCM_init_avx1_calc_iv_12_last
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
-        vmovdqa	xmm7, OWORD PTR [rdi+208]
-        vaesenc	xmm5, xmm5, xmm7
-        vaesenc	xmm1, xmm1, xmm7
-        vmovdqa	xmm7, OWORD PTR [rdi+224]
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
+        vmovdqa	xmm6, OWORD PTR [rdi+208]
+        vaesenc	xmm5, xmm5, xmm6
+        vaesenc	xmm1, xmm1, xmm6
+        vmovdqa	xmm6, OWORD PTR [rdi+224]
 L_AES_GCM_init_avx1_calc_iv_12_last:
-        vaesenclast	xmm5, xmm5, xmm7
-        vaesenclast	xmm1, xmm1, xmm7
+        vaesenclast	xmm5, xmm5, xmm6
+        vaesenclast	xmm1, xmm1, xmm6
         vpshufb	xmm5, xmm5, OWORD PTR L_avx1_aes_gcm_bswap_mask
         vmovdqu	xmm15, xmm1
         jmp	L_AES_GCM_init_avx1_iv_done
@@ -8967,18 +9145,18 @@ L_AES_GCM_init_avx1_iv_not_12:
         vaesenc	xmm5, xmm5, [rdi+128]
         vaesenc	xmm5, xmm5, [rdi+144]
         cmp	esi, 11
-        vmovdqa	xmm9, OWORD PTR [rdi+160]
+        vmovdqa	xmm8, OWORD PTR [rdi+160]
         jl	L_AES_GCM_init_avx1_calc_iv_1_aesenc_avx_last
-        vaesenc	xmm5, xmm5, xmm9
+        vaesenc	xmm5, xmm5, xmm8
         vaesenc	xmm5, xmm5, [rdi+176]
         cmp	esi, 13
-        vmovdqa	xmm9, OWORD PTR [rdi+192]
+        vmovdqa	xmm8, OWORD PTR [rdi+192]
         jl	L_AES_GCM_init_avx1_calc_iv_1_aesenc_avx_last
-        vaesenc	xmm5, xmm5, xmm9
+        vaesenc	xmm5, xmm5, xmm8
         vaesenc	xmm5, xmm5, [rdi+208]
-        vmovdqa	xmm9, OWORD PTR [rdi+224]
+        vmovdqa	xmm8, OWORD PTR [rdi+224]
 L_AES_GCM_init_avx1_calc_iv_1_aesenc_avx_last:
-        vaesenclast	xmm5, xmm5, xmm9
+        vaesenclast	xmm5, xmm5, xmm8
         vpshufb	xmm5, xmm5, OWORD PTR L_avx1_aes_gcm_bswap_mask
         ; Calc counter
         ; Initialization vector
@@ -8989,9 +9167,9 @@ L_AES_GCM_init_avx1_calc_iv_1_aesenc_avx_last:
         jl	L_AES_GCM_init_avx1_calc_iv_lt16
         and	edx, 4294967280
 L_AES_GCM_init_avx1_calc_iv_16_loop:
-        vmovdqu	xmm8, OWORD PTR [r10+rcx]
-        vpshufb	xmm8, xmm8, OWORD PTR L_avx1_aes_gcm_bswap_mask
-        vpxor	xmm4, xmm4, xmm8
+        vmovdqu	xmm7, OWORD PTR [r10+rcx]
+        vpshufb	xmm7, xmm7, OWORD PTR L_avx1_aes_gcm_bswap_mask
+        vpxor	xmm4, xmm4, xmm7
         ; ghash_gfmul_avx
         vpshufd	xmm1, xmm4, 78
         vpshufd	xmm2, xmm5, 78
@@ -9002,38 +9180,38 @@ L_AES_GCM_init_avx1_calc_iv_16_loop:
         vpclmulqdq	xmm1, xmm1, xmm2, 0
         vpxor	xmm1, xmm1, xmm0
         vpxor	xmm1, xmm1, xmm3
-        vmovdqa	xmm7, xmm0
+        vmovdqa	xmm6, xmm0
         vmovdqa	xmm4, xmm3
         vpslldq	xmm2, xmm1, 8
         vpsrldq	xmm1, xmm1, 8
-        vpxor	xmm7, xmm7, xmm2
+        vpxor	xmm6, xmm6, xmm2
         vpxor	xmm4, xmm4, xmm1
-        vpsrld	xmm0, xmm7, 31
+        vpsrld	xmm0, xmm6, 31
         vpsrld	xmm1, xmm4, 31
-        vpslld	xmm7, xmm7, 1
+        vpslld	xmm6, xmm6, 1
         vpslld	xmm4, xmm4, 1
         vpsrldq	xmm2, xmm0, 12
         vpslldq	xmm0, xmm0, 4
         vpslldq	xmm1, xmm1, 4
         vpor	xmm4, xmm4, xmm2
-        vpor	xmm7, xmm7, xmm0
+        vpor	xmm6, xmm6, xmm0
         vpor	xmm4, xmm4, xmm1
-        vpslld	xmm0, xmm7, 31
-        vpslld	xmm1, xmm7, 30
-        vpslld	xmm2, xmm7, 25
+        vpslld	xmm0, xmm6, 31
+        vpslld	xmm1, xmm6, 30
+        vpslld	xmm2, xmm6, 25
         vpxor	xmm0, xmm0, xmm1
         vpxor	xmm0, xmm0, xmm2
         vmovdqa	xmm1, xmm0
         vpsrldq	xmm1, xmm1, 4
         vpslldq	xmm0, xmm0, 12
-        vpxor	xmm7, xmm7, xmm0
-        vpsrld	xmm2, xmm7, 1
-        vpsrld	xmm3, xmm7, 2
-        vpsrld	xmm0, xmm7, 7
+        vpxor	xmm6, xmm6, xmm0
+        vpsrld	xmm2, xmm6, 1
+        vpsrld	xmm3, xmm6, 2
+        vpsrld	xmm0, xmm6, 7
         vpxor	xmm2, xmm2, xmm3
         vpxor	xmm2, xmm2, xmm0
         vpxor	xmm2, xmm2, xmm1
-        vpxor	xmm2, xmm2, xmm7
+        vpxor	xmm2, xmm2, xmm6
         vpxor	xmm4, xmm4, xmm2
         add	ecx, 16
         cmp	ecx, edx
@@ -9043,9 +9221,9 @@ L_AES_GCM_init_avx1_calc_iv_16_loop:
         je	L_AES_GCM_init_avx1_calc_iv_done
 L_AES_GCM_init_avx1_calc_iv_lt16:
         sub	rsp, 16
-        vpxor	xmm8, xmm8, xmm8
+        vpxor	xmm7, xmm7, xmm7
         xor	r13d, r13d
-        vmovdqu	OWORD PTR [rsp], xmm8
+        vmovdqu	OWORD PTR [rsp], xmm7
 L_AES_GCM_init_avx1_calc_iv_loop:
         movzx	r12d, BYTE PTR [r10+rcx]
         mov	BYTE PTR [rsp+r13], r12b
@@ -9053,10 +9231,10 @@ L_AES_GCM_init_avx1_calc_iv_loop:
         inc	r13d
         cmp	ecx, edx
         jl	L_AES_GCM_init_avx1_calc_iv_loop
-        vmovdqu	xmm8, OWORD PTR [rsp]
+        vmovdqu	xmm7, OWORD PTR [rsp]
         add	rsp, 16
-        vpshufb	xmm8, xmm8, OWORD PTR L_avx1_aes_gcm_bswap_mask
-        vpxor	xmm4, xmm4, xmm8
+        vpshufb	xmm7, xmm7, OWORD PTR L_avx1_aes_gcm_bswap_mask
+        vpxor	xmm4, xmm4, xmm7
         ; ghash_gfmul_avx
         vpshufd	xmm1, xmm4, 78
         vpshufd	xmm2, xmm5, 78
@@ -9067,38 +9245,38 @@ L_AES_GCM_init_avx1_calc_iv_loop:
         vpclmulqdq	xmm1, xmm1, xmm2, 0
         vpxor	xmm1, xmm1, xmm0
         vpxor	xmm1, xmm1, xmm3
-        vmovdqa	xmm7, xmm0
+        vmovdqa	xmm6, xmm0
         vmovdqa	xmm4, xmm3
         vpslldq	xmm2, xmm1, 8
         vpsrldq	xmm1, xmm1, 8
-        vpxor	xmm7, xmm7, xmm2
+        vpxor	xmm6, xmm6, xmm2
         vpxor	xmm4, xmm4, xmm1
-        vpsrld	xmm0, xmm7, 31
+        vpsrld	xmm0, xmm6, 31
         vpsrld	xmm1, xmm4, 31
-        vpslld	xmm7, xmm7, 1
+        vpslld	xmm6, xmm6, 1
         vpslld	xmm4, xmm4, 1
         vpsrldq	xmm2, xmm0, 12
         vpslldq	xmm0, xmm0, 4
         vpslldq	xmm1, xmm1, 4
         vpor	xmm4, xmm4, xmm2
-        vpor	xmm7, xmm7, xmm0
+        vpor	xmm6, xmm6, xmm0
         vpor	xmm4, xmm4, xmm1
-        vpslld	xmm0, xmm7, 31
-        vpslld	xmm1, xmm7, 30
-        vpslld	xmm2, xmm7, 25
+        vpslld	xmm0, xmm6, 31
+        vpslld	xmm1, xmm6, 30
+        vpslld	xmm2, xmm6, 25
         vpxor	xmm0, xmm0, xmm1
         vpxor	xmm0, xmm0, xmm2
         vmovdqa	xmm1, xmm0
         vpsrldq	xmm1, xmm1, 4
         vpslldq	xmm0, xmm0, 12
-        vpxor	xmm7, xmm7, xmm0
-        vpsrld	xmm2, xmm7, 1
-        vpsrld	xmm3, xmm7, 2
-        vpsrld	xmm0, xmm7, 7
+        vpxor	xmm6, xmm6, xmm0
+        vpsrld	xmm2, xmm6, 1
+        vpsrld	xmm3, xmm6, 2
+        vpsrld	xmm0, xmm6, 7
         vpxor	xmm2, xmm2, xmm3
         vpxor	xmm2, xmm2, xmm0
         vpxor	xmm2, xmm2, xmm1
-        vpxor	xmm2, xmm2, xmm7
+        vpxor	xmm2, xmm2, xmm6
         vpxor	xmm4, xmm4, xmm2
 L_AES_GCM_init_avx1_calc_iv_done:
         ; T = Encrypt counter
@@ -9116,66 +9294,66 @@ L_AES_GCM_init_avx1_calc_iv_done:
         vpclmulqdq	xmm1, xmm1, xmm2, 0
         vpxor	xmm1, xmm1, xmm0
         vpxor	xmm1, xmm1, xmm3
-        vmovdqa	xmm7, xmm0
+        vmovdqa	xmm6, xmm0
         vmovdqa	xmm4, xmm3
         vpslldq	xmm2, xmm1, 8
         vpsrldq	xmm1, xmm1, 8
-        vpxor	xmm7, xmm7, xmm2
+        vpxor	xmm6, xmm6, xmm2
         vpxor	xmm4, xmm4, xmm1
-        vpsrld	xmm0, xmm7, 31
+        vpsrld	xmm0, xmm6, 31
         vpsrld	xmm1, xmm4, 31
-        vpslld	xmm7, xmm7, 1
+        vpslld	xmm6, xmm6, 1
         vpslld	xmm4, xmm4, 1
         vpsrldq	xmm2, xmm0, 12
         vpslldq	xmm0, xmm0, 4
         vpslldq	xmm1, xmm1, 4
         vpor	xmm4, xmm4, xmm2
-        vpor	xmm7, xmm7, xmm0
+        vpor	xmm6, xmm6, xmm0
         vpor	xmm4, xmm4, xmm1
-        vpslld	xmm0, xmm7, 31
-        vpslld	xmm1, xmm7, 30
-        vpslld	xmm2, xmm7, 25
+        vpslld	xmm0, xmm6, 31
+        vpslld	xmm1, xmm6, 30
+        vpslld	xmm2, xmm6, 25
         vpxor	xmm0, xmm0, xmm1
         vpxor	xmm0, xmm0, xmm2
         vmovdqa	xmm1, xmm0
         vpsrldq	xmm1, xmm1, 4
         vpslldq	xmm0, xmm0, 12
-        vpxor	xmm7, xmm7, xmm0
-        vpsrld	xmm2, xmm7, 1
-        vpsrld	xmm3, xmm7, 2
-        vpsrld	xmm0, xmm7, 7
+        vpxor	xmm6, xmm6, xmm0
+        vpsrld	xmm2, xmm6, 1
+        vpsrld	xmm3, xmm6, 2
+        vpsrld	xmm0, xmm6, 7
         vpxor	xmm2, xmm2, xmm3
         vpxor	xmm2, xmm2, xmm0
         vpxor	xmm2, xmm2, xmm1
-        vpxor	xmm2, xmm2, xmm7
+        vpxor	xmm2, xmm2, xmm6
         vpxor	xmm4, xmm4, xmm2
         vpshufb	xmm4, xmm4, OWORD PTR L_avx1_aes_gcm_bswap_mask
         ;   Encrypt counter
-        vmovdqa	xmm8, OWORD PTR [rdi]
-        vpxor	xmm8, xmm8, xmm4
-        vaesenc	xmm8, xmm8, [rdi+16]
-        vaesenc	xmm8, xmm8, [rdi+32]
-        vaesenc	xmm8, xmm8, [rdi+48]
-        vaesenc	xmm8, xmm8, [rdi+64]
-        vaesenc	xmm8, xmm8, [rdi+80]
-        vaesenc	xmm8, xmm8, [rdi+96]
-        vaesenc	xmm8, xmm8, [rdi+112]
-        vaesenc	xmm8, xmm8, [rdi+128]
-        vaesenc	xmm8, xmm8, [rdi+144]
+        vmovdqa	xmm7, OWORD PTR [rdi]
+        vpxor	xmm7, xmm7, xmm4
+        vaesenc	xmm7, xmm7, [rdi+16]
+        vaesenc	xmm7, xmm7, [rdi+32]
+        vaesenc	xmm7, xmm7, [rdi+48]
+        vaesenc	xmm7, xmm7, [rdi+64]
+        vaesenc	xmm7, xmm7, [rdi+80]
+        vaesenc	xmm7, xmm7, [rdi+96]
+        vaesenc	xmm7, xmm7, [rdi+112]
+        vaesenc	xmm7, xmm7, [rdi+128]
+        vaesenc	xmm7, xmm7, [rdi+144]
         cmp	esi, 11
-        vmovdqa	xmm9, OWORD PTR [rdi+160]
+        vmovdqa	xmm8, OWORD PTR [rdi+160]
         jl	L_AES_GCM_init_avx1_calc_iv_2_aesenc_avx_last
-        vaesenc	xmm8, xmm8, xmm9
-        vaesenc	xmm8, xmm8, [rdi+176]
+        vaesenc	xmm7, xmm7, xmm8
+        vaesenc	xmm7, xmm7, [rdi+176]
         cmp	esi, 13
-        vmovdqa	xmm9, OWORD PTR [rdi+192]
+        vmovdqa	xmm8, OWORD PTR [rdi+192]
         jl	L_AES_GCM_init_avx1_calc_iv_2_aesenc_avx_last
-        vaesenc	xmm8, xmm8, xmm9
-        vaesenc	xmm8, xmm8, [rdi+208]
-        vmovdqa	xmm9, OWORD PTR [rdi+224]
+        vaesenc	xmm7, xmm7, xmm8
+        vaesenc	xmm7, xmm7, [rdi+208]
+        vmovdqa	xmm8, OWORD PTR [rdi+224]
 L_AES_GCM_init_avx1_calc_iv_2_aesenc_avx_last:
-        vaesenclast	xmm8, xmm8, xmm9
-        vmovdqu	xmm15, xmm8
+        vaesenclast	xmm7, xmm7, xmm8
+        vmovdqu	xmm15, xmm7
 L_AES_GCM_init_avx1_iv_done:
         vmovdqa	OWORD PTR [r9], xmm15
         vpshufb	xmm4, xmm4, OWORD PTR L_avx1_aes_gcm_bswap_epi64
@@ -9183,7 +9361,11 @@ L_AES_GCM_init_avx1_iv_done:
         vmovdqa	OWORD PTR [rax], xmm5
         vmovdqa	OWORD PTR [r8], xmm4
         vzeroupper
-        add	rsp, 16
+        vmovdqu	xmm6, OWORD PTR [rsp+16]
+        vmovdqu	xmm7, OWORD PTR [rsp+32]
+        vmovdqu	xmm8, OWORD PTR [rsp+48]
+        vmovdqu	xmm15, OWORD PTR [rsp+64]
+        add	rsp, 80
         pop	r13
         pop	r12
         pop	rsi
@@ -9194,13 +9376,16 @@ _text ENDS
 _text SEGMENT READONLY PARA
 AES_GCM_aad_update_avx1 PROC
         mov	rax, rcx
+        sub	rsp, 32
+        vmovdqu	OWORD PTR [rsp], xmm6
+        vmovdqu	OWORD PTR [rsp+16], xmm7
         vmovdqa	xmm5, OWORD PTR [r8]
         vmovdqa	xmm6, OWORD PTR [r9]
         xor	ecx, ecx
 L_AES_GCM_aad_update_avx1_16_loop:
-        vmovdqu	xmm8, OWORD PTR [rax+rcx]
-        vpshufb	xmm8, xmm8, OWORD PTR L_avx1_aes_gcm_bswap_mask
-        vpxor	xmm5, xmm5, xmm8
+        vmovdqu	xmm7, OWORD PTR [rax+rcx]
+        vpshufb	xmm7, xmm7, OWORD PTR L_avx1_aes_gcm_bswap_mask
+        vpxor	xmm5, xmm5, xmm7
         ; ghash_gfmul_avx
         vpshufd	xmm1, xmm5, 78
         vpshufd	xmm2, xmm6, 78
@@ -9249,6 +9434,9 @@ L_AES_GCM_aad_update_avx1_16_loop:
         jl	L_AES_GCM_aad_update_avx1_16_loop
         vmovdqa	OWORD PTR [r8], xmm5
         vzeroupper
+        vmovdqu	xmm6, OWORD PTR [rsp]
+        vmovdqu	xmm7, OWORD PTR [rsp+16]
+        add	rsp, 32
         ret
 AES_GCM_aad_update_avx1 ENDP
 _text ENDS
@@ -9257,48 +9445,51 @@ AES_GCM_encrypt_block_avx1 PROC
         mov	r10, r8
         mov	r11, r9
         mov	rax, QWORD PTR [rsp+40]
-        vmovdqu	xmm9, OWORD PTR [rax]
-        vpshufb	xmm8, xmm9, OWORD PTR L_avx1_aes_gcm_bswap_epi64
-        vpaddd	xmm9, xmm9, OWORD PTR L_avx1_aes_gcm_one
-        vmovdqu	OWORD PTR [rax], xmm9
-        vpxor	xmm8, xmm8, [rcx]
-        vaesenc	xmm8, xmm8, [rcx+16]
-        vaesenc	xmm8, xmm8, [rcx+32]
-        vaesenc	xmm8, xmm8, [rcx+48]
-        vaesenc	xmm8, xmm8, [rcx+64]
-        vaesenc	xmm8, xmm8, [rcx+80]
-        vaesenc	xmm8, xmm8, [rcx+96]
-        vaesenc	xmm8, xmm8, [rcx+112]
-        vaesenc	xmm8, xmm8, [rcx+128]
-        vaesenc	xmm8, xmm8, [rcx+144]
+        vmovdqu	xmm1, OWORD PTR [rax]
+        vpshufb	xmm0, xmm1, OWORD PTR L_avx1_aes_gcm_bswap_epi64
+        vpaddd	xmm1, xmm1, OWORD PTR L_avx1_aes_gcm_one
+        vmovdqu	OWORD PTR [rax], xmm1
+        vpxor	xmm0, xmm0, [rcx]
+        vaesenc	xmm0, xmm0, [rcx+16]
+        vaesenc	xmm0, xmm0, [rcx+32]
+        vaesenc	xmm0, xmm0, [rcx+48]
+        vaesenc	xmm0, xmm0, [rcx+64]
+        vaesenc	xmm0, xmm0, [rcx+80]
+        vaesenc	xmm0, xmm0, [rcx+96]
+        vaesenc	xmm0, xmm0, [rcx+112]
+        vaesenc	xmm0, xmm0, [rcx+128]
+        vaesenc	xmm0, xmm0, [rcx+144]
         cmp	edx, 11
-        vmovdqa	xmm9, OWORD PTR [rcx+160]
+        vmovdqa	xmm1, OWORD PTR [rcx+160]
         jl	L_AES_GCM_encrypt_block_avx1_aesenc_block_last
-        vaesenc	xmm8, xmm8, xmm9
-        vaesenc	xmm8, xmm8, [rcx+176]
+        vaesenc	xmm0, xmm0, xmm1
+        vaesenc	xmm0, xmm0, [rcx+176]
         cmp	edx, 13
-        vmovdqa	xmm9, OWORD PTR [rcx+192]
+        vmovdqa	xmm1, OWORD PTR [rcx+192]
         jl	L_AES_GCM_encrypt_block_avx1_aesenc_block_last
-        vaesenc	xmm8, xmm8, xmm9
-        vaesenc	xmm8, xmm8, [rcx+208]
-        vmovdqa	xmm9, OWORD PTR [rcx+224]
+        vaesenc	xmm0, xmm0, xmm1
+        vaesenc	xmm0, xmm0, [rcx+208]
+        vmovdqa	xmm1, OWORD PTR [rcx+224]
 L_AES_GCM_encrypt_block_avx1_aesenc_block_last:
-        vaesenclast	xmm8, xmm8, xmm9
-        vmovdqu	xmm9, OWORD PTR [r11]
-        vpxor	xmm8, xmm8, xmm9
-        vmovdqu	OWORD PTR [r10], xmm8
-        vpshufb	xmm8, xmm8, OWORD PTR L_avx1_aes_gcm_bswap_mask
+        vaesenclast	xmm0, xmm0, xmm1
+        vmovdqu	xmm1, OWORD PTR [r11]
+        vpxor	xmm0, xmm0, xmm1
+        vmovdqu	OWORD PTR [r10], xmm0
+        vpshufb	xmm0, xmm0, OWORD PTR L_avx1_aes_gcm_bswap_mask
         vzeroupper
         ret
 AES_GCM_encrypt_block_avx1 ENDP
 _text ENDS
 _text SEGMENT READONLY PARA
 AES_GCM_ghash_block_avx1 PROC
+        sub	rsp, 32
+        vmovdqu	OWORD PTR [rsp], xmm6
+        vmovdqu	OWORD PTR [rsp+16], xmm7
         vmovdqa	xmm4, OWORD PTR [rdx]
         vmovdqa	xmm5, OWORD PTR [r8]
-        vmovdqu	xmm8, OWORD PTR [rcx]
-        vpshufb	xmm8, xmm8, OWORD PTR L_avx1_aes_gcm_bswap_mask
-        vpxor	xmm4, xmm4, xmm8
+        vmovdqu	xmm7, OWORD PTR [rcx]
+        vpshufb	xmm7, xmm7, OWORD PTR L_avx1_aes_gcm_bswap_mask
+        vpxor	xmm4, xmm4, xmm7
         ; ghash_gfmul_avx
         vpshufd	xmm1, xmm4, 78
         vpshufd	xmm2, xmm5, 78
@@ -9344,6 +9535,9 @@ AES_GCM_ghash_block_avx1 PROC
         vpxor	xmm4, xmm4, xmm2
         vmovdqa	OWORD PTR [rdx], xmm4
         vzeroupper
+        vmovdqu	xmm6, OWORD PTR [rsp]
+        vmovdqu	xmm7, OWORD PTR [rsp+16]
+        add	rsp, 32
         ret
 AES_GCM_ghash_block_avx1 ENDP
 _text ENDS
@@ -9362,7 +9556,17 @@ AES_GCM_encrypt_update_avx1 PROC
         mov	r12, QWORD PTR [rsp+88]
         mov	r14, QWORD PTR [rsp+96]
         mov	r15, QWORD PTR [rsp+104]
-        sub	rsp, 160
+        sub	rsp, 320
+        vmovdqu	OWORD PTR [rsp+160], xmm6
+        vmovdqu	OWORD PTR [rsp+176], xmm7
+        vmovdqu	OWORD PTR [rsp+192], xmm8
+        vmovdqu	OWORD PTR [rsp+208], xmm9
+        vmovdqu	OWORD PTR [rsp+224], xmm10
+        vmovdqu	OWORD PTR [rsp+240], xmm11
+        vmovdqu	OWORD PTR [rsp+256], xmm12
+        vmovdqu	OWORD PTR [rsp+272], xmm13
+        vmovdqu	OWORD PTR [rsp+288], xmm14
+        vmovdqu	OWORD PTR [rsp+304], xmm15
         vmovdqa	xmm6, OWORD PTR [r12]
         vmovdqa	xmm5, OWORD PTR [r14]
         vpsrlq	xmm9, xmm5, 63
@@ -10360,7 +10564,17 @@ L_AES_GCM_encrypt_update_avx1_last_block_done:
 L_AES_GCM_encrypt_update_avx1_done_enc:
         vmovdqa	OWORD PTR [r12], xmm6
         vzeroupper
-        add	rsp, 160
+        vmovdqu	xmm6, OWORD PTR [rsp+160]
+        vmovdqu	xmm7, OWORD PTR [rsp+176]
+        vmovdqu	xmm8, OWORD PTR [rsp+192]
+        vmovdqu	xmm9, OWORD PTR [rsp+208]
+        vmovdqu	xmm10, OWORD PTR [rsp+224]
+        vmovdqu	xmm11, OWORD PTR [rsp+240]
+        vmovdqu	xmm12, OWORD PTR [rsp+256]
+        vmovdqu	xmm13, OWORD PTR [rsp+272]
+        vmovdqu	xmm14, OWORD PTR [rsp+288]
+        vmovdqu	xmm15, OWORD PTR [rsp+304]
+        add	rsp, 320
         pop	rdi
         pop	r15
         pop	r14
@@ -10380,18 +10594,26 @@ AES_GCM_encrypt_final_avx1 PROC
         mov	r11d, DWORD PTR [rsp+64]
         mov	r12, QWORD PTR [rsp+72]
         mov	r14, QWORD PTR [rsp+80]
-        sub	rsp, 16
+        sub	rsp, 144
+        vmovdqu	OWORD PTR [rsp+16], xmm6
+        vmovdqu	OWORD PTR [rsp+32], xmm7
+        vmovdqu	OWORD PTR [rsp+48], xmm8
+        vmovdqu	OWORD PTR [rsp+64], xmm9
+        vmovdqu	OWORD PTR [rsp+80], xmm10
+        vmovdqu	OWORD PTR [rsp+96], xmm11
+        vmovdqu	OWORD PTR [rsp+112], xmm12
+        vmovdqu	OWORD PTR [rsp+128], xmm13
         vmovdqa	xmm4, OWORD PTR [rax]
         vmovdqa	xmm5, OWORD PTR [r12]
         vmovdqa	xmm6, OWORD PTR [r14]
-        vpsrlq	xmm9, xmm5, 63
-        vpsllq	xmm8, xmm5, 1
-        vpslldq	xmm9, xmm9, 8
-        vpor	xmm8, xmm8, xmm9
+        vpsrlq	xmm8, xmm5, 63
+        vpsllq	xmm7, xmm5, 1
+        vpslldq	xmm8, xmm8, 8
+        vpor	xmm7, xmm7, xmm8
         vpshufd	xmm5, xmm5, 255
         vpsrad	xmm5, xmm5, 31
         vpand	xmm5, xmm5, OWORD PTR L_avx1_aes_gcm_mod2_128
-        vpxor	xmm5, xmm5, xmm8
+        vpxor	xmm5, xmm5, xmm7
         mov	edx, r10d
         mov	ecx, r11d
         shl	rdx, 3
@@ -10401,35 +10623,35 @@ AES_GCM_encrypt_final_avx1 PROC
         vpunpcklqdq	xmm0, xmm0, xmm1
         vpxor	xmm4, xmm4, xmm0
         ; ghash_gfmul_red_avx
-        vpshufd	xmm9, xmm5, 78
-        vpshufd	xmm10, xmm4, 78
-        vpclmulqdq	xmm11, xmm4, xmm5, 17
-        vpclmulqdq	xmm8, xmm4, xmm5, 0
-        vpxor	xmm9, xmm9, xmm5
-        vpxor	xmm10, xmm10, xmm4
-        vpclmulqdq	xmm9, xmm9, xmm10, 0
-        vpxor	xmm9, xmm9, xmm8
-        vpxor	xmm9, xmm9, xmm11
-        vpslldq	xmm10, xmm9, 8
-        vpsrldq	xmm9, xmm9, 8
+        vpshufd	xmm8, xmm5, 78
+        vpshufd	xmm9, xmm4, 78
+        vpclmulqdq	xmm10, xmm4, xmm5, 17
+        vpclmulqdq	xmm7, xmm4, xmm5, 0
+        vpxor	xmm8, xmm8, xmm5
+        vpxor	xmm9, xmm9, xmm4
+        vpclmulqdq	xmm8, xmm8, xmm9, 0
+        vpxor	xmm8, xmm8, xmm7
         vpxor	xmm8, xmm8, xmm10
-        vpxor	xmm4, xmm11, xmm9
-        vpslld	xmm12, xmm8, 31
-        vpslld	xmm13, xmm8, 30
-        vpslld	xmm14, xmm8, 25
-        vpxor	xmm12, xmm12, xmm13
-        vpxor	xmm12, xmm12, xmm14
-        vpsrldq	xmm13, xmm12, 4
-        vpslldq	xmm12, xmm12, 12
-        vpxor	xmm8, xmm8, xmm12
-        vpsrld	xmm14, xmm8, 1
-        vpsrld	xmm10, xmm8, 2
-        vpsrld	xmm9, xmm8, 7
-        vpxor	xmm14, xmm14, xmm10
-        vpxor	xmm14, xmm14, xmm9
-        vpxor	xmm14, xmm14, xmm13
-        vpxor	xmm14, xmm14, xmm8
-        vpxor	xmm4, xmm4, xmm14
+        vpslldq	xmm9, xmm8, 8
+        vpsrldq	xmm8, xmm8, 8
+        vpxor	xmm7, xmm7, xmm9
+        vpxor	xmm4, xmm10, xmm8
+        vpslld	xmm11, xmm7, 31
+        vpslld	xmm12, xmm7, 30
+        vpslld	xmm13, xmm7, 25
+        vpxor	xmm11, xmm11, xmm12
+        vpxor	xmm11, xmm11, xmm13
+        vpsrldq	xmm12, xmm11, 4
+        vpslldq	xmm11, xmm11, 12
+        vpxor	xmm7, xmm7, xmm11
+        vpsrld	xmm13, xmm7, 1
+        vpsrld	xmm9, xmm7, 2
+        vpsrld	xmm8, xmm7, 7
+        vpxor	xmm13, xmm13, xmm9
+        vpxor	xmm13, xmm13, xmm8
+        vpxor	xmm13, xmm13, xmm12
+        vpxor	xmm13, xmm13, xmm7
+        vpxor	xmm4, xmm4, xmm13
         vpshufb	xmm4, xmm4, OWORD PTR L_avx1_aes_gcm_bswap_mask
         vpxor	xmm0, xmm4, xmm6
         cmp	r8d, 16
@@ -10447,7 +10669,15 @@ L_AES_GCM_encrypt_final_avx1_store_tag_16:
         vmovdqu	OWORD PTR [r9], xmm0
 L_AES_GCM_encrypt_final_avx1_store_tag_done:
         vzeroupper
-        add	rsp, 16
+        vmovdqu	xmm6, OWORD PTR [rsp+16]
+        vmovdqu	xmm7, OWORD PTR [rsp+32]
+        vmovdqu	xmm8, OWORD PTR [rsp+48]
+        vmovdqu	xmm9, OWORD PTR [rsp+64]
+        vmovdqu	xmm10, OWORD PTR [rsp+80]
+        vmovdqu	xmm11, OWORD PTR [rsp+96]
+        vmovdqu	xmm12, OWORD PTR [rsp+112]
+        vmovdqu	xmm13, OWORD PTR [rsp+128]
+        add	rsp, 144
         pop	r14
         pop	r12
         pop	r13
@@ -10469,7 +10699,17 @@ AES_GCM_decrypt_update_avx1 PROC
         mov	r12, QWORD PTR [rsp+88]
         mov	r14, QWORD PTR [rsp+96]
         mov	r15, QWORD PTR [rsp+104]
-        sub	rsp, 168
+        sub	rsp, 328
+        vmovdqu	OWORD PTR [rsp+168], xmm6
+        vmovdqu	OWORD PTR [rsp+184], xmm7
+        vmovdqu	OWORD PTR [rsp+200], xmm8
+        vmovdqu	OWORD PTR [rsp+216], xmm9
+        vmovdqu	OWORD PTR [rsp+232], xmm10
+        vmovdqu	OWORD PTR [rsp+248], xmm11
+        vmovdqu	OWORD PTR [rsp+264], xmm12
+        vmovdqu	OWORD PTR [rsp+280], xmm13
+        vmovdqu	OWORD PTR [rsp+296], xmm14
+        vmovdqu	OWORD PTR [rsp+312], xmm15
         vmovdqa	xmm6, OWORD PTR [r12]
         vmovdqa	xmm5, OWORD PTR [r14]
         vpsrlq	xmm9, xmm5, 63
@@ -11051,7 +11291,17 @@ L_AES_GCM_decrypt_update_avx1_last_block_done:
 L_AES_GCM_decrypt_update_avx1_done_dec:
         vmovdqa	OWORD PTR [r12], xmm6
         vzeroupper
-        add	rsp, 168
+        vmovdqu	xmm6, OWORD PTR [rsp+168]
+        vmovdqu	xmm7, OWORD PTR [rsp+184]
+        vmovdqu	xmm8, OWORD PTR [rsp+200]
+        vmovdqu	xmm9, OWORD PTR [rsp+216]
+        vmovdqu	xmm10, OWORD PTR [rsp+232]
+        vmovdqu	xmm11, OWORD PTR [rsp+248]
+        vmovdqu	xmm12, OWORD PTR [rsp+264]
+        vmovdqu	xmm13, OWORD PTR [rsp+280]
+        vmovdqu	xmm14, OWORD PTR [rsp+296]
+        vmovdqu	xmm15, OWORD PTR [rsp+312]
+        add	rsp, 328
         pop	rdi
         pop	r15
         pop	r14
@@ -11074,18 +11324,27 @@ AES_GCM_decrypt_final_avx1 PROC
         mov	r12, QWORD PTR [rsp+88]
         mov	r14, QWORD PTR [rsp+96]
         mov	rbp, QWORD PTR [rsp+104]
-        sub	rsp, 16
+        sub	rsp, 160
+        vmovdqu	OWORD PTR [rsp+16], xmm6
+        vmovdqu	OWORD PTR [rsp+32], xmm7
+        vmovdqu	OWORD PTR [rsp+48], xmm8
+        vmovdqu	OWORD PTR [rsp+64], xmm9
+        vmovdqu	OWORD PTR [rsp+80], xmm10
+        vmovdqu	OWORD PTR [rsp+96], xmm11
+        vmovdqu	OWORD PTR [rsp+112], xmm12
+        vmovdqu	OWORD PTR [rsp+128], xmm13
+        vmovdqu	OWORD PTR [rsp+144], xmm15
         vmovdqa	xmm6, OWORD PTR [rax]
         vmovdqa	xmm5, OWORD PTR [r12]
         vmovdqa	xmm15, OWORD PTR [r14]
-        vpsrlq	xmm9, xmm5, 63
-        vpsllq	xmm8, xmm5, 1
-        vpslldq	xmm9, xmm9, 8
-        vpor	xmm8, xmm8, xmm9
+        vpsrlq	xmm8, xmm5, 63
+        vpsllq	xmm7, xmm5, 1
+        vpslldq	xmm8, xmm8, 8
+        vpor	xmm7, xmm7, xmm8
         vpshufd	xmm5, xmm5, 255
         vpsrad	xmm5, xmm5, 31
         vpand	xmm5, xmm5, OWORD PTR L_avx1_aes_gcm_mod2_128
-        vpxor	xmm5, xmm5, xmm8
+        vpxor	xmm5, xmm5, xmm7
         mov	edx, r10d
         mov	ecx, r11d
         shl	rdx, 3
@@ -11095,35 +11354,35 @@ AES_GCM_decrypt_final_avx1 PROC
         vpunpcklqdq	xmm0, xmm0, xmm1
         vpxor	xmm6, xmm6, xmm0
         ; ghash_gfmul_red_avx
-        vpshufd	xmm9, xmm5, 78
-        vpshufd	xmm10, xmm6, 78
-        vpclmulqdq	xmm11, xmm6, xmm5, 17
-        vpclmulqdq	xmm8, xmm6, xmm5, 0
-        vpxor	xmm9, xmm9, xmm5
-        vpxor	xmm10, xmm10, xmm6
-        vpclmulqdq	xmm9, xmm9, xmm10, 0
-        vpxor	xmm9, xmm9, xmm8
-        vpxor	xmm9, xmm9, xmm11
-        vpslldq	xmm10, xmm9, 8
-        vpsrldq	xmm9, xmm9, 8
+        vpshufd	xmm8, xmm5, 78
+        vpshufd	xmm9, xmm6, 78
+        vpclmulqdq	xmm10, xmm6, xmm5, 17
+        vpclmulqdq	xmm7, xmm6, xmm5, 0
+        vpxor	xmm8, xmm8, xmm5
+        vpxor	xmm9, xmm9, xmm6
+        vpclmulqdq	xmm8, xmm8, xmm9, 0
+        vpxor	xmm8, xmm8, xmm7
         vpxor	xmm8, xmm8, xmm10
-        vpxor	xmm6, xmm11, xmm9
-        vpslld	xmm12, xmm8, 31
-        vpslld	xmm13, xmm8, 30
-        vpslld	xmm14, xmm8, 25
-        vpxor	xmm12, xmm12, xmm13
-        vpxor	xmm12, xmm12, xmm14
-        vpsrldq	xmm13, xmm12, 4
-        vpslldq	xmm12, xmm12, 12
-        vpxor	xmm8, xmm8, xmm12
-        vpsrld	xmm14, xmm8, 1
-        vpsrld	xmm10, xmm8, 2
-        vpsrld	xmm9, xmm8, 7
-        vpxor	xmm14, xmm14, xmm10
-        vpxor	xmm14, xmm14, xmm9
-        vpxor	xmm14, xmm14, xmm13
-        vpxor	xmm14, xmm14, xmm8
-        vpxor	xmm6, xmm6, xmm14
+        vpslldq	xmm9, xmm8, 8
+        vpsrldq	xmm8, xmm8, 8
+        vpxor	xmm7, xmm7, xmm9
+        vpxor	xmm6, xmm10, xmm8
+        vpslld	xmm11, xmm7, 31
+        vpslld	xmm12, xmm7, 30
+        vpslld	xmm13, xmm7, 25
+        vpxor	xmm11, xmm11, xmm12
+        vpxor	xmm11, xmm11, xmm13
+        vpsrldq	xmm12, xmm11, 4
+        vpslldq	xmm11, xmm11, 12
+        vpxor	xmm7, xmm7, xmm11
+        vpsrld	xmm13, xmm7, 1
+        vpsrld	xmm9, xmm7, 2
+        vpsrld	xmm8, xmm7, 7
+        vpxor	xmm13, xmm13, xmm9
+        vpxor	xmm13, xmm13, xmm8
+        vpxor	xmm13, xmm13, xmm12
+        vpxor	xmm13, xmm13, xmm7
+        vpxor	xmm6, xmm6, xmm13
         vpshufb	xmm6, xmm6, OWORD PTR L_avx1_aes_gcm_bswap_mask
         vpxor	xmm0, xmm6, xmm15
         cmp	r8d, 16
@@ -11139,7 +11398,7 @@ L_AES_GCM_decrypt_final_avx1_cmp_tag_loop:
         inc	ecx
         cmp	ecx, r8d
         jne	L_AES_GCM_decrypt_final_avx1_cmp_tag_loop
-        cmp	r15, 0
+        cmp	r15b, 0
         sete	r15b
         add	rsp, 16
         xor	rcx, rcx
@@ -11155,7 +11414,16 @@ L_AES_GCM_decrypt_final_avx1_cmp_tag_16:
 L_AES_GCM_decrypt_final_avx1_cmp_tag_done:
         mov	DWORD PTR [rbp], r15d
         vzeroupper
-        add	rsp, 16
+        vmovdqu	xmm6, OWORD PTR [rsp+16]
+        vmovdqu	xmm7, OWORD PTR [rsp+32]
+        vmovdqu	xmm8, OWORD PTR [rsp+48]
+        vmovdqu	xmm9, OWORD PTR [rsp+64]
+        vmovdqu	xmm10, OWORD PTR [rsp+80]
+        vmovdqu	xmm11, OWORD PTR [rsp+96]
+        vmovdqu	xmm12, OWORD PTR [rsp+112]
+        vmovdqu	xmm13, OWORD PTR [rsp+128]
+        vmovdqu	xmm15, OWORD PTR [rsp+144]
+        add	rsp, 160
         pop	r15
         pop	rbp
         pop	r14
@@ -11246,7 +11514,17 @@ AES_GCM_encrypt_avx2 PROC
         mov	r14d, DWORD PTR [rsp+128]
         mov	rsi, QWORD PTR [rsp+136]
         mov	r9d, DWORD PTR [rsp+144]
-        sub	rsp, 160
+        sub	rsp, 320
+        vmovdqu	OWORD PTR [rsp+160], xmm6
+        vmovdqu	OWORD PTR [rsp+176], xmm7
+        vmovdqu	OWORD PTR [rsp+192], xmm8
+        vmovdqu	OWORD PTR [rsp+208], xmm9
+        vmovdqu	OWORD PTR [rsp+224], xmm10
+        vmovdqu	OWORD PTR [rsp+240], xmm11
+        vmovdqu	OWORD PTR [rsp+256], xmm12
+        vmovdqu	OWORD PTR [rsp+272], xmm13
+        vmovdqu	OWORD PTR [rsp+288], xmm14
+        vmovdqu	OWORD PTR [rsp+304], xmm15
         vpxor	xmm4, xmm4, xmm4
         vpxor	xmm6, xmm6, xmm6
         mov	edx, ebx
@@ -12517,7 +12795,17 @@ L_AES_GCM_encrypt_avx2_store_tag_16:
         vmovdqu	OWORD PTR [r15], xmm0
 L_AES_GCM_encrypt_avx2_store_tag_done:
         vzeroupper
-        add	rsp, 160
+        vmovdqu	xmm6, OWORD PTR [rsp+160]
+        vmovdqu	xmm7, OWORD PTR [rsp+176]
+        vmovdqu	xmm8, OWORD PTR [rsp+192]
+        vmovdqu	xmm9, OWORD PTR [rsp+208]
+        vmovdqu	xmm10, OWORD PTR [rsp+224]
+        vmovdqu	xmm11, OWORD PTR [rsp+240]
+        vmovdqu	xmm12, OWORD PTR [rsp+256]
+        vmovdqu	xmm13, OWORD PTR [rsp+272]
+        vmovdqu	xmm14, OWORD PTR [rsp+288]
+        vmovdqu	xmm15, OWORD PTR [rsp+304]
+        add	rsp, 320
         pop	rsi
         pop	r14
         pop	rbx
@@ -12550,7 +12838,17 @@ AES_GCM_decrypt_avx2 PROC
         mov	rsi, QWORD PTR [rsp+144]
         mov	r9d, DWORD PTR [rsp+152]
         mov	rbp, QWORD PTR [rsp+160]
-        sub	rsp, 168
+        sub	rsp, 328
+        vmovdqu	OWORD PTR [rsp+168], xmm6
+        vmovdqu	OWORD PTR [rsp+184], xmm7
+        vmovdqu	OWORD PTR [rsp+200], xmm8
+        vmovdqu	OWORD PTR [rsp+216], xmm9
+        vmovdqu	OWORD PTR [rsp+232], xmm10
+        vmovdqu	OWORD PTR [rsp+248], xmm11
+        vmovdqu	OWORD PTR [rsp+264], xmm12
+        vmovdqu	OWORD PTR [rsp+280], xmm13
+        vmovdqu	OWORD PTR [rsp+296], xmm14
+        vmovdqu	OWORD PTR [rsp+312], xmm15
         vpxor	xmm4, xmm4, xmm4
         vpxor	xmm6, xmm6, xmm6
         mov	edx, ebx
@@ -13467,7 +13765,7 @@ L_AES_GCM_decrypt_avx2_cmp_tag_loop:
         inc	edx
         cmp	edx, r15d
         jne	L_AES_GCM_decrypt_avx2_cmp_tag_loop
-        cmp	rax, 0
+        cmp	al, 0
         sete	al
         jmp	L_AES_GCM_decrypt_avx2_cmp_tag_done
 L_AES_GCM_decrypt_avx2_cmp_tag_16:
@@ -13481,7 +13779,17 @@ L_AES_GCM_decrypt_avx2_cmp_tag_16:
 L_AES_GCM_decrypt_avx2_cmp_tag_done:
         mov	DWORD PTR [rbp], eax
         vzeroupper
-        add	rsp, 168
+        vmovdqu	xmm6, OWORD PTR [rsp+168]
+        vmovdqu	xmm7, OWORD PTR [rsp+184]
+        vmovdqu	xmm8, OWORD PTR [rsp+200]
+        vmovdqu	xmm9, OWORD PTR [rsp+216]
+        vmovdqu	xmm10, OWORD PTR [rsp+232]
+        vmovdqu	xmm11, OWORD PTR [rsp+248]
+        vmovdqu	xmm12, OWORD PTR [rsp+264]
+        vmovdqu	xmm13, OWORD PTR [rsp+280]
+        vmovdqu	xmm14, OWORD PTR [rsp+296]
+        vmovdqu	xmm15, OWORD PTR [rsp+312]
+        add	rsp, 328
         pop	rbp
         pop	rsi
         pop	r15
@@ -13506,7 +13814,9 @@ AES_GCM_init_avx2 PROC
         mov	rax, QWORD PTR [rsp+72]
         mov	r8, QWORD PTR [rsp+80]
         mov	r9, QWORD PTR [rsp+88]
-        sub	rsp, 16
+        sub	rsp, 48
+        vmovdqu	OWORD PTR [rsp+16], xmm6
+        vmovdqu	OWORD PTR [rsp+32], xmm7
         vpxor	xmm4, xmm4, xmm4
         mov	edx, r11d
         cmp	edx, 12
@@ -13755,7 +14065,9 @@ L_AES_GCM_init_avx2_iv_done:
         vmovdqu	OWORD PTR [rax], xmm5
         vmovdqu	OWORD PTR [r8], xmm4
         vzeroupper
-        add	rsp, 16
+        vmovdqu	xmm6, OWORD PTR [rsp+16]
+        vmovdqu	xmm7, OWORD PTR [rsp+32]
+        add	rsp, 48
         pop	r12
         pop	rsi
         pop	rdi
@@ -13766,6 +14078,8 @@ _text ENDS
 _text SEGMENT READONLY PARA
 AES_GCM_aad_update_avx2 PROC
         mov	rax, rcx
+        sub	rsp, 16
+        vmovdqu	OWORD PTR [rsp], xmm6
         vmovdqu	xmm4, OWORD PTR [r8]
         vmovdqu	xmm5, OWORD PTR [r9]
         xor	ecx, ecx
@@ -13808,6 +14122,8 @@ L_AES_GCM_aad_update_avx2_16_loop:
         jl	L_AES_GCM_aad_update_avx2_16_loop
         vmovdqu	OWORD PTR [r8], xmm4
         vzeroupper
+        vmovdqu	xmm6, OWORD PTR [rsp]
+        add	rsp, 16
         ret
 AES_GCM_aad_update_avx2 ENDP
 _text ENDS
@@ -13868,6 +14184,8 @@ AES_GCM_encrypt_block_avx2 ENDP
 _text ENDS
 _text SEGMENT READONLY PARA
 AES_GCM_ghash_block_avx2 PROC
+        sub	rsp, 16
+        vmovdqu	OWORD PTR [rsp], xmm6
         vmovdqu	xmm4, OWORD PTR [rdx]
         vmovdqu	xmm5, OWORD PTR [r8]
         vmovdqu	xmm0, OWORD PTR [rcx]
@@ -13905,6 +14223,8 @@ AES_GCM_ghash_block_avx2 PROC
         vpxor	xmm4, xmm4, xmm1
         vmovdqu	OWORD PTR [rdx], xmm4
         vzeroupper
+        vmovdqu	xmm6, OWORD PTR [rsp]
+        add	rsp, 16
         ret
 AES_GCM_ghash_block_avx2 ENDP
 _text ENDS
@@ -13923,7 +14243,17 @@ AES_GCM_encrypt_update_avx2 PROC
         mov	r12, QWORD PTR [rsp+88]
         mov	r13, QWORD PTR [rsp+96]
         mov	r14, QWORD PTR [rsp+104]
-        sub	rsp, 152
+        sub	rsp, 312
+        vmovdqu	OWORD PTR [rsp+152], xmm6
+        vmovdqu	OWORD PTR [rsp+168], xmm7
+        vmovdqu	OWORD PTR [rsp+184], xmm8
+        vmovdqu	OWORD PTR [rsp+200], xmm9
+        vmovdqu	OWORD PTR [rsp+216], xmm10
+        vmovdqu	OWORD PTR [rsp+232], xmm11
+        vmovdqu	OWORD PTR [rsp+248], xmm12
+        vmovdqu	OWORD PTR [rsp+264], xmm13
+        vmovdqu	OWORD PTR [rsp+280], xmm14
+        vmovdqu	OWORD PTR [rsp+296], xmm15
         vmovdqu	xmm6, OWORD PTR [r12]
         vmovdqu	xmm5, OWORD PTR [r13]
         vmovdqu	xmm4, OWORD PTR [r14]
@@ -14754,7 +15084,17 @@ L_AES_GCM_encrypt_update_avx2_done_enc:
         vmovdqu	OWORD PTR [r12], xmm6
         vmovdqu	OWORD PTR [r14], xmm4
         vzeroupper
-        add	rsp, 152
+        vmovdqu	xmm6, OWORD PTR [rsp+152]
+        vmovdqu	xmm7, OWORD PTR [rsp+168]
+        vmovdqu	xmm8, OWORD PTR [rsp+184]
+        vmovdqu	xmm9, OWORD PTR [rsp+200]
+        vmovdqu	xmm10, OWORD PTR [rsp+216]
+        vmovdqu	xmm11, OWORD PTR [rsp+232]
+        vmovdqu	xmm12, OWORD PTR [rsp+248]
+        vmovdqu	xmm13, OWORD PTR [rsp+264]
+        vmovdqu	xmm14, OWORD PTR [rsp+280]
+        vmovdqu	xmm15, OWORD PTR [rsp+296]
+        add	rsp, 312
         pop	rdi
         pop	r15
         pop	r14
@@ -14770,7 +15110,9 @@ AES_GCM_encrypt_final_avx2 PROC
         mov	eax, DWORD PTR [rsp+56]
         mov	r10, QWORD PTR [rsp+64]
         mov	r11, QWORD PTR [rsp+72]
-        sub	rsp, 16
+        sub	rsp, 48
+        vmovdqu	OWORD PTR [rsp+16], xmm6
+        vmovdqu	OWORD PTR [rsp+32], xmm7
         vmovdqu	xmm4, OWORD PTR [rcx]
         vmovdqu	xmm5, OWORD PTR [r10]
         vmovdqu	xmm6, OWORD PTR [r11]
@@ -14824,7 +15166,9 @@ L_AES_GCM_encrypt_final_avx2_store_tag_16:
         vmovdqu	OWORD PTR [rdx], xmm0
 L_AES_GCM_encrypt_final_avx2_store_tag_done:
         vzeroupper
-        add	rsp, 16
+        vmovdqu	xmm6, OWORD PTR [rsp+16]
+        vmovdqu	xmm7, OWORD PTR [rsp+32]
+        add	rsp, 48
         pop	r13
         pop	r12
         ret
@@ -14845,7 +15189,17 @@ AES_GCM_decrypt_update_avx2 PROC
         mov	r12, QWORD PTR [rsp+88]
         mov	r14, QWORD PTR [rsp+96]
         mov	r15, QWORD PTR [rsp+104]
-        sub	rsp, 168
+        sub	rsp, 328
+        vmovdqu	OWORD PTR [rsp+168], xmm6
+        vmovdqu	OWORD PTR [rsp+184], xmm7
+        vmovdqu	OWORD PTR [rsp+200], xmm8
+        vmovdqu	OWORD PTR [rsp+216], xmm9
+        vmovdqu	OWORD PTR [rsp+232], xmm10
+        vmovdqu	OWORD PTR [rsp+248], xmm11
+        vmovdqu	OWORD PTR [rsp+264], xmm12
+        vmovdqu	OWORD PTR [rsp+280], xmm13
+        vmovdqu	OWORD PTR [rsp+296], xmm14
+        vmovdqu	OWORD PTR [rsp+312], xmm15
         vmovdqu	xmm6, OWORD PTR [r12]
         vmovdqu	xmm5, OWORD PTR [r14]
         vmovdqu	xmm4, OWORD PTR [r15]
@@ -15329,7 +15683,17 @@ L_AES_GCM_decrypt_update_avx2_done_dec:
         vmovdqu	OWORD PTR [r12], xmm6
         vmovdqu	OWORD PTR [r15], xmm4
         vzeroupper
-        add	rsp, 168
+        vmovdqu	xmm6, OWORD PTR [rsp+168]
+        vmovdqu	xmm7, OWORD PTR [rsp+184]
+        vmovdqu	xmm8, OWORD PTR [rsp+200]
+        vmovdqu	xmm9, OWORD PTR [rsp+216]
+        vmovdqu	xmm10, OWORD PTR [rsp+232]
+        vmovdqu	xmm11, OWORD PTR [rsp+248]
+        vmovdqu	xmm12, OWORD PTR [rsp+264]
+        vmovdqu	xmm13, OWORD PTR [rsp+280]
+        vmovdqu	xmm14, OWORD PTR [rsp+296]
+        vmovdqu	xmm15, OWORD PTR [rsp+312]
+        add	rsp, 328
         pop	rdi
         pop	r15
         pop	r14
@@ -15347,7 +15711,9 @@ AES_GCM_decrypt_final_avx2 PROC
         mov	r10, QWORD PTR [rsp+72]
         mov	r11, QWORD PTR [rsp+80]
         mov	r12, QWORD PTR [rsp+88]
-        sub	rsp, 16
+        sub	rsp, 48
+        vmovdqu	OWORD PTR [rsp+16], xmm6
+        vmovdqu	OWORD PTR [rsp+32], xmm7
         vmovdqu	xmm4, OWORD PTR [rcx]
         vmovdqu	xmm5, OWORD PTR [r10]
         vmovdqu	xmm6, OWORD PTR [r11]
@@ -15398,7 +15764,7 @@ L_AES_GCM_decrypt_final_avx2_cmp_tag_loop:
         inc	r13d
         cmp	r13d, r8d
         jne	L_AES_GCM_decrypt_final_avx2_cmp_tag_loop
-        cmp	r10, 0
+        cmp	r10b, 0
         sete	r10b
         jmp	L_AES_GCM_decrypt_final_avx2_cmp_tag_done
 L_AES_GCM_decrypt_final_avx2_cmp_tag_16:
@@ -15412,7 +15778,9 @@ L_AES_GCM_decrypt_final_avx2_cmp_tag_16:
 L_AES_GCM_decrypt_final_avx2_cmp_tag_done:
         mov	DWORD PTR [r12], r10d
         vzeroupper
-        add	rsp, 16
+        vmovdqu	xmm6, OWORD PTR [rsp+16]
+        vmovdqu	xmm7, OWORD PTR [rsp+32]
+        add	rsp, 48
         pop	r14
         pop	r13
         pop	r12

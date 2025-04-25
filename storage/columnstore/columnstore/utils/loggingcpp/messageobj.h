@@ -22,8 +22,7 @@
 /**
  * @file
  */
-#ifndef LOGGING_MESSAGEOBJ_H
-#define LOGGING_MESSAGEOBJ_H
+#pragma once
 
 #include <string>
 #include <vector>
@@ -65,6 +64,14 @@ class Message
     /** @brief add an unsigned 64 bit int arg to the message
      */
     void add(uint64_t i);
+
+    /* define types to not to include mcs_numeric_limits.h */
+    using int128_t = __int128;
+    using uint128_t = unsigned __int128;
+
+    /** @brief add an 128 bit int arg to the message
+     */
+    void add(int128_t i128);
 
     /** @brief add a float arg to the message
      */
@@ -160,5 +167,3 @@ inline void swap(logging::Message& lhs, logging::Message& rhs)
 }
 
 }  // namespace logging
-
-#endif

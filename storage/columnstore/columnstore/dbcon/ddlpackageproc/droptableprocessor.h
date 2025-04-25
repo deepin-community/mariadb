@@ -21,16 +21,11 @@
  *
  ***********************************************************************/
 /** @file */
-#ifndef DROPTABLEPROCESSOR_H
-#define DROPTABLEPROCESSOR_H
+#pragma once
 
 #include "ddlpackageprocessor.h"
 
-#if defined(_MSC_VER) && defined(DDLPKGPROC_DLLEXPORT)
-#define EXPORT __declspec(dllexport)
-#else
 #define EXPORT
-#endif
 
 namespace ddlpackageprocessor
 {
@@ -44,14 +39,14 @@ class DropTableProcessor : public DDLPackageProcessor
   DropTableProcessor(BRM::DBRM* aDbrm) : DDLPackageProcessor(aDbrm)
   {
   }
+
+ protected:
+ private:
   /** @brief process a drop table statement
    *
    *  @param dropTableStmt the drop table statement
    */
-  EXPORT DDLResult processPackage(ddlpackage::DropTableStatement& dropTableStmt);
-
- protected:
- private:
+  DDLResult processPackageInternal(ddlpackage::SqlStatement* dropTableStmt);
 };
 
 /** @brief specialization of a DDLPacakageProcessor
@@ -64,18 +59,16 @@ class TruncTableProcessor : public DDLPackageProcessor
   TruncTableProcessor(BRM::DBRM* aDbrm) : DDLPackageProcessor(aDbrm)
   {
   }
+
+ protected:
+ private:
   /** @brief process a truncate table statement
    *
    *  @param truncTableStmt the truncate table statement
    */
-  EXPORT DDLResult processPackage(ddlpackage::TruncTableStatement& truncTableStmt);
-
- protected:
- private:
+  DDLResult processPackageInternal(ddlpackage::SqlStatement* truncTableStmt);
 };
 
 }  // namespace ddlpackageprocessor
 
 #undef EXPORT
-
-#endif  // DROPTABLEPROCESSOR_H

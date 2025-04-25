@@ -13,6 +13,7 @@
 # Change:                                                                    #
 ##############################################################################
 
+--source include/test_db_charset_latin1.inc
 --disable_query_log
 set @local_optimizer_switch=@@optimizer_switch;
 set optimizer_switch='derived_merge=off,join_cache_hashed=off';
@@ -545,11 +546,11 @@ CREATE TABLE cc (
 );
 INSERT INTO cc (col_int_nokey) VALUES (0),(1),(7),(0),(4),(5);
 --replace_column 9 # 10 #
-EXPLAIN SELECT pk FROM cc WHERE col_int_key > 3;
-SELECT pk FROM cc WHERE col_int_key > 3;
+EXPLAIN SELECT pk FROM cc force index(col_int_key) WHERE col_int_key > 3;
+SELECT pk FROM cc force index(col_int_key) WHERE col_int_key > 3;
 --replace_column 9 # 10 #
-EXPLAIN SELECT pk FROM cc WHERE col_int_key > 3 ORDER BY 1;
-SELECT pk FROM cc WHERE col_int_key > 3 ORDER BY 1;
+EXPLAIN SELECT pk FROM cc force index(col_int_key) WHERE col_int_key > 3 ORDER BY 1;
+SELECT pk FROM cc force index(col_int_key) WHERE col_int_key > 3 ORDER BY 1;
 DROP TABLE cc;
 
 --echo #
@@ -872,7 +873,10 @@ CREATE TABLE t1(a INT);
 INSERT INTO t1 VALUES(2147483647);
 ALTER TABLE t1 ADD COLUMN h INT AS (a) VIRTUAL;
 ALTER TABLE t1 CHANGE h i INT AS (a) VIRTUAL, ALGORITHM=COPY;
+# COPY/NONE is not supported in embedded
+--error ER_WARN_DATA_OUT_OF_RANGE,ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
 ALTER TABLE t1 ADD COLUMN b SMALLINT AS (a) VIRTUAL, ALGORITHM=COPY, LOCK=NONE;
+--error ER_WARN_DATA_OUT_OF_RANGE,ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
 ALTER TABLE t1 ADD COLUMN e SMALLINT AS (a) VIRTUAL, ALGORITHM=COPY, LOCK=NONE;
 ALTER TABLE t1 ADD COLUMN f SMALLINT AS (a) VIRTUAL, ALGORITHM=COPY, LOCK=SHARED;
 ALTER TABLE t1 ADD COLUMN g SMALLINT AS (a) VIRTUAL, ALGORITHM=COPY, LOCK=EXCLUSIVE;
@@ -1170,3 +1174,4 @@ DROP TABLE t1, t2, t3, t4;
 --disable_query_log
 set @@optimizer_switch=@local_optimizer_switch;
 --enable_query_log
+--source include/test_db_charset_restore.inc

@@ -32,6 +32,7 @@ Modified           Jan Lindström jan.lindstrom@mariadb.com
 #else
 #include "buf0flu.h"
 #include "buf0dblwr.h"
+#include "btr0sea.h"
 #include "srv0srv.h"
 #include "srv0start.h"
 #include "mtr0mtr.h"
@@ -445,11 +446,11 @@ static byte* fil_encrypt_buf_for_non_full_checksum(
 	uint		srclen = size - unencrypted_bytes;
 	const byte*	src = src_frame + header_len;
 	byte*		dst = dst_frame + header_len;
-	uint32		dstlen = 0;
 
 	if (page_compressed) {
 		srclen = mach_read_from_2(src_frame + FIL_PAGE_DATA);
 	}
+	uint dstlen = srclen;
 
 	int rc = encryption_scheme_encrypt(src, srclen, dst, &dstlen,
 					   crypt_data, key_version,
@@ -516,7 +517,7 @@ static byte* fil_encrypt_buf_for_full_crc32(
 			      + FIL_PAGE_FCRC32_CHECKSUM);
 	const byte* src = src_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
 	byte* dst = dst_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
-	uint dstlen = 0;
+	uint dstlen = srclen;
 
 	ut_a(key_version != ENCRYPTION_KEY_VERSION_INVALID);
 
@@ -647,7 +648,6 @@ static dberr_t fil_space_decrypt_full_crc32(
 	/* Calculate the offset where decryption starts */
 	const byte* src = src_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
 	byte* dst = tmp_frame + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION;
-	uint dstlen = 0;
 	bool corrupted = false;
 	uint size = buf_page_full_crc32_size(src_frame, NULL, &corrupted);
 	if (UNIV_UNLIKELY(corrupted)) {
@@ -656,6 +656,7 @@ static dberr_t fil_space_decrypt_full_crc32(
 
 	uint srclen = size - (FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION
 			      + FIL_PAGE_FCRC32_CHECKSUM);
+	uint dstlen = srclen;
 
 	int rc = encryption_scheme_decrypt(src, srclen, dst, &dstlen,
 					   crypt_data, key_version,
@@ -711,8 +712,8 @@ static dberr_t fil_space_decrypt_for_non_full_checksum(
 	/* Calculate the offset where decryption starts */
 	const byte* src = src_frame + header_len;
 	byte* dst = tmp_frame + header_len;
-	uint32 dstlen = 0;
 	uint srclen = uint(physical_size) - header_len - FIL_PAGE_DATA_END;
+	uint dstlen = srclen;
 
 	if (page_compressed) {
 		srclen = mach_read_from_2(src_frame + FIL_PAGE_DATA);
@@ -1068,7 +1069,8 @@ default_encrypt_list only when
 default encrypt */
 static bool fil_crypt_must_remove(const fil_space_t &space)
 {
-  ut_ad(space.purpose == FIL_TYPE_TABLESPACE);
+  ut_ad(!space.is_temporary());
+  ut_ad(!space.is_being_imported());
   fil_space_crypt_t *crypt_data = space.crypt_data;
   mysql_mutex_assert_owner(&fil_system.mutex);
   const ulong encrypt_tables= srv_encrypt_tables;
@@ -1104,7 +1106,8 @@ fil_crypt_space_needs_rotation(
 	fil_space_t* space = &*state->space;
 
 	ut_ad(space->referenced());
-	ut_ad(space->purpose == FIL_TYPE_TABLESPACE);
+	ut_ad(!space->is_temporary());
+	ut_ad(!space->is_being_imported());
 
 	fil_space_crypt_t *crypt_data = space->crypt_data;
 
@@ -1348,6 +1351,8 @@ inline bool fil_space_t::acquire_if_not_stopped()
 
 bool fil_crypt_must_default_encrypt()
 {
+  /* prevents a race condition with fil_crypt_set_rotate_key_age() */
+  mysql_mutex_assert_owner(&fil_system.mutex);
   return !srv_fil_crypt_rotate_key_age || !srv_encrypt_rotate;
 }
 
@@ -1361,7 +1366,7 @@ the encryption parameters were changed
 @retval nullptr upon reaching the end of the iteration */
 inline fil_space_t *fil_system_t::default_encrypt_next(fil_space_t *space,
                                                        bool recheck,
-                                                       bool encrypt)
+                                                       bool encrypt) noexcept
 {
   mysql_mutex_assert_owner(&mutex);
 
@@ -1428,7 +1433,7 @@ encryption parameters were changed
 @retval fil_system.temp_space if there is no work to do
 @retval end() upon reaching the end of the iteration */
 space_list_t::iterator fil_space_t::next(space_list_t::iterator space,
-                                         bool recheck, bool encrypt)
+                                         bool recheck, bool encrypt) noexcept
 {
   mysql_mutex_lock(&fil_system.mutex);
 
@@ -1454,7 +1459,7 @@ space_list_t::iterator fil_space_t::next(space_list_t::iterator space,
 
     for (; space != fil_system.space_list.end(); ++space)
     {
-      if (space->purpose != FIL_TYPE_TABLESPACE)
+      if (space->is_temporary() || space->is_being_imported())
         continue;
       const uint32_t n= space->acquire_low();
       if (UNIV_LIKELY(!(n & (STOPPING | CLOSING))))
@@ -1477,7 +1482,7 @@ space_list_t::iterator fil_space_t::next(space_list_t::iterator space,
 static bool fil_crypt_find_space_to_rotate(
 	key_state_t*		key_state,
 	rotate_thread_t*	state,
-	bool*			recheck)
+	bool*			recheck) noexcept
 {
 	/* we need iops to start rotating */
 	do {
@@ -1670,6 +1675,8 @@ fil_crypt_get_page_throttle(
 					      BUF_PEEK_IF_IN_POOL, mtr);
 	if (block != NULL) {
 		/* page was in buffer pool */
+		btr_search_drop_page_hash_index(
+			block, reinterpret_cast<dict_index_t*>(-1));
 		state->crypt_stat.pages_read_from_cache++;
 		return block;
 	}
@@ -1753,6 +1760,8 @@ fil_crypt_rotate_page(
 	if (buf_block_t* block = fil_crypt_get_page_throttle(state,
 							     offset, &mtr,
 							     &sleeptime_ms)) {
+		btr_search_drop_page_hash_index(
+			block, reinterpret_cast<dict_index_t*>(-1));
 		bool modified = false;
 		byte* frame = buf_block_get_frame(block);
 		const lsn_t block_lsn = mach_read_from_8(FIL_PAGE_LSN + frame);
@@ -2004,10 +2013,18 @@ static void fil_crypt_complete_rotate_space(rotate_thread_t* state)
 	mysql_mutex_unlock(&crypt_data->mutex);
 }
 
+#ifdef UNIV_PFS_THREAD
+mysql_pfs_key_t page_encrypt_thread_key;
+#endif /* UNIV_PFS_THREAD */
+
 /** A thread which monitors global key state and rotates tablespaces
 accordingly */
 static void fil_crypt_thread()
 {
+	my_thread_init();
+#ifdef UNIV_PFS_THREAD
+	pfs_register_thread(page_encrypt_thread_key);
+#endif /* UNIV_PFS_THREAD */
 	mysql_mutex_lock(&fil_crypt_threads_mutex);
 	rotate_thread_t thr(srv_n_fil_crypt_threads_started++);
 	pthread_cond_signal(&fil_crypt_cond); /* signal that we started */
@@ -2085,6 +2102,7 @@ wait_for_work:
 	pthread_cond_signal(&fil_crypt_cond); /* signal that we stopped */
 	mysql_mutex_unlock(&fil_crypt_threads_mutex);
 
+	my_thread_end();
 #ifdef UNIV_PFS_THREAD
 	pfs_delete_thread();
 #endif
@@ -2136,9 +2154,9 @@ static void fil_crypt_default_encrypt_tables_fill()
 	mysql_mutex_assert_owner(&fil_system.mutex);
 
 	for (fil_space_t& space : fil_system.space_list) {
-		if (space.purpose != FIL_TYPE_TABLESPACE
-		    || space.is_in_default_encrypt
+		if (space.is_in_default_encrypt
 		    || UT_LIST_GET_LEN(space.chain) == 0
+		    || space.is_temporary() || space.is_being_imported()
 		    || !space.acquire_if_not_stopped()) {
 			continue;
 		}
@@ -2197,6 +2215,27 @@ void fil_crypt_set_rotation_iops(uint val)
 {
   mysql_mutex_lock(&fil_crypt_threads_mutex);
   srv_n_fil_crypt_iops= val;
+  pthread_cond_broadcast(&fil_crypt_threads_cond);
+  mysql_mutex_unlock(&fil_crypt_threads_mutex);
+}
+
+/** Add the import tablespace to default_encrypt list
+if necessary and signal fil_crypt_threads
+@param space imported tablespace */
+void fil_crypt_add_imported_space(fil_space_t *space)
+{
+  mysql_mutex_lock(&fil_crypt_threads_mutex);
+
+  mysql_mutex_lock(&fil_system.mutex);
+
+  if (fil_crypt_must_default_encrypt())
+  {
+    fil_system.default_encrypt_tables.push_back(*space);
+    space->is_in_default_encrypt= true;
+  }
+
+  mysql_mutex_unlock(&fil_system.mutex);
+
   pthread_cond_broadcast(&fil_crypt_threads_cond);
   mysql_mutex_unlock(&fil_crypt_threads_mutex);
 }
@@ -2290,7 +2329,7 @@ void fil_space_crypt_close_tablespace(const fil_space_t *space)
 				   << space->chain.start->name << " ("
 				   << space->id << ") active threads "
 				   << crypt_data->rotate_state.active_threads
-				   << "flushing="
+				   << " flushing="
 				   << crypt_data->rotate_state.flushing << ".";
 			last = now;
 		}

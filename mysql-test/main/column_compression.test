@@ -1,6 +1,6 @@
 --source include/have_innodb.inc
 --source include/have_csv.inc
---source include/have_normal_bzip.inc
+--source include/have_normal_zlib.inc
 
 let $MYSQLD_DATADIR= `select @@datadir`;
 
@@ -9,20 +9,25 @@ let $typec= BLOB COMPRESSED;
 let $typeu= BLOB;
 --source column_compression.inc
 
+
 let $typec= TEXT COMPRESSED;
 let $typeu= TEXT;
+--source column_compression.inc
+
+let $typec= TEXT COMPRESSED CHARACTER SET latin1;
+let $typeu= TEXT CHARACTER SET latin1;
 --source column_compression.inc
 
 let $typec= VARBINARY(10000) COMPRESSED;
 let $typeu= VARBINARY(10000);
 --source column_compression.inc
 
-let $typec= VARCHAR(10000) COMPRESSED;
-let $typeu= VARCHAR(10000);
+let $typec= VARCHAR(10000) COMPRESSED CHARACTER SET latin1;
+let $typeu= VARCHAR(10000) CHARACTER SET latin1;
 --source column_compression.inc
 
 let $typec= TEXT COMPRESSED CHARSET ucs2;
-let $typeu= TEXT;
+let $typeu= TEXT CHARACTER SET latin1;
 --source column_compression.inc
 
 SET column_compression_zlib_wrap=DEFAULT;
@@ -33,7 +38,7 @@ let $typeu= BLOB;
 --enable_prepare_warnings
 --error ER_PARSE_ERROR
 CREATE TABLE t1(a CHAR(100) COMPRESSED);
---error ER_WRONG_FIELD_SPEC
+--error ER_PARSE_ERROR
 CREATE TABLE t1(a CHAR(100) NOT NULL COMPRESSED);
 --error ER_PARSE_ERROR
 CREATE TABLE t1(a INT COMPRESSED);
@@ -44,7 +49,7 @@ CREATE TABLE t1(a BLOB COMPRESSED COMPRESSED);
 CREATE TABLE t1(a INT);
 --error ER_PARSE_ERROR
 ALTER TABLE t1 MODIFY a INT COMPRESSED;
---error ER_WRONG_FIELD_SPEC
+--error ER_PARSE_ERROR
 ALTER TABLE t1 MODIFY a INT NOT NULL COMPRESSED;
 DROP TABLE t1;
 
@@ -61,14 +66,14 @@ SHOW CREATE TABLE t1;
 DROP TABLE t1;
 
 --echo # Test fields that don't fit data
-CREATE TABLE t1(a VARCHAR(9) COMPRESSED);
+CREATE TABLE t1(a VARCHAR(9) COMPRESSED) CHARSET=latin1;
 --error ER_DATA_TOO_LONG
 INSERT INTO t1 VALUES(REPEAT('a', 10));
 INSERT INTO t1 VALUES(REPEAT(' ', 10));
 SELECT a, LENGTH(a) FROM t1;
 DROP TABLE t1;
 
-CREATE TABLE t1(a TINYTEXT COMPRESSED);
+CREATE TABLE t1(a TINYTEXT COMPRESSED) CHARSET=latin1;
 SET column_compression_threshold=300;
 INSERT INTO t1 VALUES(REPEAT('a', 254));
 INSERT INTO t1 VALUES(REPEAT(' ', 254));
@@ -86,7 +91,7 @@ SELECT LEFT(a, 10), LENGTH(a) FROM t1 ORDER BY 1;
 DROP TABLE t1;
 
 --echo # Corner case: VARCHAR(255) COMPRESSED must have 2 bytes pack length
-CREATE TABLE t1(a VARCHAR(255) COMPRESSED);
+CREATE TABLE t1(a VARCHAR(255) COMPRESSED) CHARSET=latin1;
 SHOW CREATE TABLE t1;
 SET column_compression_threshold=300;
 INSERT INTO t1 VALUES(REPEAT('a', 255));
@@ -94,7 +99,7 @@ SET column_compression_threshold=DEFAULT;
 SELECT a, LENGTH(a) FROM t1;
 DROP TABLE t1;
 
-CREATE TABLE t1(a VARCHAR(65531) COMPRESSED);
+CREATE TABLE t1(a VARCHAR(65531) COMPRESSED) CHARSET=latin1;
 SET column_compression_threshold=65537;
 INSERT INTO t1 VALUES(REPEAT('a', 65530));
 INSERT INTO t1 VALUES(REPEAT(' ', 65530));
@@ -126,7 +131,7 @@ DROP TABLE t1;
 --echo #
 --echo # MDEV-15762 - VARCHAR(0) COMPRESSED crashes the server
 --echo #
-CREATE TABLE t1(a VARCHAR(0) COMPRESSED);
+CREATE TABLE t1(a VARCHAR(0) COMPRESSED) CHARSET=latin1;
 --error ER_DATA_TOO_LONG
 INSERT INTO t1 VALUES('a');
 INSERT INTO t1 VALUES(' ');
@@ -137,7 +142,7 @@ DROP TABLE t1;
 --echo #
 --echo # MDEV-15763 - VARCHAR(1) COMPRESSED crashes the server
 --echo #
-CREATE TABLE t1(a VARCHAR(1) COMPRESSED);
+CREATE TABLE t1(a VARCHAR(1) COMPRESSED) CHARSET=latin1;
 SET column_compression_threshold=0;
 INSERT INTO t1 VALUES('a');
 SET column_compression_threshold=DEFAULT;
@@ -161,7 +166,7 @@ CREATE TABLE t1
 (
   a VARCHAR(10) COMPRESSED CHARACTER SET latin1,
   b VARCHAR(10) COMPRESSED CHARACTER SET utf8
-);
+) CHARSET=latin1;
 SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH, CHARACTER_OCTET_LENGTH
 FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA='test' AND TABLE_NAME='t1' AND COLUMN_NAME IN ('a','b')
@@ -172,7 +177,7 @@ DROP TABLE t1;
 --echo #
 --echo # MDEV-15592 - Column COMPRESSED should select a 'high order' datatype
 --echo #
-CREATE TABLE t1(a TINYTEXT COMPRESSED);
+CREATE TABLE t1(a TINYTEXT COMPRESSED) CHARSET=latin1;
 INSERT INTO t1 VALUES(REPEAT('a', 255));
 SELECT LEFT(a, 10), LENGTH(a) FROM t1;
 DROP TABLE t1;
@@ -192,7 +197,7 @@ DROP TABLE t1;
 --echo #
 --echo # MDEV-17363 - Compressed columns cannot be restored from dump
 --echo #
---error ER_WRONG_FIELD_SPEC
+--error ER_PARSE_ERROR
 CREATE TABLE t1(a INT NOT NULL COMPRESSED);
 SHOW WARNINGS;
 
@@ -453,10 +458,7 @@ INSERT INTO t1 SET a=REPEAT('x',127);
 ALTER TABLE t1 FORCE, ALGORITHM=COPY;
 DROP TABLE t1;
 
-
---echo #
 --echo # End of 10.4 tests
---echo #
 
 --echo #
 --echo # MDEV-19727 Add Type_handler::Key_part_spec_init_ft
@@ -476,5 +478,50 @@ CREATE TABLE t1 (a TEXT COMPRESSED, FULLTEXT INDEX(a));
 
 --disable_prepare_warnings
 --echo #
---echo # End of 10.5 tests
+--echo # MDEV-16699 heap-use-after-free in group_concat with compressed or GIS columns
 --echo #
+create table t1 (c text compressed);
+insert into t1 values ('foo'),(repeat('a',55000));
+select length(group_concat(c order by 1)) from t1;
+create table t2 as select group_concat(c order by 1), concat(c), c from t1;
+show create table t2;
+drop table t1, t2;
+
+--echo #
+--echo # MDEV-16698 ASAN: heap-use-after-free in field_longstr::uncompress
+--echo #
+
+CREATE TABLE t5 (
+  i1 smallint(11) unsigned zerofill ,
+  e1 enum('','a') ,
+  b1 mediumblob /*!100301 COMPRESSED*/ ,
+  d2 date NOT NULL DEFAULT '1900-01-01',
+  pk bigint(20) unsigned NOT NULL DEFAULT 0,
+  d1 timestamp NULL ,
+  v1 varbinary(3362) ,
+  t1 time NOT NULL DEFAULT '00:00:00'
+);
+INSERT INTO t5 VALUES
+(00000000004,'','ufhjdtv','1992-07-25',1,'2035-06-05 09:02:48','f','13:25:21'),
+(00000000001,'','jdt','1998-07-03',2,'1994-05-05 19:59:20','','09:09:19'),
+(00000000000,'','d','2007-12-05',3,'0000-00-00 00:00:00','tvs','02:51:15');
+--disable_result_log
+SELECT GROUP_CONCAT(t5.i1, IF(t5.e1, t5.b1, t5.e1),
+    IF(t5.d1, t5.t1, t5.d1), t5.v1,
+    IF(t5.i1, t5.i1, t5.d2), t5.v1, t5.b1
+    ORDER BY 2,6 SEPARATOR ';')
+FROM (t5 JOIN t5 AS tt ON (tt.pk != t5.pk));
+DROP TABLE t5;
+--enable_result_log
+
+create table t1 (pk int not null, b1 blob compressed, v1 varbinary(100))engine=innodb;
+insert into t1 values (1,'ufhjdtv','f'),(2,'jdt',''),(3,'d','tvs');
+select group_concat(t1.v1, t1.b1 order by 1) from (t1 join t1 as tt on (tt.pk != t1.pk));
+drop table t1;
+
+CREATE TABLE t1 (a CHAR(1), b TEXT /*!100302 COMPRESSED */);
+INSERT INTO t1 VALUES ('c','n'),('d','mmmmmmmmmm');
+SELECT GROUP_CONCAT( b, a ORDER BY 2 ) AS f FROM t1;
+DROP TABLE t1;
+
+--echo # End of 10.5 tests

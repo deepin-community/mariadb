@@ -1,6 +1,6 @@
 /* unit.c API unit tests driver
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -22,14 +22,11 @@
 
 /* Name change compatibility layer no longer need to be included here */
 
-#ifdef HAVE_CONFIG_H
-    #include <config.h>
-#endif
+#include <tests/unit.h>
 
-#include <wolfssl/wolfcrypt/settings.h>
+#include <wolfssl/wolfcrypt/types.h>
 
 #include <stdio.h>
-#include <tests/unit.h>
 #include <wolfssl/wolfcrypt/fips_test.h>
 
 
@@ -67,7 +64,6 @@ int unit_test(int argc, char** argv)
 
     (void)argc;
     (void)argv;
-
 #ifdef WOLFSSL_FORCE_MALLOC_FAIL_TEST
     if (argc > 1) {
         int memFailCount = atoi(argv[1]);
@@ -160,7 +156,7 @@ int unit_test(int argc, char** argv)
         err_sys("KDF TLSv1.2 CAST failed");
     }
 #endif
-#if defined(WOLFSSL_HAVE_PRF) && defined(WOLFSSL_TLS13)
+#if defined(HAVE_HKDF) && !defined(NO_HMAC)
     if (wc_RunCast_fips(FIPS_CAST_KDF_TLS13) != 0) {
         err_sys("KDF TLSv1.3 CAST failed");
     }
@@ -171,6 +167,11 @@ int unit_test(int argc, char** argv)
     }
 #endif
 #endif /* HAVE_FIPS && HAVE_FIPS_VERSION == 5 */
+#if FIPS_VERSION3_GT(5,2,0)
+    if (wc_RunAllCast_fips() != 0) {
+        err_sys("wc_RunAllCast_fips() failed\n");
+    }
+#endif
 
     while (argc > 1) {
         if (argv[1][0] != '-') {
@@ -246,16 +247,15 @@ int unit_test(int argc, char** argv)
         SrpTest();
     }
 
-#ifndef NO_WOLFSSL_CIPHER_SUITE_TEST
-#if !defined(NO_WOLFSSL_CLIENT) && !defined(NO_WOLFSSL_SERVER)
-#ifndef SINGLE_THREADED
+#if !defined(NO_WOLFSSL_CIPHER_SUITE_TEST) && \
+    !defined(NO_WOLFSSL_CLIENT) && !defined(NO_WOLFSSL_SERVER) && \
+    !defined(NO_TLS) && \
+    !defined(SINGLE_THREADED)
     if ((ret = SuiteTest(argc, argv)) != 0) {
         fprintf(stderr, "suite test failed with %d\n", ret);
         goto exit;
     }
 #endif
-#endif
-#endif /* NO_WOLFSSL_CIPHER_SUITE_TEST */
 
 exit:
 #ifdef HAVE_WNR
@@ -270,75 +270,3 @@ exit:
 
     return ret;
 }
-
-
-
-void wait_tcp_ready(func_args* args)
-{
-#ifdef SINGLE_THREADED
-    (void)args;
-#elif defined(_POSIX_THREADS) && !defined(__MINGW32__)
-    PTHREAD_CHECK_RET(pthread_mutex_lock(&args->signal->mutex));
-
-    if (!args->signal->ready)
-        PTHREAD_CHECK_RET(pthread_cond_wait(&args->signal->cond,
-                                            &args->signal->mutex));
-    args->signal->ready = 0; /* reset */
-
-    PTHREAD_CHECK_RET(pthread_mutex_unlock(&args->signal->mutex));
-#else
-    (void)args;
-#endif
-}
-
-
-void start_thread(THREAD_FUNC fun, func_args* args, THREAD_TYPE* thread)
-{
-#ifdef SINGLE_THREADED
-    (void)fun;
-    (void)args;
-    (void)thread;
-#elif defined(_POSIX_THREADS) && !defined(__MINGW32__)
-    PTHREAD_CHECK_RET(pthread_create(thread, 0, fun, args));
-    return;
-#elif defined (WOLFSSL_TIRTOS)
-    /* Initialize the defaults and set the parameters. */
-    Task_Params taskParams;
-    Task_Params_init(&taskParams);
-    taskParams.arg0 = (UArg)args;
-    taskParams.stackSize = 65535;
-    *thread = Task_create((Task_FuncPtr)fun, &taskParams, NULL);
-    if (*thread == NULL) {
-        fprintf(stderr, "Failed to create new Task\n");
-    }
-    Task_yield();
-#else
-    *thread = (THREAD_TYPE)_beginthreadex(0, 0, fun, args, 0, 0);
-#endif
-}
-
-
-void join_thread(THREAD_TYPE thread)
-{
-#ifdef SINGLE_THREADED
-    (void)thread;
-#elif defined(_POSIX_THREADS) && !defined(__MINGW32__)
-    PTHREAD_CHECK_RET(pthread_join(thread, 0));
-#elif defined (WOLFSSL_TIRTOS)
-    while(1) {
-        if (Task_getMode(thread) == Task_Mode_TERMINATED) {
-            Task_sleep(5);
-            break;
-        }
-        Task_yield();
-    }
-#else
-    int res = WaitForSingleObject((HANDLE)thread, INFINITE);
-    assert(res == WAIT_OBJECT_0);
-    res = CloseHandle((HANDLE)thread);
-    assert(res);
-    (void)res; /* Suppress un-used variable warning */
-#endif
-}
-
-

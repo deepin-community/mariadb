@@ -46,6 +46,7 @@ using namespace joblist;
 
 namespace execplan
 {
+
 void getAggCols(execplan::ParseTree* n, void* obj)
 {
   vector<AggregateColumn*>* list = reinterpret_cast<vector<AggregateColumn*>*>(obj);
@@ -149,6 +150,17 @@ const string AggregateColumn::toString() const
     output << *fConstCol;
 
   return output.str();
+}
+
+string AggregateColumn::toCppCode(IncludeSet& includes) const
+{
+  includes.insert("aggregatecolumn.h");
+  stringstream ss;
+  auto fContent = fData.substr(fFunctionName.size() + 1, fData.size() - fFunctionName.size() - 2);
+
+  ss << "AggregateColumn(" << std::quoted(fFunctionName) << ", " << std::quoted(fContent) << ", " << sessionID() << ")";
+
+  return ss.str();
 }
 
 ostream& operator<<(ostream& output, const AggregateColumn& rhs)
@@ -406,14 +418,11 @@ void AggregateColumn::evaluate(Row& row, bool& isNull)
         default:
         {
           auto const str = row.getConstString(fInputIndex);
-          if (str.eq(utils::ConstString(CPNULLSTRMARK)))
-            isNull = true;
-          else
-            fResult.strVal = str.toString();
+          fResult.strVal.dropString();
+          if (!str.isNull())
+            fResult.strVal.assign((const uint8_t*)str.str(), str.length());
 
-          // stringColVal is padded with '\0' to colWidth so can't use str.length()
-          if (strlen(fResult.strVal.c_str()) == 0)
-            isNull = true;
+          isNull = isNull || fResult.strVal.isNull();
 
           break;
         }
@@ -423,6 +432,8 @@ void AggregateColumn::evaluate(Row& row, bool& isNull)
         fResult.intVal = uint64ToStr(fResult.origIntVal);
       else
         fResult.intVal = atoll((char*)&fResult.origIntVal);
+
+      fResult.uintVal = fResult.intVal;
 
       break;
 

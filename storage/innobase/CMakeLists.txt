@@ -1,6 +1,6 @@
 
 # Copyright (c) 2006, 2017, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2014, 2022, MariaDB Corporation.
+# Copyright (c) 2014, 2023, MariaDB Corporation.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -48,6 +48,13 @@ IF(UNIX)
     IF(HAVE_LIBNUMA)
       LINK_LIBRARIES(numa)
     ENDIF()
+    IF(CMAKE_SIZEOF_VOID_P EQUAL 8)
+      IF(CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch|AARCH|p(ower)?pc|x86_|amd|loongarch|riscv)64")
+        OPTION(WITH_INNODB_PMEM "Support memory-mapped InnoDB redo log" ON)
+      ELSE() # Disable by default on ISA that are not covered by our CI
+        OPTION(WITH_INNODB_PMEM "Support memory-mapped InnoDB redo log" OFF)
+      ENDIF()
+    ENDIF()
   ENDIF()
 ENDIF()
 
@@ -71,7 +78,7 @@ ADD_FEATURE_INFO(INNODB_ROOT_GUESS WITH_INNODB_ROOT_GUESS
 
 OPTION(WITH_INNODB_EXTRA_DEBUG "Enable extra InnoDB debug checks" OFF)
 IF(WITH_INNODB_EXTRA_DEBUG)
-  ADD_DEFINITIONS(-DUNIV_ZIP_DEBUG)
+  ADD_DEFINITIONS(-DUNIV_ZIP_DEBUG -DLOG_LATCH_DEBUG)
 ENDIF()
 ADD_FEATURE_INFO(INNODB_EXTRA_DEBUG WITH_INNODB_EXTRA_DEBUG "Extra InnoDB debug checks")
 
@@ -132,8 +139,6 @@ SET(INNOBASE_SOURCES
 	btr/btr0cur.cc
 	btr/btr0pcur.cc
 	btr/btr0sea.cc
-	btr/btr0defragment.cc
-	buf/buf0block_hint.cc
 	buf/buf0buddy.cc
 	buf/buf0buf.cc
 	buf/buf0dblwr.cc
@@ -151,7 +156,6 @@ SET(INNOBASE_SOURCES
 	dict/dict0mem.cc
 	dict/dict0stats.cc
 	dict/dict0stats_bg.cc
-	dict/dict0defrag_bg.cc
 	dict/drop.cc
 	eval/eval0eval.cc
 	eval/eval0proc.cc
@@ -186,11 +190,9 @@ SET(INNOBASE_SOURCES
 	include/btr0bulk.h
 	include/btr0cur.h
 	include/btr0cur.inl
-	include/btr0defragment.h
 	include/btr0pcur.h
 	include/btr0pcur.inl
 	include/btr0sea.h
-	include/btr0sea.inl
 	include/btr0types.h
 	include/buf0buddy.h
 	include/buf0buf.h
@@ -211,7 +213,6 @@ SET(INNOBASE_SOURCES
 	include/dict0boot.h
 	include/dict0crea.h
 	include/dict0crea.inl
-	include/dict0defrag_bg.h
 	include/dict0dict.h
 	include/dict0dict.inl
 	include/dict0load.h
@@ -257,14 +258,11 @@ SET(INNOBASE_SOURCES
 	include/gis0rtree.inl
 	include/gis0type.h
 	include/ha_prototypes.h
-	include/ha0ha.h
-	include/ha0ha.inl
 	include/ha0storage.h
 	include/ha0storage.inl
 	include/handler0alter.h
 	include/hash0hash.h
 	include/ibuf0ibuf.h
-	include/ibuf0ibuf.inl
 	include/lock0iter.h
 	include/lock0lock.h
 	include/lock0lock.inl
@@ -360,11 +358,9 @@ SET(INNOBASE_SOURCES
 	include/ut0pool.h
 	include/ut0rbt.h
 	include/ut0rnd.h
-	include/ut0rnd.inl
 	include/ut0sort.h
 	include/ut0stage.h
 	include/ut0ut.h
-	include/ut0ut.inl
 	include/ut0vec.h
 	include/ut0vec.inl
 	include/ut0wqueue.h
@@ -428,26 +424,16 @@ SET(INNOBASE_SOURCES
 	ut/ut0vec.cc
 	ut/ut0wqueue.cc)
 
-OPTION(WITH_PMEM "Support redo log in persistent memory" OFF)
-FIND_PACKAGE(PMEM)
-IF(PMEM_FOUND)
-  INCLUDE_DIRECTORIES(${PMEM_INCLUDES})
-  ADD_COMPILE_FLAGS(log/log0log.cc log/log0recv.cc
-    buf/buf0flu.cc mtr/mtr0mtr.cc trx/trx0trx.cc srv/srv0start.cc
-    COMPILE_FLAGS "-DHAVE_PMEM")
-  SET(PMEM_LIBRARY ${PMEM_LIBRARIES})
-ELSE()
-  IF(WITH_PMEM)
-    MESSAGE(FATAL_ERROR "WITH_PMEM=ON cannot be satisfied")
-  ENDIF()
+IF(WITH_INNODB_PMEM)
+  ADD_DEFINITIONS(-DHAVE_PMEM)
+  SET(INNOBASE_SOURCES ${INNOBASE_SOURCES} include/cache.h sync/cache.cc)
 ENDIF()
 
 MYSQL_ADD_PLUGIN(innobase ${INNOBASE_SOURCES} STORAGE_ENGINE
   MODULE_OUTPUT_NAME ha_innodb
   DEFAULT RECOMPILE_FOR_EMBEDDED
   LINK_LIBRARIES
-	${ZLIB_LIBRARY}
-	${PMEM_LIBRARY}
+	${ZLIB_LIBRARIES}
 	${NUMA_LIBRARY}
 	${LIBSYSTEMD}
 	${LINKER_SCRIPT})
@@ -499,6 +485,14 @@ IF(MSVC)
   # silence "switch statement contains 'default' but no 'case' label
   # on generated file.
   TARGET_COMPILE_OPTIONS(innobase PRIVATE "/wd4065")
+ENDIF()
+
+OPTION(INNODB_ENABLE_XAP_UNLOCK_UNMODIFIED_FOR_PRIMARY "Enable innodb_enable_xap_unlock_unmodified_for_primary_debug system variable even for release build" OFF)
+IF(INNODB_ENABLE_XAP_UNLOCK_UNMODIFIED_FOR_PRIMARY)
+  ADD_COMPILE_FLAGS(
+     lock/lock0lock.cc
+     handler/ha_innodb.cc
+     COMPILE_FLAGS "-DINNODB_ENABLE_XAP_UNLOCK_UNMODIFIED_FOR_PRIMARY")
 ENDIF()
 
 IF(NOT (PLUGIN_INNOBASE STREQUAL DYNAMIC))

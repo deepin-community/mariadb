@@ -45,6 +45,8 @@ ELSE()
   IF(DEB)
     SET(su_user "#su mysql mysql")
   ENDIF()
+  get_filename_component(MYSQL_UNIX_DIR ${MYSQL_UNIX_ADDR} DIRECTORY)
+  SET(mysqlunixdir ${MYSQL_UNIX_DIR})
 ENDIF()
 
 # XXX: shouldn't we just have variables for all this stuff and centralise
@@ -212,6 +214,9 @@ IF(UNIX AND NOT WITHOUT_SERVER)
 
   IF((HAVE_SYSTEMD OR INSTALL_SYSTEMD_TMPUSERS) AND INSTALL_SYSTEMD_TMPFILESDIR)
     get_filename_component(MYSQL_UNIX_DIR ${MYSQL_UNIX_ADDR} DIRECTORY)
+    IF(MYSQL_DATADIR STREQUAL MYSQL_UNIX_DIR)
+      SET(DISABLE_TMP "#")
+    ENDIF()
     CONFIGURE_FILE(tmpfiles.conf.in
             ${CMAKE_CURRENT_BINARY_DIR}/tmpfiles.conf @ONLY)
     INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/tmpfiles.conf

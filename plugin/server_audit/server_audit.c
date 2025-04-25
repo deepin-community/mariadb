@@ -27,10 +27,10 @@
 #define DO_SYSLOG
 #include <syslog.h>
 static const char out_type_desc[]= "Desired output type. Possible values - 'syslog', 'file'"
-                                   " or 'null' as no output.";
+                                   " or 'null' as no output";
 #else
 static const char out_type_desc[]= "Desired output type. Possible values - 'file'"
-                                   " or 'null' as no output.";
+                                   " or 'null' as no output";
 #define syslog(PRIORITY, FORMAT, INFO, MESSAGE_LEN, MESSAGE) do {}while(0)
 static void closelog() {}
 #define openlog(IDENT, LOG_NOWAIT, LOG_USER)  do {}while(0)
@@ -373,10 +373,10 @@ static void rotate_log(MYSQL_THD thd, struct st_mysql_sys_var *var,
                        void *var_ptr, const void *save);
 
 static MYSQL_SYSVAR_STR(incl_users, incl_users, PLUGIN_VAR_RQCMDARG,
-       "Comma separated list of users to monitor.",
+       "Comma separated list of users to monitor",
        check_incl_users, update_incl_users, NULL);
 static MYSQL_SYSVAR_STR(excl_users, excl_users, PLUGIN_VAR_RQCMDARG,
-       "Comma separated list of users to exclude from auditing.",
+       "Comma separated list of users to exclude from auditing",
        check_excl_users, update_excl_users, NULL);
 /* bits in the event filter. */
 #define EVENT_CONNECT 1
@@ -393,13 +393,10 @@ static const char *event_names[]=
   "CONNECT", "QUERY", "TABLE", "QUERY_DDL", "QUERY_DML", "QUERY_DCL",
   "QUERY_DML_NO_SELECT", NULL
 };
-static TYPELIB events_typelib=
-{
-  array_elements(event_names) - 1, "", event_names, NULL
-};
+static TYPELIB events_typelib= CREATE_TYPELIB_FOR(event_names);
 static MYSQL_SYSVAR_SET(events, events, PLUGIN_VAR_RQCMDARG,
        "Specifies the set of events to monitor. Can be CONNECT, QUERY, TABLE,"
-           " QUERY_DDL, QUERY_DML, QUERY_DML_NO_SELECT, QUERY_DCL.",
+           " QUERY_DDL, QUERY_DML, QUERY_DML_NO_SELECT, QUERY_DCL",
        NULL, NULL, 0, &events_typelib);
 #ifdef DO_SYSLOG
 #define OUTPUT_SYSLOG 0
@@ -415,39 +412,35 @@ static const char *output_type_names[]= {
   "syslog",
 #endif
   "file", 0 };
-static TYPELIB output_typelib=
-{
-    array_elements(output_type_names) - 1, "output_typelib",
-    output_type_names, NULL
-};
+static TYPELIB output_typelib=CREATE_TYPELIB_FOR(output_type_names);
 static MYSQL_SYSVAR_ENUM(output_type, output_type, PLUGIN_VAR_RQCMDARG,
        out_type_desc,
        0, update_output_type, OUTPUT_FILE,
        &output_typelib);
 static MYSQL_SYSVAR_STR(file_path, file_path, PLUGIN_VAR_RQCMDARG,
-       "Path to the log file.", NULL, update_file_path, default_file_name);
+       "Path to the log file", NULL, update_file_path, default_file_name);
 static MYSQL_SYSVAR_ULONGLONG(file_rotate_size, file_rotate_size,
-       PLUGIN_VAR_RQCMDARG, "Maximum size of the log to start the rotation.",
+       PLUGIN_VAR_RQCMDARG, "Maximum size of the log to start the rotation",
        NULL, update_file_rotate_size,
        1000000, 100, ((long long) 0x7FFFFFFFFFFFFFFFLL), 1);
 static MYSQL_SYSVAR_UINT(file_rotations, rotations,
-       PLUGIN_VAR_RQCMDARG, "Number of rotations before log is removed.",
+       PLUGIN_VAR_RQCMDARG, "Number of rotations before log is removed",
        NULL, update_file_rotations, 9, 0, 999, 1);
 static MYSQL_SYSVAR_BOOL(file_rotate_now, rotate, PLUGIN_VAR_OPCMDARG,
-       "Force log rotation now.", NULL, rotate_log, FALSE);
+       "Force log rotation now", NULL, rotate_log, FALSE);
 static MYSQL_SYSVAR_BOOL(logging, logging,
-       PLUGIN_VAR_OPCMDARG, "Turn on/off the logging.", NULL,
+       PLUGIN_VAR_OPCMDARG, "Turn on/off the logging", NULL,
        update_logging, 0);
 static MYSQL_SYSVAR_UINT(mode, mode,
-       PLUGIN_VAR_OPCMDARG, "Auditing mode.", NULL, update_mode, 0, 0, 1, 1);
+       PLUGIN_VAR_OPCMDARG, "Auditing mode", NULL, update_mode, 0, 0, 1, 1);
 static MYSQL_SYSVAR_STR(syslog_ident, syslog_ident, PLUGIN_VAR_RQCMDARG,
-       "The SYSLOG identifier - the beginning of each SYSLOG record.",
+       "The SYSLOG identifier - the beginning of each SYSLOG record",
        NULL, update_syslog_ident, syslog_ident_buffer);
 static MYSQL_SYSVAR_STR(syslog_info, syslog_info,
        PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_MEMALLOC,
-       "The <info> string to be added to the SYSLOG record.", NULL, NULL, "");
+       "The <info> string to be added to the SYSLOG record", NULL, NULL, "");
 static MYSQL_SYSVAR_UINT(query_log_limit, query_log_limit,
-       PLUGIN_VAR_OPCMDARG, "Limit on the length of the query string in a record.",
+       PLUGIN_VAR_OPCMDARG, "Limit on the length of the query string in a record",
        NULL, NULL, 1024, 0, 0x7FFFFFFF, 1);
 
 char locinfo_ini_value[sizeof(struct connection_info)+4];
@@ -487,14 +480,10 @@ static unsigned int syslog_facility_codes[]=
   LOG_LOCAL4, LOG_LOCAL5, LOG_LOCAL6, LOG_LOCAL7,
 };
 #endif
-static TYPELIB syslog_facility_typelib=
-{
-    array_elements(syslog_facility_names) - 1, "syslog_facility_typelib",
-    syslog_facility_names, NULL
-};
+static TYPELIB syslog_facility_typelib=CREATE_TYPELIB_FOR(syslog_facility_names);
 static MYSQL_SYSVAR_ENUM(syslog_facility, syslog_facility, PLUGIN_VAR_RQCMDARG,
        "The 'facility' parameter of the SYSLOG record."
-       " The default is LOG_USER.", 0, update_syslog_facility, 0/*LOG_USER*/,
+       " The default is LOG_USER", 0, update_syslog_facility, 0/*LOG_USER*/,
        &syslog_facility_typelib);
 
 static const char *syslog_priority_names[]=
@@ -512,14 +501,10 @@ static unsigned int syslog_priority_codes[]=
 };
 #endif
 
-static TYPELIB syslog_priority_typelib=
-{
-    array_elements(syslog_priority_names) - 1, "syslog_priority_typelib",
-    syslog_priority_names, NULL
-};
+static TYPELIB syslog_priority_typelib=CREATE_TYPELIB_FOR(syslog_priority_names);
 static MYSQL_SYSVAR_ENUM(syslog_priority, syslog_priority, PLUGIN_VAR_RQCMDARG,
        "The 'priority' parameter of the SYSLOG record."
-       " The default is LOG_INFO.", 0, update_syslog_priority, 6/*LOG_INFO*/,
+       " The default is LOG_INFO", 0, update_syslog_priority, 6/*LOG_INFO*/,
        &syslog_priority_typelib);
 
 
@@ -770,7 +755,7 @@ static int user_coll_fill(struct user_coll *c, char *users,
       if (cmp_user && take_over_cmp)
       {
         ADD_ATOMIC(internal_stop_logging, 1);
-        CLIENT_ERROR(1, "User '%.*b' was removed from the"
+        CLIENT_ERROR(1, "User '%.*sB' was removed from the"
             " server_audit_excl_users.",
             MYF(ME_WARNING), (int) cmp_length, users);
         ADD_ATOMIC(internal_stop_logging, -1);
@@ -780,7 +765,7 @@ static int user_coll_fill(struct user_coll *c, char *users,
       else if (cmp_user)
       {
         ADD_ATOMIC(internal_stop_logging, 1);
-        CLIENT_ERROR(1, "User '%.*b' is in the server_audit_incl_users, "
+        CLIENT_ERROR(1, "User '%.*sB' is in the server_audit_incl_users, "
             "so wasn't added.", MYF(ME_WARNING), (int) cmp_length, users);
         ADD_ATOMIC(internal_stop_logging, -1);
         remove_user(users);
@@ -826,6 +811,7 @@ enum sa_keywords
   SQLCOM_TRUNCATE,
   SQLCOM_QUERY_ADMIN,
   SQLCOM_DCL,
+  SQLCOM_FOUND=-1,
 };
 
 struct sa_keyword
@@ -837,30 +823,87 @@ struct sa_keyword
 };
 
 
-struct sa_keyword xml_word=   {3, "XML", 0, SQLCOM_NOTHING};
-struct sa_keyword user_word=   {4, "USER", 0, SQLCOM_NOTHING};
-struct sa_keyword data_word=   {4, "DATA", 0, SQLCOM_NOTHING};
-struct sa_keyword server_word= {6, "SERVER", 0, SQLCOM_NOTHING};
-struct sa_keyword master_word= {6, "MASTER", 0, SQLCOM_NOTHING};
-struct sa_keyword password_word= {8, "PASSWORD", 0, SQLCOM_NOTHING};
-struct sa_keyword function_word= {8, "FUNCTION", 0, SQLCOM_NOTHING};
-struct sa_keyword statement_word= {9, "STATEMENT", 0, SQLCOM_NOTHING};
-struct sa_keyword procedure_word= {9, "PROCEDURE", 0, SQLCOM_NOTHING};
+struct sa_keyword xml_word[]=
+{
+  {3, "XML", 0, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
+struct sa_keyword user_word[]=
+{
+  {4, "USER", 0, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
+struct sa_keyword data_word[]=
+{
+  {4, "DATA", 0, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
+struct sa_keyword server_word[]=
+{
+  {6, "SERVER", 0, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
+struct sa_keyword master_word[]=
+{
+  {6, "MASTER", 0, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
+struct sa_keyword password_word[]=
+{
+  {8, "PASSWORD", 0, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
+struct sa_keyword function_word[]=
+{
+  {8, "FUNCTION", 0, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
+struct sa_keyword statement_word[]=
+{
+  {9, "STATEMENT", 0, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
+struct sa_keyword procedure_word[]=
+{
+  {9, "PROCEDURE", 0, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
+struct sa_keyword replace_user_word[]=
+{
+  {7, "REPLACE", user_word, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
+struct sa_keyword or_replace_user_word[]=
+{
+  {2, "OR", replace_user_word, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
+struct sa_keyword replace_server_word[]=
+{
+  {7, "REPLACE", server_word, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
+struct sa_keyword or_replace_server_word[]=
+{
+  {2, "OR", replace_server_word, SQLCOM_FOUND},
+  {0, NULL, 0, SQLCOM_NOTHING}
+};
 
 
 struct sa_keyword keywords_to_skip[]=
 {
-  {3, "SET", &statement_word, SQLCOM_QUERY_ADMIN},
-  {0, NULL, 0, SQLCOM_DDL}
+  {3, "SET", statement_word, SQLCOM_QUERY_ADMIN},
+  {0, NULL, 0, SQLCOM_NOTHING}
 };
 
 
 struct sa_keyword not_ddl_keywords[]=
 {
-  {4, "DROP", &user_word, SQLCOM_DCL},
-  {6, "CREATE", &user_word, SQLCOM_DCL},
-  {6, "RENAME", &user_word, SQLCOM_DCL},
-  {0, NULL, 0, SQLCOM_DDL}
+  {4, "DROP", user_word, SQLCOM_DCL},
+  {6, "CREATE", user_word, SQLCOM_DCL},
+  {6, "CREATE", or_replace_user_word, SQLCOM_DCL},
+  {6, "RENAME", user_word, SQLCOM_DCL},
+  {0, NULL, 0, SQLCOM_NOTHING}
 };
 
 
@@ -871,7 +914,7 @@ struct sa_keyword ddl_keywords[]=
   {6, "CREATE", 0, SQLCOM_DDL},
   {6, "RENAME", 0, SQLCOM_DDL},
   {8, "TRUNCATE", 0, SQLCOM_DDL},
-  {0, NULL, 0, SQLCOM_DDL}
+  {0, NULL, 0, SQLCOM_NOTHING}
 };
 
 
@@ -879,15 +922,15 @@ struct sa_keyword dml_keywords[]=
 {
   {2, "DO", 0, SQLCOM_DML},
   {4, "CALL", 0, SQLCOM_DML},
-  {4, "LOAD", &data_word, SQLCOM_DML},
-  {4, "LOAD", &xml_word, SQLCOM_DML},
+  {4, "LOAD", data_word, SQLCOM_DML},
+  {4, "LOAD", xml_word, SQLCOM_DML},
   {6, "DELETE", 0, SQLCOM_DML},
   {6, "INSERT", 0, SQLCOM_DML},
   {6, "SELECT", 0, SQLCOM_DML},
   {6, "UPDATE", 0, SQLCOM_DML},
   {7, "HANDLER", 0, SQLCOM_DML},
   {7, "REPLACE", 0, SQLCOM_DML},
-  {0, NULL, 0, SQLCOM_DML}
+  {0, NULL, 0, SQLCOM_NOTHING}
 };
 
 
@@ -895,38 +938,41 @@ struct sa_keyword dml_no_select_keywords[]=
 {
   {2, "DO", 0, SQLCOM_DML},
   {4, "CALL", 0, SQLCOM_DML},
-  {4, "LOAD", &data_word, SQLCOM_DML},
-  {4, "LOAD", &xml_word, SQLCOM_DML},
+  {4, "LOAD", data_word, SQLCOM_DML},
+  {4, "LOAD", xml_word, SQLCOM_DML},
   {6, "DELETE", 0, SQLCOM_DML},
   {6, "INSERT", 0, SQLCOM_DML},
   {6, "UPDATE", 0, SQLCOM_DML},
   {7, "HANDLER", 0, SQLCOM_DML},
   {7, "REPLACE", 0, SQLCOM_DML},
-  {0, NULL, 0, SQLCOM_DML}
+  {0, NULL, 0, SQLCOM_NOTHING}
 };
 
 
 struct sa_keyword dcl_keywords[]=
 {
-  {6, "CREATE", &user_word, SQLCOM_DCL},
-  {4, "DROP", &user_word, SQLCOM_DCL},
-  {6, "RENAME", &user_word, SQLCOM_DCL},
+  {6, "CREATE", user_word, SQLCOM_DCL},
+  {6, "CREATE", or_replace_user_word, SQLCOM_DCL},
+  {4, "DROP", user_word, SQLCOM_DCL},
+  {6, "RENAME", user_word, SQLCOM_DCL},
   {5, "GRANT", 0, SQLCOM_DCL},
   {6, "REVOKE", 0, SQLCOM_DCL},
-  {3, "SET", &password_word, SQLCOM_DCL},
-  {0, NULL, 0, SQLCOM_DDL}
+  {3, "SET", password_word, SQLCOM_DCL},
+  {0, NULL, 0, SQLCOM_NOTHING}
 };
 
 
 struct sa_keyword passwd_keywords[]=
 {
-  {3, "SET", &password_word, SQLCOM_SET_OPTION},
-  {5, "ALTER", &server_word, SQLCOM_ALTER_SERVER},
-  {5, "ALTER", &user_word, SQLCOM_ALTER_USER},
+  {3, "SET", password_word, SQLCOM_SET_OPTION},
+  {5, "ALTER", server_word, SQLCOM_ALTER_SERVER},
+  {5, "ALTER", user_word, SQLCOM_ALTER_USER},
   {5, "GRANT", 0, SQLCOM_GRANT},
-  {6, "CREATE", &user_word, SQLCOM_CREATE_USER},
-  {6, "CREATE", &server_word, SQLCOM_CREATE_SERVER},
-  {6, "CHANGE", &master_word, SQLCOM_CHANGE_MASTER},
+  {6, "CREATE", user_word, SQLCOM_CREATE_USER},
+  {6, "CREATE", or_replace_user_word, SQLCOM_CREATE_USER},
+  {6, "CREATE", server_word, SQLCOM_CREATE_SERVER},
+  {6, "CREATE", or_replace_server_word, SQLCOM_CREATE_SERVER},
+  {6, "CHANGE", master_word, SQLCOM_CHANGE_MASTER},
   {0, NULL, 0, SQLCOM_NOTHING}
 };
 
@@ -1415,7 +1461,7 @@ static size_t log_header(char *message, size_t message_len,
   if (output_type == OUTPUT_SYSLOG)
     return my_snprintf(message, message_len,
         "%.*s,%.*s,%.*s,%d,%lld,%s",
-        (unsigned int) serverhost_len, serverhost,
+        (int) serverhost_len, serverhost,
         username_len, username,
         host_len, host,
         connection_id, query_id, operation);
@@ -1425,7 +1471,7 @@ static size_t log_header(char *message, size_t message_len,
       "%04d%02d%02d %02d:%02d:%02d,%.*s,%.*s,%.*s,%d,%lld,%s",
       tm_time.tm_year+1900, tm_time.tm_mon+1, tm_time.tm_mday,
       tm_time.tm_hour, tm_time.tm_min, tm_time.tm_sec,
-      serverhost_len, serverhost,
+      (int) serverhost_len, serverhost,
       username_len, username,
       host_len, host,
       connection_id, query_id, operation);
@@ -1494,7 +1540,7 @@ static int log_connection_event(const struct mysql_event_connection *event,
                     event->ip, event->ip_length,
                     event->thread_id, 0, type);
   csize+= my_snprintf(message+csize, sizeof(message) - 1 - csize,
-    ",%.*s,,%d", event->database.length, event->database.str, event->status);
+    ",%.*s,,%d", (int) event->database.length, event->database.str, event->status);
   message[csize]= '\n';
   return write_log(message, csize + 1, 1);
 }
@@ -1529,12 +1575,33 @@ static size_t escape_string(const char *str, unsigned int len,
   return result - res_start;
 }
 
+/*
+  Replace "password" with "*****" in
+
+  <word1> <maybe spaces> <word2> <maybe spaces> "password"
+
+  if <word2> is 0
+
+  <word1> <maybe spaces> "password"
+
+  or
+
+  <word0> <maybe spaces> <chr0> <maybe any characters> "password"
+
+  if <chr0> is 0
+
+  <word0> <maybe any characters> "password"
+
+  NOTE: there can be " or ' around the password, the words are case
+  insensitive.
+*/
 
 static size_t escape_string_hide_passwords(const char *str, unsigned int len,
     char *result, size_t result_len,
     const char *word1, size_t word1_len,
     const char *word2, size_t word2_len,
-    int next_text_string)
+    const char *word0, size_t word0_len,
+    char chr0)
 {
   const char *res_start= result;
   const char *res_end= result + result_len - 2;
@@ -1542,18 +1609,32 @@ static size_t escape_string_hide_passwords(const char *str, unsigned int len,
 
   while (len)
   {
-    if (len > word1_len + 1 && strncasecmp(str, word1, word1_len) == 0)
+    int word1_found= (word1 && len > word1_len + 1 &&
+                      strncasecmp(str, word1, word1_len) == 0);
+    int word0_found= (word0 && len > word0_len + 1 &&
+                      strncasecmp(str, word0, word0_len) == 0);
+    if (word1_found || word0_found)
     {
-      const char *next_s= str + word1_len;
+      const char *next_s;
       size_t c;
 
-      if (next_text_string)
+      if (word0_found)
       {
+        next_s= str + word0_len;
+        if (chr0)
+        {
+          SKIP_SPACES(next_s);
+          if (len < (size_t)(next_s - str) + 1 + 1 ||
+              next_s[0] != chr0)
+            goto no_password;
+          next_s++;
+        }
         while (*next_s && *next_s != '\'' && *next_s != '"')
           ++next_s;
       }
       else
       {
+        next_s= str + word1_len;
         if (word2)
         {
           SKIP_SPACES(next_s);
@@ -1686,6 +1767,8 @@ static int filter_query_type(const char *query, struct sa_keyword *kwd)
   char fword[MAX_KEYWORD + 1], nword[MAX_KEYWORD + 1];
   int len, nlen= 0;
   const struct sa_keyword *l_keywords;
+  if (!query)
+    return SQLCOM_NOTHING;
 
   while (*query && (is_space(*query) || *query == '(' || *query == '/'))
   {
@@ -1714,7 +1797,7 @@ static int filter_query_type(const char *query, struct sa_keyword *kwd)
     query++;
   }
 
-  qwe_in_list= 0;
+  qwe_in_list= SQLCOM_NOTHING;
   if (!(len= get_next_word(query, fword)))
     goto not_in_list;
   query+= len+1;
@@ -1732,8 +1815,7 @@ static int filter_query_type(const char *query, struct sa_keyword *kwd)
             query++;
           nlen= get_next_word(query, nword);
         }
-        if (l_keywords->next->length != nlen ||
-            strncmp(l_keywords->next->wd, nword, nlen) != 0)
+        if (filter_query_type(query, l_keywords->next) == SQLCOM_NOTHING)
           goto do_loop;
       }
 
@@ -1748,6 +1830,25 @@ not_in_list:
   return qwe_in_list;
 }
 
+static const char *skip_set_statement(const char *query)
+{
+    if (filter_query_type(query, keywords_to_skip))
+    {
+      char fword[MAX_KEYWORD + 1];
+      int len;
+      do
+      {
+        len= get_next_word(query, fword);
+        query+= len ? len : 1;
+        if (len == 3 && strncmp(fword, "FOR", 3) == 0)
+          break;
+      } while (*query);
+
+      if (*query == 0)
+        return 0;
+    }
+    return query;
+}
 
 static int log_statement_ex(const struct connection_info *cn,
                             time_t ev_time, unsigned long thd_id,
@@ -1791,21 +1892,8 @@ static int log_statement_ex(const struct connection_info *cn,
   {
     const char *orig_query= query;
 
-    if (filter_query_type(query, keywords_to_skip))
-    {
-      char fword[MAX_KEYWORD + 1];
-      int len;
-      do
-      {
-        len= get_next_word(query, fword);
-        query+= len ? len : 1;
-        if (len == 3 && strncmp(fword, "FOR", 3) == 0)
-          break;
-      } while (*query);
-
-      if (*query == 0)
-        return 0;
-    }
+    if ((query= skip_set_statement(query)) == SQLCOM_NOTHING)
+      return 0;
 
     if (events & EVENT_QUERY_DDL)
     {
@@ -1861,30 +1949,34 @@ do_log_query:
   if (query_log_limit > 0 && uh_buffer_size > query_log_limit+2)
     uh_buffer_size= query_log_limit+2;
 
-  switch (filter_query_type(query, passwd_keywords))
+  switch (filter_query_type(skip_set_statement(query), passwd_keywords))
   {
     case SQLCOM_GRANT:
     case SQLCOM_CREATE_USER:
     case SQLCOM_ALTER_USER:
       csize+= escape_string_hide_passwords(query, query_len,
                                            uh_buffer, uh_buffer_size,
-                                           "IDENTIFIED", 10, "BY", 2, 0);
+                                           "IDENTIFIED", 10, "BY", 2,
+                                           "PASSWORD", 8, '(');
       break;
     case SQLCOM_CHANGE_MASTER:
       csize+= escape_string_hide_passwords(query, query_len,
                                            uh_buffer, uh_buffer_size,
-                                           "MASTER_PASSWORD", 15, "=", 1, 0);
+                                           "MASTER_PASSWORD", 15, "=", 1,
+                                           0, 0, 0);
       break;
     case SQLCOM_CREATE_SERVER:
     case SQLCOM_ALTER_SERVER:
       csize+= escape_string_hide_passwords(query, query_len,
                                            uh_buffer, uh_buffer_size,
-                                           "PASSWORD", 8, NULL, 0, 0);
+                                           "PASSWORD", 8, NULL, 0,
+                                           0, 0, 0);
       break;
     case SQLCOM_SET_OPTION:
       csize+= escape_string_hide_passwords(query, query_len,
                                            uh_buffer, uh_buffer_size,
-                                           "=", 1, NULL, 0, 1);
+                                           NULL, 0, NULL, 0,
+                                           "=", 1, 0);
       break;
     default:
       csize+= escape_string(query, query_len,
@@ -1926,9 +2018,9 @@ static int log_table(const struct connection_info *cn,
                     event->host, SAFE_STRLEN_UI(event->host),
                     event->ip, SAFE_STRLEN_UI(event->ip),
                     event->thread_id, cn->query_id, type);
-  csize+= my_snprintf(message+csize, sizeof(message) - 1 - csize,
-            ",%.*s,%.*s,",event->database.length, event->database.str,
-                          event->table.length, event->table.str);
+  csize+= my_snprintf(message+csize, sizeof(message) - 1 - csize, ",%.*s,%.*s,",
+                     (int) event->database.length, event->database.str,
+                     (int) event->table.length, event->table.str);
   message[csize]= '\n';
   return write_log(message, csize + 1, 1);
 }
@@ -1949,10 +2041,11 @@ static int log_rename(const struct connection_info *cn,
                     event->ip, SAFE_STRLEN_UI(event->ip),
                     event->thread_id, cn->query_id, "RENAME");
   csize+= my_snprintf(message+csize, sizeof(message) - 1 - csize,
-            ",%.*s,%.*s|%.*s.%.*s,",event->database.length, event->database.str,
-                         event->table.length, event->table.str,
-                         event->new_database.length, event->new_database.str,
-                         event->new_table.length, event->new_table.str);
+                      ",%.*s,%.*s|%.*s.%.*s,",
+                      (int) event->database.length, event->database.str,
+                      (int) event->table.length, event->table.str,
+                      (int) event->new_database.length, event->new_database.str,
+                      (int) event->new_table.length, event->new_table.str);
   message[csize]= '\n';
   return write_log(message, csize + 1, 1);
 }
@@ -3127,4 +3220,3 @@ exit:
   return;
 #endif
 }
-

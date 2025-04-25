@@ -1,6 +1,6 @@
 /* caam_qnx.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -47,7 +47,7 @@
 #define CAAM_ADDRESS uintptr_t
 #define Success 1
 #define Failure 0
-#define INTERRUPT_Panic()
+#define INTERRUPT_Panic() do {} while (0)
 #define MemoryMapMayNotBeEmpty -1
 #define CAAM_WAITING -2
 #define NoActivityReady -1

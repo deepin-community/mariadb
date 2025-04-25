@@ -279,8 +279,8 @@ typedef struct st_partition_part_key_multi_range_hld
 } PARTITION_PART_KEY_MULTI_RANGE_HLD;
 
 
-extern "C" int cmp_key_part_id(void *key_p, uchar *ref1, uchar *ref2);
-extern "C" int cmp_key_rowid_part_id(void *ptr, uchar *ref1, uchar *ref2);
+extern "C" int cmp_key_part_id(void *key_p, const void *ref1, const void *ref2);
+extern "C" int cmp_key_rowid_part_id(void *ptr, const void *ref1, const void *ref2);
 
 class ha_partition final :public handler
 {
@@ -399,6 +399,7 @@ private:
   */
   bool m_innodb;                        // Are all underlying handlers
                                         // InnoDB
+  bool m_myisammrg;                     // Are any of the handlers of type MERGE
   /*
     When calling extra(HA_EXTRA_CACHE) we do not pass this to the underlying
     handlers immediately. Instead we cache it and call the underlying
@@ -448,9 +449,7 @@ private:
   /** Sorted array of partition ids in descending order of number of rows. */
   uint32 *m_part_ids_sorted_by_num_of_records;
   /* Compare function for my_qsort2, for reversed order. */
-  static int compare_number_of_records(ha_partition *me,
-                                       const uint32 *a,
-                                       const uint32 *b);
+  static int compare_number_of_records(void *me, const void *a, const void *b);
   /** keep track of partitions to call ha_reset */
   MY_BITMAP m_partitions_to_reset;
   /** partitions that returned HA_ERR_KEY_NOT_FOUND. */
@@ -485,6 +484,11 @@ public:
      m_part_info= part_info;
      m_is_sub_partitioned= part_info->is_sub_partitioned();
   }
+  Compare_keys compare_key_parts(
+    const Field &old_field,
+    const Column_definition &new_field,
+    const KEY_PART_INFO &old_part,
+    const KEY_PART_INFO &new_part) const override;
 
   void return_record_by_parent() override;
 
@@ -577,8 +581,7 @@ private:
   void cleanup_new_partition(uint part_count);
   int prepare_new_partition(TABLE *table, HA_CREATE_INFO *create_info,
                             handler *file, const char *part_name,
-                            partition_element *p_elem,
-                            uint disable_non_uniq_indexes);
+                            partition_element *p_elem);
   /*
     delete_table and rename_table uses very similar logic which
     is packed into this routine.
@@ -920,7 +923,7 @@ public:
   ha_rows multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq,
                                       void *seq_init_param,
                                       uint n_ranges, uint *bufsz,
-                                      uint *mrr_mode,
+                                      uint *mrr_mode, ha_rows limit,
                                       Cost_estimate *cost) override;
   ha_rows multi_range_read_info(uint keyno, uint n_ranges, uint keys,
                                 uint key_parts, uint *bufsz,
@@ -988,6 +991,10 @@ private:
                                           handler *file, uint *n);
   static const uint NO_CURRENT_PART_ID= NOT_A_PARTITION_ID;
   int loop_partitions(handler_callback callback, void *param);
+  int loop_partitions_over_map(const MY_BITMAP *map,
+                               handler_callback callback,
+                               void *param);
+  int loop_read_partitions(handler_callback callback, void *param);
   int loop_extra_alter(enum ha_extra_function operations);
   void late_extra_cache(uint partition_id);
   void late_extra_no_cache(uint partition_id);
@@ -1032,16 +1039,14 @@ public:
   /*
     Called in test_quick_select to determine if indexes should be used.
   */
-  double scan_time() override;
+  IO_AND_CPU_COST scan_time() override;
 
-  double key_scan_time(uint inx) override;
+  IO_AND_CPU_COST key_scan_time(uint inx, ha_rows rows) override;
 
-  double keyread_time(uint inx, uint ranges, ha_rows rows) override;
+  IO_AND_CPU_COST keyread_time(uint inx, ulong ranges, ha_rows rows,
+                               ulonglong blocks) override;
+  IO_AND_CPU_COST rnd_pos_time(ha_rows rows) override;
 
-  /*
-    The next method will never be called if you do not implement indexes.
-  */
-  double read_time(uint index, uint ranges, ha_rows rows) override;
   /*
     For the given range how many records are estimated to be in this range.
     Used by optimiser to calculate cost of using a particular index.
@@ -1311,10 +1316,6 @@ public:
       The underlying storage engine might support Rowid Filtering. But
       ha_partition does not forward the needed SE API calls, so the feature
       will not be used.
-
-      Note: It's the same with IndexConditionPushdown, except for its variant
-      of IndexConditionPushdown+BatchedKeyAccess (that one works). Because of
-      that, we do not clear HA_DO_INDEX_COND_PUSHDOWN here.
     */
     return part_flags & ~HA_DO_RANGE_FILTER_PUSHDOWN;
   }
@@ -1408,9 +1409,8 @@ private:
   {
     ulonglong nr= (((Field_num*) field)->unsigned_flag ||
                    field->val_int() > 0) ? field->val_int() : 0;
+    update_next_auto_inc_val();
     lock_auto_increment();
-    DBUG_ASSERT(part_share->auto_inc_initialized ||
-                !can_use_for_auto_inc_init());
     /* must check when the mutex is taken */
     if (nr >= part_share->next_auto_inc_val)
       part_share->next_auto_inc_val= nr + 1;
@@ -1468,7 +1468,7 @@ public:
 
     virtual int get_foreign_key_list(THD *thd,
     List<FOREIGN_KEY_INFO> *f_key_list)
-    virtual uint referenced_by_foreign_key()
+    bool referenced_by_foreign_key() const noexcept override
   */
     bool can_switch_engines() override;
   /*
@@ -1553,6 +1553,8 @@ public:
     const COND *cond_push(const COND *cond) override;
     void cond_pop() override;
     int info_push(uint info_type, void *info) override;
+    Item *idx_cond_push(uint keyno, Item* idx_cond) override;
+    void cancel_pushed_idx_cond() override;
 
     private:
     int handle_opt_partitions(THD *thd, HA_CHECK_OPT *check_opt, uint flags);
@@ -1581,8 +1583,8 @@ public:
     Enable/Disable Indexes are only supported by HEAP and MyISAM.
     -------------------------------------------------------------------------
   */
-    int disable_indexes(uint mode) override;
-    int enable_indexes(uint mode) override;
+    int disable_indexes(key_map map, bool persist) override;
+    int enable_indexes(key_map map, bool persist) override;
     int indexes_are_disabled() override;
 
   /*
@@ -1644,11 +1646,17 @@ public:
   int notify_tabledef_changed(LEX_CSTRING *db, LEX_CSTRING *table,
                               LEX_CUSTRING *frm, LEX_CUSTRING *version);
 
-  friend int cmp_key_rowid_part_id(void *ptr, uchar *ref1, uchar *ref2);
-  friend int cmp_key_part_id(void *key_p, uchar *ref1, uchar *ref2);
+  friend int cmp_key_rowid_part_id(void *ptr, const void *ref1,
+                                   const void *ref2);
+  friend int cmp_key_part_id(void *key_p, const void *ref1, const void *ref2);
 
   bool can_convert_nocopy(const Field &field,
                           const Column_definition &new_field) const override;
   void handler_stats_updated() override;
+  void set_optimizer_costs(THD *thd) override;
+  void update_optimizer_costs(OPTIMIZER_COSTS *costs) override;
+  virtual ulonglong index_blocks(uint index, uint ranges, ha_rows rows) override;
+  virtual ulonglong row_blocks() override;
 };
+
 #endif /* HA_PARTITION_INCLUDED */

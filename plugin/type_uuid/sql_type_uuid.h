@@ -1,7 +1,7 @@
 #ifndef SQL_TYPE_UUID_INCLUDED
 #define SQL_TYPE_UUID_INCLUDED
 
-/* Copyright (c) 2019,2021 MariaDB Corporation
+/* Copyright (c) 2019,2024 MariaDB Corporation
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -17,6 +17,9 @@
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 #include "sql_type_fixedbin_storage.h"
+
+static constexpr uchar UUID_VERSION_MASK() { return 0x0F; }
+static constexpr uchar UUID_VARIANT_MASK() { return 0x3F; }
 
 template <bool force_swap>
 class UUID: public FixedBinTypeStorage<MY_UUID_SIZE, MY_UUID_STRING_LENGTH>
@@ -154,6 +157,10 @@ public:
     {
       return memcmp(a + m_memory_pos, b + m_memory_pos, m_length);
     }
+    int cmp_swap_noswap(const char *a, const char *b) const
+    {
+      return memcmp(a + m_memory_pos, b + m_record_pos, m_length);
+    }
     void hash_record(const uchar *ptr, Hasher *hasher) const
     {
       hasher->add(&my_charset_bin, ptr + m_record_pos, m_length);
@@ -236,6 +243,18 @@ public:
     segment(4).hash_record(ptr, hasher);
   }
 
+  static int cmp_swap_noswap(const LEX_CSTRING &a, const LEX_CSTRING &b)
+  {
+    int res;
+    if ((res= segment(4).cmp_swap_noswap(a.str, b.str)) ||
+        (res= segment(3).cmp_swap_noswap(a.str, b.str)) ||
+        (res= segment(2).cmp_swap_noswap(a.str, b.str)) ||
+        (res= segment(1).cmp_swap_noswap(a.str, b.str)) ||
+        (res= segment(0).cmp_swap_noswap(a.str, b.str)))
+      return  res;
+    return 0;
+  }
+
   // Compare two in-memory values
   static int cmp(const LEX_CSTRING &a, const LEX_CSTRING &b)
   {
@@ -254,6 +273,10 @@ public:
         return  res;
       return 0;
     }
+    else if (swap_a && !swap_b)
+      return cmp_swap_noswap(a, b);
+    else if (!swap_a && swap_b)
+      return -cmp_swap_noswap(b, a);
     return memcmp(a.str, b.str, binary_length());
   }
 
@@ -297,24 +320,27 @@ class Type_collection_uuid: public Type_collection
 {
   const Type_handler *find_in_array(const Type_handler *what,
                                     const Type_handler *stop,
-                                    bool for_comparison) const;
+                                    int start) const;
 public:
   const Type_handler *aggregate_for_result(const Type_handler *a,
                                            const Type_handler *b)
                                            const override
-  { return find_in_array(a, b, false); }
+  { return find_in_array(a, b, 0); }
   const Type_handler *aggregate_for_min_max(const Type_handler *a,
                                             const Type_handler *b)
                                             const override
-  { return find_in_array(a, b, false); }
+  { return find_in_array(a, b, 0); }
   const Type_handler *aggregate_for_comparison(const Type_handler *a,
                                                const Type_handler *b)
                                                const override
-  { return find_in_array(a, b, true); }
+  { return find_in_array(a, b, 6); }    // skip types that cannot happen here
   const Type_handler *aggregate_for_num_op(const Type_handler *a,
                                            const Type_handler *b)
                                            const override
   { return NULL; }
+
+  const Type_handler *type_handler_for_implicit_upgrade(
+                                        const Type_handler *from) const;
 
   static Type_collection_uuid *singleton()
   {
@@ -326,5 +352,6 @@ public:
 #include "sql_type_fixedbin.h"
 typedef Type_handler_fbt<UUID<1>, Type_collection_uuid> Type_handler_uuid_old;
 typedef Type_handler_fbt<UUID<0>, Type_collection_uuid> Type_handler_uuid_new;
+
 
 #endif // SQL_TYPE_UUID_INCLUDED

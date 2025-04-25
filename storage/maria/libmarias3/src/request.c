@@ -19,8 +19,11 @@
 
 #include "config.h"
 #include "common.h"
+#include "debug.h"
 #include "sha256.h"
 
+#include <curl/curl.h>
+#include <curl/easy.h>
 #include <math.h>
 
 const char *default_domain = "s3.amazonaws.com";
@@ -413,7 +416,7 @@ static uint8_t build_request_headers(CURL *curl, struct curl_slist **head,
   time_t now;
   struct tm tmp_tm;
   char headerbuf[3072];
-  char secrethead[45];
+  char secrethead[MAX_S3_SECRET_LENGTH + S3_SECRET_EXTRA_LENGTH];
   char date[9];
   char sha256hash[65];
   char post_hash[65];
@@ -428,7 +431,6 @@ static uint8_t build_request_headers(CURL *curl, struct curl_slist **head,
   uint8_t i;
   bool has_source = false;
   bool has_token = false;
-  struct curl_slist *current_header;
 
   // Host header
   if (base_domain)
@@ -520,7 +522,7 @@ static uint8_t build_request_headers(CURL *curl, struct curl_slist **head,
 
   // User signing key hash
   // Date hashed using AWS4:secret_key
-  snprintf(secrethead, sizeof(secrethead), "AWS4%.*s", 40, secret);
+  snprintf(secrethead, sizeof(secrethead), "AWS4%.*s", MAX_S3_SECRET_LENGTH, secret);
   strftime(headerbuf, sizeof(headerbuf), "%Y%m%d", &tmp_tm);
   hmac_sha256((uint8_t *)secrethead, strlen(secrethead), (uint8_t *)headerbuf,
               strlen(headerbuf), hmac_hash);
@@ -598,15 +600,16 @@ static uint8_t build_request_headers(CURL *curl, struct curl_slist **head,
     headers = curl_slist_append(headers, headerbuf);
   }
 
-  current_header = headers;
-
-  do
+  if (ms3debug_get())
   {
-    ms3debug("Header: %s", current_header->data);
-  }
-  while ((current_header = current_header->next));
+    struct curl_slist *current_header = headers;
 
-  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    do
+    {
+      ms3debug("Header: %s", current_header->data);
+    }
+    while ((current_header = current_header->next));
+  }
 
   switch (method)
   {
@@ -714,6 +717,10 @@ uint8_t execute_request(ms3_st *ms3, command_t cmd, const char *bucket,
                         void *ret_ptr)
 {
   CURL *curl = NULL;
+#ifdef HAVE_NEW_CURL_API
+  CURLHcode curl_hret;
+  struct curl_header *content_type_in;
+#endif
   struct curl_slist *headers = NULL;
   uint8_t res = 0;
   struct memory_buffer_st mem;
@@ -819,6 +826,20 @@ uint8_t execute_request(ms3_st *ms3, command_t cmd, const char *bucket,
     return res;
   }
 
+  if ((method == MS3_PUT) && ms3->content_type_out)
+  {
+    // Mime type maxmum is 128 bytes
+    char content_type[196];
+    snprintf(content_type, 195, "Content-Type: %s", ms3->content_type_out);
+    headers = curl_slist_append(headers, content_type);
+  }
+  else if (ms3->no_content_type)
+  {
+    headers = curl_slist_append(headers, "Content-Type:");
+  }
+
+  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
   if (ms3->disable_verification)
   {
     ms3debug("Disabling SSL verification");
@@ -829,9 +850,29 @@ uint8_t execute_request(ms3_st *ms3, command_t cmd, const char *bucket,
   if (ms3->port)
     curl_easy_setopt(curl, CURLOPT_PORT, (long)ms3->port);
 
+  if (ms3->connect_timeout_ms != 0)
+  {
+    curl_easy_setopt(ms3->curl, CURLOPT_CONNECTTIMEOUT_MS, ms3->connect_timeout_ms);
+  }
+
+  if (ms3->timeout_ms != 0)
+  {
+    curl_easy_setopt(ms3->curl, CURLOPT_TIMEOUT_MS, ms3->timeout_ms);
+  }
+
+  if (ms3->read_cb && cmd == MS3_CMD_GET)
+  {
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, ms3->read_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, ms3->user_data);
+  }
+  else
+  {
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, body_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&mem);
+  }
+
+  curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, ms3->buffer_chunk_size);
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_callback);
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, body_callback);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&mem);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
   curl_res = curl_easy_perform(curl);
 
@@ -844,10 +885,29 @@ uint8_t execute_request(ms3_st *ms3, command_t cmd, const char *bucket,
 
     return MS3_ERR_REQUEST_ERROR;
   }
-
+#ifdef HAVE_NEW_CURL_API
+  curl_hret = curl_easy_header(curl, "content-type", 0, CURLH_HEADER, -1,
+                               &content_type_in);
+  if (!curl_hret && content_type_in)
+  {
+      ms3->content_type_in = content_type_in->value;
+  }
+#endif
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
   ms3debug("Response code: %ld", response_code);
 
+  if (response_code == 301)
+  {
+    char *message = parse_error_message((char *)mem.data, mem.length);
+
+    if (message)
+    {
+      ms3debug("Response message: %s", message);
+    }
+
+    set_error_nocopy(ms3, message);
+    res = MS3_ERR_ENDPOINT;
+  }
   if (response_code == 404)
   {
     char *message = parse_error_message((char *)mem.data, mem.length);

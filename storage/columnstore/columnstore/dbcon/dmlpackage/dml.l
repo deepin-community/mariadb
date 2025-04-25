@@ -27,16 +27,7 @@
 #undef DECIMAL
 #undef DELETE
 #undef IN
-#ifdef _MSC_VER
-#include "dml-gram-win.h"
-#else
 #include "dml-gram.h"
-#endif
-#ifdef _MSC_VER
-#define YY_NO_UNISTD_H
-extern "C" int _isatty(int);
-#define isatty _isatty
-#endif
 
 /* These don't seem to be covered by the prefix option of flex 2.5.4
  * Bison 2.0 puts extern dml_yylval in dml-gram.h. */
@@ -51,7 +42,7 @@ namespace dmlpackage {
 int lineno = 1;
 
 
-static char* scanner_copy (char *str, yyscan_t yyscanner);
+static char* scanner_copy (const char *str, yyscan_t yyscanner);
 
 
 /* macro to save the text and return a token */
@@ -265,7 +256,7 @@ void scanner_finish(yyscan_t yyscanner)
    pScanData->valbuf.clear();
 }
 
-char* scanner_copy (char *str, yyscan_t yyscanner)
+char* scanner_copy (const char *str, yyscan_t yyscanner)
 {
   char* nv = strdup(str);
   if(nv)

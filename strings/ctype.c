@@ -846,6 +846,8 @@ my_string_repertoire_8bit(CHARSET_INFO *cs, const char *str, size_t length)
   const char *strend;
   if ((cs->state & MY_CS_NONASCII) && length > 0)
     return MY_REPERTOIRE_UNICODE30;
+  if (!str) // Avoid UBSAN nullptr-with-offset
+    return MY_REPERTOIRE_ASCII;
   for (strend= str + length; str < strend; str++)
   {
     if (((uchar) *str) > 0x7F)
@@ -871,7 +873,7 @@ static void
 my_string_metadata_get_mb(MY_STRING_METADATA *metadata,
                           CHARSET_INFO *cs, const char *str, ulong length)
 {
-  const char *strend= str + length;
+  const char *strend= str ? str + length : NULL; // Avoid UB nullptr+0
   for (my_string_metadata_init(metadata) ;
        str < strend;
        metadata->char_length++)

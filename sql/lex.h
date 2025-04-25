@@ -23,8 +23,6 @@
 #include "lex_symbol.h"
 
 SYM_GROUP sym_group_common= {"", ""};
-SYM_GROUP sym_group_geom= {"Spatial extensions", "HAVE_SPATIAL"};
-SYM_GROUP sym_group_rtree= {"RTree keys", "HAVE_RTREE_KEYS"};
 
 /* We don't want to include sql_yacc.h into gen_lex_hash */
 #ifdef NO_YACC_SYMBOLS
@@ -79,9 +77,9 @@ SYMBOL symbols[] = {
   { "AT",		SYM(AT_SYM)},
   { "ATOMIC",		SYM(ATOMIC_SYM)},
   { "AUTHORS",	        SYM(AUTHORS_SYM)},
+  { "AUTO",             SYM(AUTO_SYM)},
   { "AUTO_INCREMENT",	SYM(AUTO_INC)},
   { "AUTOEXTEND_SIZE",	SYM(AUTOEXTEND_SIZE_SYM)},
-  { "AUTO",	        SYM(AUTO_SYM)},
   { "AVG",		SYM(AVG_SYM)},
   { "AVG_ROW_LENGTH",	SYM(AVG_ROW_LENGTH)},
   { "BACKUP",	        SYM(BACKUP_SYM)},
@@ -352,8 +350,8 @@ SYMBOL symbols[] = {
   { "LIST",             SYM(LIST_SYM)},
   { "LOAD",		SYM(LOAD)},
   { "LOCAL",		SYM(LOCAL_SYM)},
-  { "LOCALTIME",	SYM(NOW_SYM)},
-  { "LOCALTIMESTAMP",	SYM(NOW_SYM)},
+  { "LOCALTIME",	SYM(CURTIME)},
+  { "LOCALTIMESTAMP",	SYM(LOCALTIMESTAMP)},
   { "LOCK",		SYM(LOCK_SYM)},
   { "LOCKED",		SYM(LOCKED_SYM)},
   { "LOCKS",		SYM(LOCKS_SYM)},
@@ -385,6 +383,7 @@ SYMBOL symbols[] = {
   { "MASTER_SSL_VERIFY_SERVER_CERT", SYM(MASTER_SSL_VERIFY_SERVER_CERT_SYM)},
   { "MASTER_USER",           SYM(MASTER_USER_SYM)},
   { "MASTER_USE_GTID",  SYM(MASTER_USE_GTID_SYM)},
+  { "MASTER_DEMOTE_TO_REPLICA",  SYM(MASTER_DEMOTE_TO_SLAVE_SYM)},
   { "MASTER_DEMOTE_TO_SLAVE",  SYM(MASTER_DEMOTE_TO_SLAVE_SYM)},
   { "MASTER_HEARTBEAT_PERIOD", SYM(MASTER_HEARTBEAT_PERIOD_SYM)},
   { "MATCH",		SYM(MATCH)},
@@ -428,10 +427,10 @@ SYMBOL symbols[] = {
   { "NCHAR",		SYM(NCHAR_SYM)},
   { "NESTED",		SYM(NESTED_SYM)},
   { "NEVER",		SYM(NEVER_SYM)},
-  { "NEW",              SYM(NEW_SYM)},
   { "NEXT",		SYM(NEXT_SYM)},
   { "NEXTVAL",		SYM(NEXTVAL_SYM)},
   { "NO",		SYM(NO_SYM)},
+  { "NOCOPY",		SYM(NOCOPY_SYM)},
   { "NOMAXVALUE",	SYM(NOMAXVALUE_SYM)},
   { "NOMINVALUE",	SYM(NOMINVALUE_SYM)},
   { "NOCACHE",          SYM(NOCACHE_SYM)},
@@ -516,6 +515,7 @@ SYMBOL symbols[] = {
   { "READS",		SYM(READS_SYM)},
   { "REAL",		SYM(REAL)},
   { "REBUILD",		SYM(REBUILD_SYM)},
+  { "RECORD",           SYM(RECORD_SYM)},
   { "RECOVER",          SYM(RECOVER_SYM)},
   { "RECURSIVE",        SYM(RECURSIVE_SYM)},
   { "REDO_BUFFER_SIZE",	SYM(REDO_BUFFER_SIZE_SYM)},
@@ -618,6 +618,8 @@ SYMBOL symbols[] = {
   { "SQLEXCEPTION",     SYM(SQLEXCEPTION_SYM)},
   { "SQLSTATE",         SYM(SQLSTATE_SYM)},
   { "SQLWARNING",       SYM(SQLWARNING_SYM)},
+  { "SQL_AFTER_GTIDS",  SYM(SQL_AFTER_GTIDS_SYM)},
+  { "SQL_BEFORE_GTIDS",  SYM(SQL_BEFORE_GTIDS_SYM)},
   { "SQL_BIG_RESULT",	SYM(SQL_BIG_RESULT)},
   { "SQL_BUFFER_RESULT", SYM(SQL_BUFFER_RESULT)},
   { "SQL_CACHE",        SYM(SQL_CACHE_SYM)},
@@ -686,7 +688,6 @@ SYMBOL symbols[] = {
   { "TRUE",		SYM(TRUE_SYM)},
   { "TRUNCATE",		SYM(TRUNCATE_SYM)},
   { "TYPE",		SYM(TYPE_SYM)},
-  { "TYPES",		SYM(TYPES_SYM)},
   { "UNBOUNDED",        SYM(UNBOUNDED_SYM)},
   { "UNCOMMITTED",	SYM(UNCOMMITTED_SYM)},
   { "UNDEFINED",	SYM(UNDEFINED_SYM)},
@@ -712,6 +713,7 @@ SYMBOL symbols[] = {
   { "UTC_DATE",         SYM(UTC_DATE_SYM)},
   { "UTC_TIME",         SYM(UTC_TIME_SYM)},
   { "UTC_TIMESTAMP",    SYM(UTC_TIMESTAMP_SYM)},
+  { "VALIDATION",       SYM(VALIDATION_SYM)},
   { "VALUE",		SYM(VALUE_SYM)},
   { "VALUES",		SYM(VALUES)},
   { "VARBINARY",	SYM(VARBINARY)},
@@ -724,6 +726,7 @@ SYMBOL symbols[] = {
   { "VIEW",		SYM(VIEW_SYM)},
   { "VIRTUAL",          SYM(VIRTUAL_SYM)},
   { "VISIBLE",          SYM(VISIBLE_SYM)},
+  { "VECTOR",           SYM(VECTOR_SYM)},
   { "VERSIONING",       SYM(VERSIONING_SYM)},
   { "WAIT",		SYM(WAIT_SYM)},
   { "WARNINGS",		SYM(WARNINGS)},
@@ -752,7 +755,6 @@ SYMBOL symbols[] = {
 
 SYMBOL sql_functions[] = {
   { "ADDDATE",		SYM(ADDDATE_SYM)},
-  { "ADD_MONTHS",	SYM(ADD_MONTHS_SYM)},
   { "BIT_AND",		SYM(BIT_AND)},
   { "BIT_OR",		SYM(BIT_OR)},
   { "BIT_XOR",		SYM(BIT_XOR)},
@@ -763,7 +765,6 @@ SYMBOL sql_functions[] = {
   { "CURTIME",		SYM(CURTIME)},
   { "DATE_ADD",		SYM(DATE_ADD_INTERVAL)},
   { "DATE_SUB",		SYM(DATE_SUB_INTERVAL)},
-  { "DATE_FORMAT",      SYM(DATE_FORMAT_SYM)},
   { "DENSE_RANK",       SYM(DENSE_RANK_SYM)},
   { "EXTRACT",		SYM(EXTRACT_SYM)},
   { "FIRST_VALUE",      SYM(FIRST_VALUE_SYM)},
@@ -784,7 +785,7 @@ SYMBOL sql_functions[] = {
   { "PERCENTILE_CONT",  SYM(PERCENTILE_CONT_SYM)},
   { "PERCENTILE_DISC",  SYM(PERCENTILE_DISC_SYM)},
   { "RANK",             SYM(RANK_SYM)},
-  { "SESSION_USER",     SYM(USER_SYM)},
+  { "SESSION_USER",     SYM(SESSION_USER_SYM)},
   { "STD",		SYM(STD_SYM)},
   { "STDDEV",		SYM(STD_SYM)},
   { "STDDEV_POP",	SYM(STD_SYM)},

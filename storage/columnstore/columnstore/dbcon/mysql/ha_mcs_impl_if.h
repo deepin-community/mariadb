@@ -17,15 +17,11 @@
    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
    MA 02110-1301, USA. */
 
-#ifndef HA_MCS_IMPL_IF_H__
-#define HA_MCS_IMPL_IF_H__
+#pragma once
+#include <bitset>
 #include <string>
 #include <stdint.h>
-#ifdef _MSC_VER
-#include <unordered_map>
-#else
 #include <tr1/unordered_map>
-#endif
 #include <iosfwd>
 #include <boost/shared_ptr.hpp>
 #include <stack>
@@ -33,6 +29,8 @@
 
 #include "idb_mysql.h"
 #include "ha_mcs_sysvars.h"
+
+#include "dmlpkg.h"
 
 struct st_ha_create_information;
 class ha_columnstore_select_handler;
@@ -96,14 +94,14 @@ enum ClauseType
 };
 
 typedef std::vector<JoinInfo> JoinInfoVec;
+typedef dmlpackage::ColValuesList ColValuesList;
+typedef dmlpackage::TableValuesMap TableValuesMap;
 typedef std::map<execplan::CalpontSystemCatalog::TableAliasName, std::pair<int, TABLE_LIST*>> TableMap;
 typedef std::tr1::unordered_map<TABLE_LIST*, std::vector<COND*>> TableOnExprList;
 typedef std::tr1::unordered_map<TABLE_LIST*, uint> TableOuterJoinMap;
 
 struct gp_walk_info
 {
-  // MCOL-2178 Marked for removal after 1.4
-  std::vector<std::string> selectCols;
   execplan::CalpontSelectExecutionPlan::ReturnedColumnList returnedCols;
   execplan::CalpontSelectExecutionPlan::ReturnedColumnList groupByCols;
   execplan::CalpontSelectExecutionPlan::ReturnedColumnList subGroupByCols;
@@ -119,7 +117,7 @@ struct gp_walk_info
   std::vector<execplan::ReturnedColumn*> localCols;
   std::stack<execplan::ReturnedColumn*> rcWorkStack;
   std::stack<execplan::ParseTree*> ptWorkStack;
-  boost::shared_ptr<execplan::SimpleColumn> scsp;
+  boost::shared_ptr<execplan::SimpleColumn> scsp; // while defined as SSCP, it is used as SRCP, nothing specific to SimpleColumn is used in use sites.
   uint32_t sessionid;
   bool fatalParseError;
   std::string parseErrorText;
@@ -143,6 +141,10 @@ struct gp_walk_info
   std::vector<execplan::CalpontSystemCatalog::TableAliasName> correlatedTbNameVec;
   ClauseType clauseType;
   execplan::CalpontSystemCatalog::TableAliasName viewName;
+  // we can have explicit GROUP BY and implicit one, triggered by aggregate in pojection or ORDER BY.
+  // this flag tells us whether we have either case.
+  bool implicitExplicitGroupBy;
+  bool disableWrapping;
   bool aggOnSelect;
   bool hasWindowFunc;
   bool hasSubSelect;
@@ -178,7 +180,24 @@ struct gp_walk_info
   TableOnExprList tableOnExprList;
   std::vector<COND*> condList;
 
-  gp_walk_info(long timeZone_)
+  // Item* associated with returnedCols.
+  std::vector<std::pair<Item*, uint32_t>> processed;
+
+  // SELECT_LEX is needed for aggergate wrapping
+  SELECT_LEX* select_lex;
+
+  // we are processing HAVING despite having (pun not intented) clauseType equal to SELECT.
+  bool havingDespiteSelect;
+
+  // All SubQuery allocations are single-linked into this chain.
+  // At the end of gp_walk_info processing we can free whole chain at once.
+  // This is done so because the juggling of SubQuery pointers in the
+  // ha_mcs_execplan code.
+  // There is a struct SubQueryChainHolder down below to hold chain root and free
+  // the chain using sorta kinda RAII.
+  SubQuery** subQueriesChain;
+
+  gp_walk_info(long timeZone_, SubQuery** subQueriesChain_)
    : sessionid(0)
    , fatalParseError(false)
    , condPush(false)
@@ -188,6 +207,8 @@ struct gp_walk_info
    , subSelectType(uint64_t(-1))
    , subQuery(0)
    , clauseType(INIT)
+   , implicitExplicitGroupBy(false)
+   , disableWrapping(false)
    , aggOnSelect(false)
    , hasWindowFunc(false)
    , hasSubSelect(false)
@@ -202,12 +223,23 @@ struct gp_walk_info
    , timeZone(timeZone_)
    , inSubQueryLHS(nullptr)
    , inSubQueryLHSItem(nullptr)
+   , select_lex(nullptr)
+   , havingDespiteSelect(false)
+   , subQueriesChain(subQueriesChain_)
   {
   }
+  ~gp_walk_info();
 
-  ~gp_walk_info()
-  {
-  }
+};
+
+struct SubQueryChainHolder;
+struct ext_cond_info
+{
+  // having this as a direct field would introduce
+  // circular dependency on header inclusion with ha_subquery.h.
+  boost::shared_ptr<SubQueryChainHolder> chainHolder;
+  gp_walk_info gwi;
+  ext_cond_info(long timeZone); // needs knowledge on SubQueryChainHolder, will be defined elsewhere
 };
 
 struct cal_table_info
@@ -221,17 +253,14 @@ struct cal_table_info
   cal_table_info() : tpl_ctx(0), c(0), msTablePtr(0), conn_hndl(0), condInfo(0), moreRows(false)
   {
   }
-  ~cal_table_info()
-  {
-  }
-  sm::cpsm_tplh_t* tpl_ctx;
-  std::stack<sm::cpsm_tplh_t*> tpl_ctx_st;
+  sm::sp_cpsm_tplh_t tpl_ctx;
+  std::stack<sm::sp_cpsm_tplh_t> tpl_ctx_st;
   sm::sp_cpsm_tplsch_t tpl_scan_ctx;
   std::stack<sm::sp_cpsm_tplsch_t> tpl_scan_ctx_st;
   unsigned c;         // for debug purpose
   TABLE* msTablePtr;  // no ownership
   sm::cpsm_conhdl_t* conn_hndl;
-  gp_walk_info* condInfo;
+  ext_cond_info* condInfo;
   execplan::SCSEP csep;
   bool moreRows;  // are there more rows to consume (b/c of limit)
 };
@@ -263,9 +292,7 @@ struct cal_group_info
 };
 
 typedef std::tr1::unordered_map<TABLE*, cal_table_info> CalTableMap;
-typedef std::vector<std::string> ColValuesList;
 typedef std::vector<std::string> ColNameList;
-typedef std::map<uint32_t, ColValuesList> TableValuesMap;
 typedef std::bitset<4096> NullValuesBitset;
 struct cal_connection_info
 {
@@ -331,7 +358,7 @@ struct cal_connection_info
     configVal = cf->getConfig("SystemConfig", "PrimaryUMModuleName");
     std::string module = execplan::ClientRotator::getModule();
 
-    if (boost::iequals(configVal, module))
+    if (datatypes::ASCIIStringCaseInsensetiveEquals(configVal, module))
       return false;
 
     return true;
@@ -368,14 +395,6 @@ struct cal_connection_info
   pid_t mysqld_pid;
   pid_t cpimport_pid;
   int fdt[2];
-#ifdef _MSC_VER
-  // Used for launching cpimport for Load Data Infile
-  HANDLE cpimport_stdin_Rd;
-  HANDLE cpimport_stdin_Wr;
-  HANDLE cpimport_stdout_Rd;
-  HANDLE cpimport_stdout_Wr;
-  PROCESS_INFORMATION cpimportProcInfo;
-#endif
   FILE* filePtr;
   uint8_t headerLength;
   bool useXbit;
@@ -399,15 +418,16 @@ int cp_get_group_plan(THD* thd, execplan::SCSEP& csep, cal_impl_if::cal_group_in
 int cs_get_derived_plan(ha_columnstore_derived_handler* handler, THD* thd, execplan::SCSEP& csep,
                         gp_walk_info& gwi);
 int cs_get_select_plan(ha_columnstore_select_handler* handler, THD* thd, execplan::SCSEP& csep,
-                       gp_walk_info& gwi);
+                       gp_walk_info& gwi, bool isSelectLexUnit);
 int getSelectPlan(gp_walk_info& gwi, SELECT_LEX& select_lex, execplan::SCSEP& csep, bool isUnion = false,
-                  bool isSelectHandlerTop = false,
+                  bool isSelectHandlerTop = false, bool isSelectLexUnit = false,
                   const std::vector<COND*>& condStack = std::vector<COND*>());
 int getGroupPlan(gp_walk_info& gwi, SELECT_LEX& select_lex, execplan::SCSEP& csep, cal_group_info& gi,
                  bool isUnion = false);
 void setError(THD* thd, uint32_t errcode, const std::string errmsg, gp_walk_info* gwi);
 void setError(THD* thd, uint32_t errcode, const std::string errmsg);
 void gp_walk(const Item* item, void* arg);
+void clearDeleteStacks(gp_walk_info& gwi);
 void parse_item(Item* item, std::vector<Item_field*>& field_vec, bool& hasNonSupportItem, uint16& parseInfo,
                 gp_walk_info* gwip = NULL);
 const std::string bestTableName(const Item_field* ifp);
@@ -422,11 +442,11 @@ execplan::ReturnedColumn* buildReturnedColumn(Item* item, gp_walk_info& gwi, boo
                                               bool isRefItem = false);
 execplan::ReturnedColumn* buildFunctionColumn(Item_func* item, gp_walk_info& gwi, bool& nonSupport,
                                               bool selectBetweenIn = false);
-execplan::ArithmeticColumn* buildArithmeticColumn(Item_func* item, gp_walk_info& gwi, bool& nonSupport);
+execplan::ReturnedColumn* buildArithmeticColumn(Item_func* item, gp_walk_info& gwi, bool& nonSupport);
 execplan::ConstantColumn* buildDecimalColumn(const Item* item, const std::string& str, gp_walk_info& gwi);
 execplan::SimpleColumn* buildSimpleColumn(Item_field* item, gp_walk_info& gwi);
 execplan::FunctionColumn* buildCaseFunction(Item_func* item, gp_walk_info& gwi, bool& nonSupport);
-execplan::ParseTree* buildParseTree(Item_func* item, gp_walk_info& gwi, bool& nonSupport);
+execplan::ParseTree* buildParseTree(Item* item, gp_walk_info& gwi, bool& nonSupport);
 execplan::ReturnedColumn* buildAggregateColumn(Item* item, gp_walk_info& gwi);
 execplan::ReturnedColumn* buildWindowFunctionColumn(Item* item, gp_walk_info& gwi, bool& nonSupport);
 execplan::ReturnedColumn* buildPseudoColumn(Item* item, gp_walk_info& gwi, bool& nonSupport,
@@ -487,5 +507,3 @@ inline bool isDMLStatement(const enum_sql_command& command)
 void debug_walk(const Item* item, void* arg);
 #endif
 }  // namespace cal_impl_if
-
-#endif

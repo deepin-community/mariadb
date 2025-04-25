@@ -235,7 +235,8 @@ Sql_condition::get_message_octet_length() const
 }
 
 
-void Sql_state_errno_level::assign_defaults(const Sql_state_errno *from)
+void Sql_state_errno_level::assign_defaults(THD *thd,
+                                            const Sql_state_errno *from)
 {
   DBUG_ASSERT(from);
   int sqlerrno= from->get_sql_errno();
@@ -255,7 +256,17 @@ void Sql_state_errno_level::assign_defaults(const Sql_state_errno *from)
   else if (Sql_state::is_not_found()) /* SQLSTATE class "02": not found. */
   {
     m_level= Sql_condition::WARN_LEVEL_ERROR;
-    m_sql_errno= sqlerrno ? sqlerrno : ER_SIGNAL_NOT_FOUND;
+    if (sqlerrno)
+      m_sql_errno= sqlerrno;
+    else
+    {
+      if ((thd->in_sub_stmt & (SUB_STMT_TRIGGER | SUB_STMT_BEFORE_TRIGGER)) ==
+          (SUB_STMT_TRIGGER | SUB_STMT_BEFORE_TRIGGER) &&
+          strcmp(get_sqlstate(), "02TRG") == 0)
+        m_sql_errno= ER_SIGNAL_SKIP_ROW_FROM_TRIGGER;
+      else
+        m_sql_errno= ER_SIGNAL_NOT_FOUND;
+    }
   }
   else                               /* other SQLSTATE classes : error. */
   {
@@ -268,7 +279,7 @@ void Sql_state_errno_level::assign_defaults(const Sql_state_errno *from)
 void Sql_condition::assign_defaults(THD *thd, const Sql_state_errno *from)
 {
   if (from)
-    Sql_state_errno_level::assign_defaults(from);
+    Sql_state_errno_level::assign_defaults(thd, from);
   if (!get_message_text())
     set_builtin_message_text(ER(get_sql_errno()));
 }
@@ -309,14 +320,27 @@ Diagnostics_area::reset_diagnostics_area()
   m_message[0]= '\0';
   Sql_state_errno::clear();
   Sql_user_condition_identity::clear();
-  m_affected_rows= 0;
   m_last_insert_id= 0;
-  m_statement_warn_count= 0;
+  if (!is_bulk_op())
+  {
+    m_affected_rows= 0;
+    m_statement_warn_count= 0;
+  }
 #endif
   get_warning_info()->clear_error_condition();
   set_is_sent(false);
   /** Tiny reset in debug mode to see garbage right away */
-  m_status= DA_EMPTY;
+  if (!is_bulk_op())
+    /*
+      For BULK DML operations (e.g. UPDATE) the data member m_status
+      has the value DA_OK_BULK. Keep this value in order to handle
+      m_affected_rows, m_statement_warn_count in correct way. Else,
+      the number of rows and the number of warnings affected by
+      the last statement executed as part of a trigger fired by the dml
+      (e.g. UPDATE statement fires a trigger on AFTER UPDATE) would counts
+      rows modified by trigger's statement.
+    */
+    m_status= DA_EMPTY;
   DBUG_VOID_RETURN;
 }
 
@@ -739,6 +763,7 @@ void push_warning(THD *thd, Sql_condition::enum_warning_level level,
   if (level == Sql_condition::WARN_LEVEL_ERROR)
     level= Sql_condition::WARN_LEVEL_WARN;
 
+  DBUG_ASSERT(msg[strlen(msg)-1] != '\n');
   (void) thd->raise_condition(code, "\0\0\0\0\0", level, msg);
 
   /* Make sure we also count warnings pushed after calling set_ok_status(). */

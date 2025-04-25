@@ -864,6 +864,13 @@ row_sel_build_committed_vers_for_mysql(
 					column version if any */
 	mtr_t*		mtr)		/*!< in: mtr */
 {
+	if (prebuilt->trx->snapshot_isolation) {
+		ut_ad(prebuilt->trx->isolation_level
+		    == TRX_ISO_READ_UNCOMMITTED);
+		*old_vers = rec;
+		return;
+	}
+
 	if (prebuilt->old_vers_heap) {
 		mem_heap_empty(prebuilt->old_vers_heap);
 	} else {
@@ -1184,11 +1191,11 @@ sel_set_rtr_rec_lock(
 	ut_ad(page_align(first_rec) == cur_block->page.frame);
 	ut_ad(match->valid);
 
-	match->block.page.lock.x_lock();
+	match->block->page.lock.x_lock();
 retry:
 	cur_block = btr_pcur_get_block(pcur);
-	ut_ad(match->block.page.lock.have_x()
-	      || match->block.page.lock.have_s());
+	ut_ad(match->block->page.lock.have_x()
+	      || match->block->page.lock.have_s());
 	ut_ad(page_is_leaf(cur_block->page.frame));
 
 	err = lock_sec_rec_read_check_and_lock(
@@ -1200,8 +1207,7 @@ re_scan:
 		mtr->commit();
 		trx->error_state = err;
 		thr->lock_state = QUE_THR_LOCK_ROW;
-		if (row_mysql_handle_errors(
-			&err, trx, thr, NULL)) {
+		if (row_mysql_handle_errors(&err, trx, thr, 0)) {
 			thr->lock_state = QUE_THR_LOCK_NOLOCK;
 			mtr->start();
 
@@ -1222,6 +1228,7 @@ re_scan:
 			if (!cur_block) {
 				goto func_end;
 			}
+			buf_page_make_young_if_needed(&cur_block->page);
 		} else {
 			mtr->start();
 			goto func_end;
@@ -1287,7 +1294,7 @@ re_scan:
 			ULINT_UNDEFINED, &heap);
 
 		err = lock_sec_rec_read_check_and_lock(
-			0, &match->block, rtr_rec->r_rec, index,
+			0, match->block, rtr_rec->r_rec, index,
 			my_offsets, static_cast<lock_mode>(mode),
 			type, thr);
 
@@ -1303,7 +1310,7 @@ re_scan:
 	match->locked = true;
 
 func_end:
-	match->block.page.lock.x_unlock();
+	match->block->page.lock.x_unlock();
 	if (heap != NULL) {
 		mem_heap_free(heap);
 	}
@@ -1611,7 +1618,8 @@ row_sel_try_search_shortcut(
 			return SEL_RETRY;
 		}
 	} else if (!srv_read_only_mode) {
-		trx_id_t trx_id = page_get_max_trx_id(page_align(rec));
+		trx_id_t trx_id =
+			page_get_max_trx_id(btr_pcur_get_page(&plan->pcur));
 		ut_ad(trx_id);
 		if (!node->read_view->sees(trx_id)) {
 			return SEL_RETRY;
@@ -2032,7 +2040,8 @@ skip_lock:
 				rec = old_vers;
 			}
 		} else if (!srv_read_only_mode) {
-			trx_id_t trx_id = page_get_max_trx_id(page_align(rec));
+			trx_id_t trx_id = page_get_max_trx_id(
+				btr_pcur_get_page(&plan->pcur));
 			ut_ad(trx_id);
 			if (!node->read_view->sees(trx_id)) {
 				cons_read_requires_clust_rec = TRUE;
@@ -2603,9 +2612,9 @@ row_sel_convert_mysql_key_to_innobase(
 
 	key_end = key_ptr + key_len;
 
-	/* Permit us to access any field in the tuple (ULINT_MAX): */
+	/* Permit us to access any field in the tuple: */
 
-	dtuple_set_n_fields(tuple, ULINT_MAX);
+	ut_d(dtuple_set_n_fields(tuple, uint16_t(~0)));
 
 	dfield = dtuple_get_nth_field(tuple, 0);
 	field = dict_index_get_nth_field(index, 0);
@@ -2772,7 +2781,7 @@ row_sel_convert_mysql_key_to_innobase(
 	/* We set the length of tuple to n_fields: we assume that the memory
 	area allocated for it is big enough (usually bigger than n_fields). */
 
-	dtuple_set_n_fields(tuple, n_fields);
+	dtuple_set_n_fields(tuple, uint16_t(n_fields));
 }
 
 /**************************************************************//**
@@ -3399,8 +3408,9 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 		page and verify that */
 		if  (dict_index_is_spatial(sec_index)
 		     && btr_cur->rtr_info->matches
-		     && (page_align(rec)
-			== btr_cur->rtr_info->matches->block.page.frame
+		     && (!(ulint(rec
+				 - btr_cur->rtr_info->matches->block->page.frame)
+			   >> srv_page_size_shift)
 			|| rec != btr_pcur_get_rec(prebuilt->pcur))) {
 #ifdef UNIV_DEBUG
 			rtr_info_t*	rtr_info = btr_cur->rtr_info;
@@ -3441,7 +3451,7 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 			page_cur_t     page_cursor;
 			page_cursor.block = block;
 			page_cursor.index = sec_index;
-			ulint up_match = 0, low_match = 0;
+			uint16_t up_match = 0, low_match = 0;
 			ut_ad(!page_cur_search_with_match(tuple, PAGE_CUR_LE,
 							  &up_match,
 							  &low_match,
@@ -3527,7 +3537,7 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 				prebuilt->clust_pcur)->page;
 
 			const lsn_t lsn = mach_read_from_8(
-				page_align(clust_rec) + FIL_PAGE_LSN);
+				bpage.frame + FIL_PAGE_LSN);
 
 			if (lsn != cached_lsn
 			    || bpage.id() != cached_page_id
@@ -4033,7 +4043,8 @@ row_search_idx_cond_check(
 	ut_ad(rec_offs_validate(rec, prebuilt->index, offsets));
 
 	if (!prebuilt->idx_cond) {
-		if (!handler_rowid_filter_is_active(prebuilt->pk_filter)) {
+		if (!prebuilt->pk_filter ||
+                    !handler_rowid_filter_is_active(prebuilt->pk_filter)) {
 			return(CHECK_POS);
 		}
 	} else {
@@ -4075,7 +4086,8 @@ row_search_idx_cond_check(
 
 	switch (result) {
 	case CHECK_POS:
-	        if (handler_rowid_filter_is_active(prebuilt->pk_filter)) {
+	        if (prebuilt->pk_filter &&
+                  handler_rowid_filter_is_active(prebuilt->pk_filter)) {
 		        ut_ad(!prebuilt->index->is_primary());
 		        if (prebuilt->clust_index_was_generated) {
                                ulint len;
@@ -4159,8 +4171,7 @@ row_sel_fill_vrow(
 	offsets = rec_get_offsets(rec, index, offsets, index->n_core_fields,
 				  ULINT_UNDEFINED, &heap);
 
-	*vrow = dtuple_create_with_vcol(
-		heap, 0, dict_table_get_n_v_cols(index->table));
+	*vrow = dtuple_create_with_vcol(heap, 0, index->table->n_v_cols);
 
 	/* Initialize all virtual row's mtype to DATA_MISSING */
 	dtuple_init_v_fld(*vrow);
@@ -4455,12 +4466,10 @@ early_not_found:
 			DBUG_RETURN(DB_RECORD_NOT_FOUND);
 		}
 
+#if SIZEOF_SIZE_T < 8
+		if (UNIV_LIKELY(~prebuilt->n_rows_fetched))
+#endif
 		prebuilt->n_rows_fetched++;
-
-		if (prebuilt->n_rows_fetched > 1000000000) {
-			/* Prevent wrap-over */
-			prebuilt->n_rows_fetched = 500000000;
-		}
 
 		mode = pcur->search_mode;
 	}
@@ -4530,7 +4539,7 @@ early_not_found:
 
 	if (UNIV_UNLIKELY(direction == 0)
 	    && unique_search
-	    && btr_search_enabled
+	    && btr_search.enabled
 	    && dict_index_is_clust(index)
 	    && !index->table->is_temporary()
 	    && !prebuilt->templ_contains_blob
@@ -4761,14 +4770,13 @@ wait_table_again:
 		}
 
 	} else if (dtuple_get_n_fields(search_tuple) > 0) {
-		pcur->btr_cur.thr = thr;
 		pcur->old_rec = nullptr;
 
 		if (index->is_spatial()) {
 			if (!prebuilt->rtr_info) {
 				prebuilt->rtr_info = rtr_create_rtr_info(
-					set_also_gap_locks, true,
-					btr_pcur_get_btr_cur(pcur), index);
+					set_also_gap_locks, true, thr,
+					btr_pcur_get_btr_cur(pcur));
 				prebuilt->rtr_info->search_tuple = search_tuple;
 				prebuilt->rtr_info->search_mode = mode;
 				rtr_info_update_btr(btr_pcur_get_btr_cur(pcur),
@@ -4781,7 +4789,8 @@ wait_table_again:
 				prebuilt->rtr_info->search_mode = mode;
 			}
 
-			err = rtr_search_leaf(pcur, search_tuple, mode, &mtr);
+			err = rtr_search_leaf(pcur, thr, search_tuple, mode,
+					      &mtr);
 		} else {
 			err = btr_pcur_open_with_no_init(search_tuple, mode,
 							 BTR_SEARCH_LEAF,
@@ -4836,7 +4845,8 @@ page_corrupted:
 
 		if (err != DB_SUCCESS) {
 			if (err == DB_DECRYPTION_FAILED) {
-				btr_decryption_failed(*index);
+				innodb_decryption_failed(trx->mysql_thd,
+							 index->table);
 			}
 			rec = NULL;
 			goto page_read_error;
@@ -4996,7 +5006,8 @@ wrong_offs:
 				.buf_fix_count();
 
 			ib::error() << "Index corruption: rec offs "
-				<< page_offset(rec) << " next offs "
+				<< rec - btr_pcur_get_page(pcur)
+				<< " next offs "
 				<< next_offs
 				<< btr_pcur_get_block(pcur)->page.id()
 				<< ", index " << index->name
@@ -5013,7 +5024,8 @@ wrong_offs:
 			over the corruption to recover as much as possible. */
 
 			ib::info() << "Index corruption: rec offs "
-				<< page_offset(rec) << " next offs "
+				<< rec - btr_pcur_get_page(pcur)
+				<< " next offs "
 				<< next_offs
 				<< btr_pcur_get_block(pcur)->page.id()
 				<< ", index " << index->name
@@ -5038,10 +5050,12 @@ wrong_offs:
 
 	if (UNIV_UNLIKELY(srv_force_recovery > 0)) {
 		if (!rec_validate(rec, offsets)
-		    || !btr_index_rec_validate(rec, index, FALSE)) {
+		    || !btr_index_rec_validate(pcur->btr_cur.page_cur,
+					       index, FALSE)) {
 
 			ib::error() << "Index corruption: rec offs "
-				<< page_offset(rec) << " next offs "
+				<< rec - btr_pcur_get_page(pcur)
+				<< " next offs "
 				<< next_offs
 				<< btr_pcur_get_block(pcur)->page.id()
 				<< ", index " << index->name
@@ -5253,7 +5267,20 @@ no_gap_lock:
 			if (UNIV_LIKELY(prebuilt->row_read_type
 					!= ROW_READ_TRY_SEMI_CONSISTENT)
 			    || unique_search
-			    || index != clust_index) {
+			    || index != clust_index
+			    /* If read view was opened, sel_set_rec_lock()
+			    would return DB_RECORD_CHANGED, and we would not be
+			    here. As read view wasn't opened, do locking read
+			    instead of semi-consistent one for READ COMMITTED.
+			    For READ UNCOMMITTED
+			    row_sel_build_committed_vers_for_mysql() must read
+			    uncommitted version of the record. For REPEATABLE
+			    READ and SERIALIZABLE prebuilt->row_read_type
+			    must be not equal to ROW_READ_TRY_SEMI_CONSISTENT,
+			    so there will be locking read for those isolation
+			    levels. */
+			    || (trx->snapshot_isolation && trx->isolation_level
+			      == TRX_ISO_READ_COMMITTED )) {
 				if (!prebuilt->skip_locked) {
 					goto lock_wait_or_error;
 				}
@@ -5392,7 +5419,7 @@ no_gap_lock:
 
 			if (!srv_read_only_mode) {
 				trx_id_t trx_id = page_get_max_trx_id(
-					page_align(rec));
+					btr_pcur_get_page(pcur));
 				ut_ad(trx_id);
 				if (trx->read_view.sees(trx_id)) {
 					goto locks_ok;
@@ -5842,7 +5869,7 @@ lock_table_wait:
 	trx->error_state = err;
 	thr->lock_state = QUE_THR_LOCK_ROW;
 
-	if (row_mysql_handle_errors(&err, trx, thr, NULL)) {
+	if (row_mysql_handle_errors(&err, trx, thr, nullptr)) {
 		/* It was a lock wait, and it ended */
 
 		thr->lock_state = QUE_THR_LOCK_NOLOCK;
@@ -5975,7 +6002,6 @@ row_count_rtree_recs(
 	mem_heap_t*	heap;
 	dtuple_t*	entry;
 	dtuple_t*	search_entry	= prebuilt->search_tuple;
-	ulint		entry_len;
 	ulint		i;
 	byte*		buf;
 
@@ -5986,10 +6012,9 @@ row_count_rtree_recs(
 	heap = mem_heap_create(256);
 
 	/* Build a search tuple. */
-	entry_len = dict_index_get_n_fields(index);
-	entry = dtuple_create(heap, entry_len);
+	entry = dtuple_create(heap, index->n_fields);
 
-	for (i = 0; i < entry_len; i++) {
+	for (i = 0; i < index->n_fields; i++) {
 		const dict_field_t*	ind_field
 			= dict_index_get_nth_field(index, i);
 		const dict_col_t*	col
@@ -6375,7 +6400,8 @@ rec_loop:
 
     goto count_or_not;
   }
-  else if (const trx_id_t page_trx_id= page_get_max_trx_id(page_align(rec)))
+  else if (const trx_id_t page_trx_id=
+           page_get_max_trx_id(btr_pcur_get_page(prebuilt->pcur)))
   {
     if (page_trx_id >= trx_sys.get_max_trx_id())
       goto invalid_PAGE_MAX_TRX_ID;
@@ -6591,7 +6617,7 @@ rec_loop:
           err= trx_undo_prev_version_build(clust_rec,
                                            clust_index, clust_offsets,
                                            vers_heap, &old_vers,
-                                           nullptr, nullptr, 0);
+                                           &mtr, 0, nullptr, nullptr);
           if (prev_heap)
             mem_heap_free(prev_heap);
           if (err != DB_SUCCESS)
@@ -6753,7 +6779,7 @@ rec_loop:
     {
       push_warning_printf(prebuilt->trx->mysql_thd,
                           Sql_condition::WARN_LEVEL_WARN, ER_NOT_KEYFILE,
-                          "InnoDB: Invalid PAGE_MAX_TRX_ID=%llu"
+                          "InnoDB: Invalid PAGE_MAX_TRX_ID=%" PRIu64
                           " in index '%-.200s'",
                           page_trx_id, index->name());
       prebuilt->autoinc_error= DB_INDEX_CORRUPT;
@@ -6766,9 +6792,9 @@ count_row:
 
   if (prev_entry)
   {
-    ulint matched_fields= 0;
+    uint16_t matched= 0;
     int cmp= cmp_dtuple_rec_with_match(prev_entry, rec, index, offsets,
-                                       &matched_fields);
+                                       &matched);
     const char* msg;
 
     if (UNIV_LIKELY(cmp < 0));
@@ -6781,7 +6807,7 @@ not_ok:
                   << ": " << *prev_entry << ", "
                   << rec_offsets_print(rec, offsets);
     }
-    else if (index->is_unique() && matched_fields >=
+    else if (index->is_unique() && matched >=
              dict_index_get_n_ordering_defined_by_user(index))
     {
       /* NULL values in unique indexes are considered not to be duplicates */

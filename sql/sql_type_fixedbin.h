@@ -136,6 +136,21 @@ public:
       return Fbt_null(item, false).is_null();
     }
 
+    /*
+      Check at fix_fields() time if any of the items can return a nullable
+      value on conversion to Fbt.
+    */
+    static bool fix_fields_maybe_null_on_conversion_to_fbt(Item **items,
+                                                           uint count)
+    {
+      for (uint i= 0; i < count; i++)
+      {
+        if (Fbt::fix_fields_maybe_null_on_conversion_to_fbt(items[i]))
+          return true;
+      }
+      return false;
+    }
+
   public:
 
     Fbt(Item *item, bool *error, bool warn= true)
@@ -163,6 +178,10 @@ public:
       to->length((uint32) FbtImpl::to_string(const_cast<char*>(to->ptr()),
                                              FbtImpl::max_char_length()+1));
       return false;
+    }
+    bool to_bool() const
+    {
+      return !this->only_zero_bytes(m_buffer, FbtImpl::binary_length());
     }
     int cmp(const Binary_string &other) const
     {
@@ -238,6 +257,10 @@ public:
     {
       return singleton();
     }
+    bool val_bool() override
+    {
+      return m_value.to_bool();
+    }
     longlong val_int() override
     {
       return 0;
@@ -267,16 +290,15 @@ public:
     void print(String *str, enum_query_type query_type) override
     {
       StringBuffer<FbtImpl::max_char_length()+64> tmp;
-      tmp.append(singleton()->name().lex_cstring());
-      my_caseup_str(&my_charset_latin1, tmp.c_ptr());
-      str->append(tmp);
+      str->append(singleton()->name().lex_cstring());
       str->append('\'');
       m_value.to_string(&tmp);
       str->append(tmp);
       str->append('\'');
     }
-    Item *get_copy(THD *thd) override
+    Item *do_get_copy(THD *thd) const override
     { return get_item_copy<Item_literal_fbt>(thd, this); }
+    Item *do_build_clone(THD *thd) const override { return get_copy(thd); }
 
     // Non-overriding methods
     void set_value(const Fbt &value)
@@ -567,7 +589,7 @@ public:
       return do_field_string;
     }
 
-    static void do_field_fbt_native_to_binary(Copy_field *copy)
+    static void do_field_fbt_native_to_binary(const Copy_field *copy)
     {
       NativeBuffer<FbtImpl::binary_length()+1> res;
       copy->from_field->val_native(&res);
@@ -748,9 +770,9 @@ public:
       Fbt_null tmp(arg);
       return m_null_value || tmp.is_null() ? UNKNOWN : m_native.cmp(tmp) != 0;
     }
-    int compare(cmp_item *ci) override
+    int compare(const cmp_item *ci) const override
     {
-      cmp_item_fbt *tmp= static_cast<cmp_item_fbt*>(ci);
+      const cmp_item_fbt *tmp= static_cast<const cmp_item_fbt*>(ci);
       DBUG_ASSERT(!m_null_value);
       DBUG_ASSERT(!tmp->m_null_value);
       return m_native.cmp(tmp->m_native);
@@ -764,13 +786,13 @@ public:
   class in_fbt :public in_vector
   {
     Fbt m_value;
-    static int cmp_fbt(void *cmp_arg, Fbt *a, Fbt *b)
+    static int cmp_fbt(void *cmp_arg, const void *a, const void *b)
     {
-      return a->cmp(*b);
+      return static_cast<const Fbt*>(a)->cmp(*static_cast<const Fbt*>(b));
     }
   public:
     in_fbt(THD *thd, uint elements)
-     :in_vector(thd, elements, sizeof(Fbt), (qsort2_cmp) cmp_fbt, 0),
+     :in_vector(thd, elements, sizeof(Fbt), cmp_fbt, 0),
       m_value(Fbt::zero())
     { }
     const Type_handler *type_handler() const override
@@ -854,8 +876,9 @@ public:
     {
       return Item::save_in_field(field, no_conversions);
     }
-    Item *get_copy(THD *thd) override
+    Item *do_get_copy(THD *thd) const override
     { return get_item_copy<Item_copy_fbt>(thd, this); }
+    Item *do_build_clone(THD *thd) const override { return get_copy(thd); }
   };
 
   class Item_char_typecast_func_handler_fbt_to_binary:
@@ -883,48 +906,15 @@ public:
     }
   };
 
-  class Item_typecast_fbt: public Item_func
+  class Item_fbt_func: public Item_func
   {
   public:
-    Item_typecast_fbt(THD *thd, Item *a) :Item_func(thd, a) {}
-
+    using Item_func::Item_func;
     const Type_handler *type_handler() const override
     { return singleton(); }
-
-    enum Functype functype() const override { return CHAR_TYPECAST_FUNC; }
-    bool eq(const Item *item, bool binary_cmp) const override
-    {
-      if (this == item)
-        return true;
-      if (item->type() != FUNC_ITEM ||
-          functype() != ((Item_func*)item)->functype())
-        return false;
-      if (type_handler() != item->type_handler())
-        return false;
-      Item_typecast_fbt *cast= (Item_typecast_fbt*) item;
-      return args[0]->eq(cast->args[0], binary_cmp);
-    }
-    LEX_CSTRING func_name_cstring() const override
-    {
-      static Name name= singleton()->name();
-      size_t len= 9+name.length()+1;
-      char *buf= (char*)current_thd->alloc(len);
-      strmov(strmov(buf, "cast_as_"), name.ptr());
-      return { buf, len };
-    }
-    void print(String *str, enum_query_type query_type) override
-    {
-      str->append(STRING_WITH_LEN("cast("));
-      args[0]->print(str, query_type);
-      str->append(STRING_WITH_LEN(" as "));
-      str->append(singleton()->name().lex_cstring());
-      str->append(')');
-    }
     bool fix_length_and_dec(THD *thd) override
     {
       Type_std_attributes::operator=(Type_std_attributes_fbt());
-      if (Fbt::fix_fields_maybe_null_on_conversion_to_fbt(args[0]))
-        set_maybe_null();
       return false;
     }
     String *val_str(String *to) override
@@ -950,12 +940,57 @@ public:
       set_zero_time(ltime, MYSQL_TIMESTAMP_TIME);
       return false;
     }
+  };
+
+  class Item_typecast_fbt: public Item_fbt_func
+  {
+  public:
+    Item_typecast_fbt(THD *thd, Item *a) :Item_fbt_func(thd, a) {}
+
+    Item_func::Functype functype() const override
+    { return Item_func::CHAR_TYPECAST_FUNC; }
+    bool eq(const Item *item, bool binary_cmp) const override
+    {
+      if (this == item)
+        return true;
+      if (item->type() != Item_fbt_func::FUNC_ITEM ||
+          functype() != ((Item_func*)item)->functype())
+        return false;
+      if (Item_fbt_func::type_handler() != item->type_handler())
+        return false;
+      Item_typecast_fbt *cast= (Item_typecast_fbt*) item;
+      return Item_fbt_func::args[0]->eq(cast->args[0], binary_cmp);
+    }
+    LEX_CSTRING func_name_cstring() const override
+    {
+      static Name name= singleton()->name();
+      size_t len= 9+name.length()+1;
+      char *buf= current_thd->alloc(len);
+      strmov(strmov(buf, "cast_as_"), name.ptr());
+      return { buf, len };
+    }
+    void print(String *str, enum_query_type query_type) override
+    {
+      str->append(STRING_WITH_LEN("cast("));
+      Item_fbt_func::args[0]->print(str, query_type);
+      str->append(STRING_WITH_LEN(" as "));
+      str->append(singleton()->name().lex_cstring());
+      str->append(')');
+    }
+    bool fix_length_and_dec(THD *thd) override
+    {
+      Item_fbt_func::fix_length_and_dec(thd);
+      if (Fbt::fix_fields_maybe_null_on_conversion_to_fbt(
+                 Item_fbt_func::args[0]))
+        Item_fbt_func::set_maybe_null();
+      return false;
+    }
     bool val_native(THD *thd, Native *to) override
     {
-      Fbt_null tmp(args[0]);
-      return null_value= tmp.is_null() || tmp.to_native(to);
+      Fbt_null tmp(Item_fbt_func::args[0]);
+      return Item_fbt_func::null_value= tmp.is_null() || tmp.to_native(to);
     }
-    Item *get_copy(THD *thd) override
+    Item *do_get_copy(THD *thd) const override
     { return get_item_copy<Item_typecast_fbt>(thd, this); }
   };
 
@@ -965,9 +1000,10 @@ public:
   public:
     Item_cache_fbt(THD *thd)
      :Item_cache(thd, singleton()) { }
-    Item *get_copy(THD *thd)
+    Item *do_get_copy(THD *thd) const override
     { return get_item_copy<Item_cache_fbt>(thd, this); }
-    bool cache_value()
+    Item *do_build_clone(THD *thd) const override { return get_copy(thd); }
+    bool cache_value() override
     {
       if (!example)
         return false;
@@ -977,54 +1013,54 @@ public:
                                                    &m_value, type_handler());
       return true;
     }
-    String* val_str(String *to)
+    String* val_str(String *to) override
     {
       if (!has_value())
         return NULL;
       Fbt_null tmp(m_value.ptr(), m_value.length());
       return tmp.is_null() || tmp.to_string(to) ? NULL : to;
     }
-    my_decimal *val_decimal(my_decimal *to)
+    my_decimal *val_decimal(my_decimal *to) override
     {
       if (!has_value())
         return NULL;
       my_decimal_set_zero(to);
       return to;
     }
-    longlong val_int()
+    longlong val_int() override
     {
       if (!has_value())
         return 0;
       return 0;
     }
-    double val_real()
+    double val_real() override
     {
       if (!has_value())
         return 0;
       return 0;
     }
-    longlong val_datetime_packed(THD *thd)
-    {
-      DBUG_ASSERT(0);
-      if (!has_value())
-        return 0;
-      return 0;
-    }
-    longlong val_time_packed(THD *thd)
+    longlong val_datetime_packed(THD *) override
     {
       DBUG_ASSERT(0);
       if (!has_value())
         return 0;
       return 0;
     }
-    bool get_date(THD *thd, MYSQL_TIME *ltime, date_mode_t fuzzydate)
+    longlong val_time_packed(THD *) override
+    {
+      DBUG_ASSERT(0);
+      if (!has_value())
+        return 0;
+      return 0;
+    }
+    bool get_date(THD *, MYSQL_TIME *ltime, date_mode_t) override
     {
       if (!has_value())
         return true;
       set_zero_time(ltime, MYSQL_TIMESTAMP_TIME);
       return false;
     }
-    bool val_native(THD *thd, Native *to)
+    bool val_native(THD *, Native *to) override
     {
       if (!has_value())
         return true;
@@ -1110,6 +1146,11 @@ public:
     return FbtImpl::max_char_length();
   }
 
+  const Type_handler *type_handler_for_implicit_upgrade() const override
+  {
+    return TypeCollectionImpl::singleton()->
+             type_handler_for_implicit_upgrade(this);
+  }
   const Type_handler *type_handler_for_comparison() const override
   {
     return this;
@@ -1534,6 +1575,16 @@ public:
     Fbt_null na(a), nb(b);
     return !na.is_null() && !nb.is_null() && !na.cmp(nb);
   }
+  bool Item_bool_rowready_func2_fix_length_and_dec(THD *thd,
+                                 Item_bool_rowready_func2 *func) const override
+  {
+    if (Type_handler::Item_bool_rowready_func2_fix_length_and_dec(thd, func))
+      return true;
+    if (!func->maybe_null() &&
+        Fbt::fix_fields_maybe_null_on_conversion_to_fbt(func->arguments(), 2))
+      func->set_maybe_null();
+    return false;
+  }
   bool Item_hybrid_func_fix_attributes(THD *thd, const LEX_CSTRING &name,
                                        Type_handler_hybrid_field_type *h,
                                        Type_all_attributes *attr,
@@ -1715,6 +1766,9 @@ public:
 
   bool Item_func_between_fix_length_and_dec(Item_func_between *func) const override
   {
+    if (!func->maybe_null() &&
+        Fbt::fix_fields_maybe_null_on_conversion_to_fbt(func->arguments(), 3))
+      func->set_maybe_null();
     return false;
   }
   longlong Item_func_between_val_int(Item_func_between *func) const override
@@ -1737,6 +1791,10 @@ public:
                                                     Item_func_in *func)
                                                     const override
   {
+    if (!func->maybe_null() &&
+        Fbt::fix_fields_maybe_null_on_conversion_to_fbt(func->arguments(),
+                                                        func->argument_count()))
+      func->set_maybe_null();
     if (func->compatible_types_scalar_bisection_possible())
     {
       return func->value_list_convert_const_to_int(thd) ||
@@ -1837,6 +1895,11 @@ public:
     return Item_func_or_sum_illegal_param(item);
   }
 
+  Item_literal *create_boolean_false_item(THD *thd) const override
+  {
+    return new (thd->mem_root) Item_literal_fbt(thd);
+  }
+
   static Type_handler_fbt *singleton()
   {
     static Type_handler_fbt th;
@@ -1909,6 +1972,12 @@ public:
                                            const override
   {
     return NULL;
+  }
+
+  const Type_handler *type_handler_for_implicit_upgrade(
+                                               const Type_handler *from) const
+  {
+    return from;
   }
 
   static Type_collection_fbt *singleton()

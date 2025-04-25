@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2020, 2022, MariaDB Corporation.
+Copyright (c) 2020, 2023, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -121,15 +121,13 @@ private:
   @param id the new owner of the U or X lock */
   void set_new_owner(pthread_t id)
   {
-    IF_DBUG(DBUG_ASSERT(writer.exchange(id, std::memory_order_relaxed)),
-            writer.store(id, std::memory_order_relaxed));
+    writer.store(id, std::memory_order_relaxed);
   }
   /** Assign the ownership of a write lock to a thread
   @param id the owner of the U or X lock */
   void set_first_owner(pthread_t id)
   {
-    IF_DBUG(DBUG_ASSERT(!writer.exchange(id, std::memory_order_relaxed)),
-            writer.store(id, std::memory_order_relaxed));
+    writer.store(id, std::memory_order_relaxed);
   }
 #ifdef UNIV_DEBUG
   /** Register the current thread as a holder of a shared lock */
@@ -149,7 +147,7 @@ private:
 #endif
 
 public:
-  /** In crash recovery or the change buffer, claim the ownership
+  /** In crash recovery, claim the ownership
   of the exclusive block lock to the current thread */
   void claim_ownership() { set_new_owner(pthread_self()); }
 
@@ -198,6 +196,30 @@ public:
   /** Upgrade an update lock */
   inline void u_x_upgrade();
   inline void u_x_upgrade(const char *file, unsigned line);
+  /** @return whether a shared lock was upgraded to exclusive */
+  bool s_x_upgrade_try()
+  {
+    ut_ad(have_s());
+    ut_ad(!have_u_or_x());
+    if (!lock.rd_u_upgrade_try())
+      return false;
+    claim_ownership();
+    s_unlock();
+    lock.u_wr_upgrade();
+    recursive= RECURSIVE_X;
+    return true;
+  }
+  __attribute__((warn_unused_result))
+  /** @return whether the operation succeeded without waiting */
+  bool s_x_upgrade()
+  {
+    if (s_x_upgrade_try())
+      return true;
+    s_unlock();
+    x_lock();
+    return false;
+  }
+
   /** Downgrade a single exclusive lock to an update lock */
   void x_u_downgrade()
   {
@@ -205,6 +227,16 @@ public:
     ut_ad(recursive <= RECURSIVE_MAX);
     recursive*= RECURSIVE_U;
     lock.wr_u_downgrade();
+  }
+  /** Downgrade a single update lock to a shared lock */
+  void u_s_downgrade()
+  {
+    ut_ad(have_u_or_x());
+    ut_ad(recursive == RECURSIVE_U);
+    recursive= 0;
+    set_new_owner(0);
+    lock.u_rd_downgrade();
+    ut_d(s_lock_register());
   }
 
   /** Acquire an exclusive lock or upgrade an update lock
@@ -285,7 +317,7 @@ public:
 typedef sux_lock<ssux_lock_impl<true>> block_lock;
 
 #ifndef UNIV_PFS_RWLOCK
-typedef sux_lock<ssux_lock_impl<false>> index_lock;
+typedef sux_lock<ssux_lock_impl<true>> index_lock;
 #else
 typedef sux_lock<ssux_lock> index_lock;
 

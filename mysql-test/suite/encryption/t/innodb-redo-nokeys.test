@@ -9,6 +9,7 @@ call mtr.add_suppression("InnoDB: Recovery cannot access file");
 call mtr.add_suppression("InnoDB: Plugin initialization aborted");
 call mtr.add_suppression("Plugin 'InnoDB' init function returned error\\.");
 call mtr.add_suppression("Plugin 'InnoDB' registration as a STORAGE ENGINE failed.");
+call mtr.add_suppression("Fewer engines are enabled now than were before the crash");
 call mtr.add_suppression("InnoDB: (Unable to apply log to|Discarding log for) corrupted page ");
 call mtr.add_suppression("InnoDB: Cannot apply log to \\[page id: space=[1-9][0-9]*, page number=0\\] of corrupted file '.*test.t[1-5]\\.ibd'");
 call mtr.add_suppression("InnoDB: Failed to read page .* from file '.*'");
@@ -20,8 +21,6 @@ call mtr.add_suppression("InnoDB: Encryption key is not found for");
 
 -- let $restart_parameters=--file-key-management-filename=$MYSQL_TEST_DIR/std_data/keys2.txt
 -- source include/restart_mysqld.inc
-
-SET GLOBAL innodb_file_per_table = ON;
 
 create table t1(a int not null primary key auto_increment, c char(200), b blob, index(b(10))) engine=innodb row_format=compressed encrypted=yes encryption_key_id=20;
 create table t2(a int not null primary key auto_increment, c char(200), b blob, index(b(10))) engine=innodb row_format=compressed encrypted=yes;
@@ -44,7 +43,9 @@ insert into t3 select * from t1;
 insert into t4 select * from t1;
 commit;
 
+let $no_checkpoint_flush= 1;
 --source ../../suite/innodb/include/no_checkpoint_start.inc
+
 #
 # We test redo log page read at recv_read_page using
 # keys that are not in std_data/keys.txt. If checkpoint
@@ -77,7 +78,7 @@ WHERE engine = 'innodb'
 AND support IN ('YES', 'DEFAULT', 'ENABLED');
 
 let SEARCH_FILE = $MYSQLTEST_VARDIR/log/mysqld.1.err;
-let SEARCH_PATTERN = \[ERROR\] InnoDB: Encryption key is not found for .*test.t1.ibd;
+let SEARCH_PATTERN = \[ERROR\] InnoDB: Encryption key is not found for .*test.t[1-5].ibd;
 --source include/search_pattern_in_file.inc
 
 #

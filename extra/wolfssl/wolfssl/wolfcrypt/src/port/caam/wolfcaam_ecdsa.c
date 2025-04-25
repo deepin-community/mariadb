@@ -1,6 +1,6 @@
 /* wolfcaam_ecdsa.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -352,7 +352,7 @@ int wc_CAAM_EccSign(const byte* in, int inlen, byte* out, word32* outlen,
             buf[idx].Length = keySz;
         }
         buf[idx].TheAddress = (CAAM_ADDRESS)pk;
-        args[0] = key->blackKey; /* potentail black key, not in sm */
+        args[0] = key->blackKey; /* potential black key, not in sm */
     }
     idx++;
 

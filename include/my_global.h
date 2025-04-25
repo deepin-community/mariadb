@@ -540,10 +540,9 @@ typedef int	pbool;		/* Mixed prototypes can't take char */
 typedef int	pshort;		/* Mixed prototypes can't take short int */
 typedef double	pfloat;		/* Mixed prototypes can't take float */
 #endif
-C_MODE_START
-typedef int	(*qsort_cmp)(const void *,const void *);
-typedef int	(*qsort_cmp2)(void*, const void *,const void *);
-C_MODE_END
+
+#include <my_cmp.h>
+
 #define qsort_t RETQSORTTYPE	/* Broken GCC can't handle typedef !!!! */
 #ifdef HAVE_SYS_SOCKET_H
 #include <sys/socket.h>
@@ -676,13 +675,14 @@ typedef SOCKET_SIZE_TYPE size_socket;
   Io buffer size; Must be a power of 2 and a multiple of 512. May be
   smaller what the disk page size. This influences the speed of the
   isam btree library. eg to big to slow.
+  4096 is a common block size on SSDs.
 */
 #define IO_SIZE			4096U
 /*
-  How much overhead does malloc have. The code often allocates
+  How much overhead does malloc/my_malloc have. The code often allocates
   something like 1024-MALLOC_OVERHEAD bytes
 */
-#define MALLOC_OVERHEAD 8
+#define MALLOC_OVERHEAD (8+24)
 
 	/* get memory in huncs */
 #define ONCE_ALLOC_INIT		(uint) 4096
@@ -781,7 +781,7 @@ inline unsigned long long my_double2ulonglong(double d)
 #define INT_MAX64       0x7FFFFFFFFFFFFFFFLL
 #define INT_MIN32       (~0x7FFFFFFFL)
 #define INT_MAX32       0x7FFFFFFFL
-#define UINT_MAX32      0xFFFFFFFFL
+#define UINT_MAX32      0xFFFFFFFFUL
 #define INT_MIN24       (~0x007FFFFF)
 #define INT_MAX24       0x007FFFFF
 #define UINT_MAX24      0x00FFFFFF
@@ -834,7 +834,6 @@ typedef long long	my_ptrdiff_t;
 #define ALIGN_PTR(A, t) ((t*) MY_ALIGN((A), sizeof(double)))
 #define ADD_TO_PTR(ptr,size,type) (type) ((uchar*) (ptr)+size)
 #define PTR_BYTE_DIFF(A,B) (my_ptrdiff_t) ((uchar*) (A) - (uchar*) (B))
-#define PREV_BITS(type,A)	((type) (((type) 1 << (A)) -1))
 
 /*
   Custom version of standard offsetof() macro which can be used to get
@@ -973,6 +972,7 @@ typedef struct st_mysql_lex_string LEX_STRING;
 #define SOCKET_ECONNRESET WSAECONNRESET
 #define SOCKET_ENFILE	ENFILE
 #define SOCKET_EMFILE	EMFILE
+#define SOCKET_CLOSED   EIO
 #else /* Unix */
 #define socket_errno	errno
 #define closesocket(A)	close(A)
@@ -982,6 +982,7 @@ typedef struct st_mysql_lex_string LEX_STRING;
 #define SOCKET_EADDRINUSE EADDRINUSE
 #define SOCKET_ETIMEDOUT ETIMEDOUT
 #define SOCKET_ECONNRESET ECONNRESET
+#define SOCKET_CLOSED   EIO
 #define SOCKET_ENFILE	ENFILE
 #define SOCKET_EMFILE	EMFILE
 #endif

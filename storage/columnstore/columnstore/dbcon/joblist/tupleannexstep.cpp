@@ -18,19 +18,15 @@
 
 //  $Id: tupleannexstep.cpp 9661 2013-07-01 20:33:05Z pleblanc $
 
-//#define NDEBUG
+// #define NDEBUG
 #include <cassert>
 #include <sstream>
 #include <iomanip>
-#ifdef _MSC_VER
-#include <unordered_set>
-#else
 #include <tr1/unordered_set>
-#endif
 using namespace std;
 
 #include <boost/shared_ptr.hpp>
-#include <boost/shared_array.hpp>
+
 #include <boost/uuid/uuid_io.hpp>
 using namespace boost;
 
@@ -255,10 +251,6 @@ void TupleAnnexStep::run()
     fRunnersList.resize(fMaxThreads);
     fInputIteratorsList.resize(fMaxThreads + 1);
 
-    // Activate stats collecting before CS spawns threads.
-    if (traceOn())
-      dlTimes.setFirstReadTime();
-
     // *DRRTUY Make this block conditional
     StepTeleStats sts;
     sts.query_uuid = fQueryUuid;
@@ -302,7 +294,6 @@ void TupleAnnexStep::join()
 
 uint32_t TupleAnnexStep::nextBand(messageqcpp::ByteStream& bs)
 {
-  RGData rgDataOut;
   bool more = false;
   uint32_t rowCount = 0;
 
@@ -310,18 +301,18 @@ uint32_t TupleAnnexStep::nextBand(messageqcpp::ByteStream& bs)
   {
     bs.restart();
 
-    more = fOutputDL->next(fOutputIterator, &rgDataOut);
+    more = fOutputDL->next(fOutputIterator, &fRgDataOut);
 
     if (more && !cancelled())
     {
-      fRowGroupDeliver.setData(&rgDataOut);
+      fRowGroupDeliver.setData(&fRgDataOut);
       fRowGroupDeliver.serializeRGData(bs);
       rowCount = fRowGroupDeliver.getRowCount();
     }
     else
     {
       while (more)
-        more = fOutputDL->next(fOutputIterator, &rgDataOut);
+        more = fOutputDL->next(fOutputIterator, &fRgDataOut);
 
       fEndOfResult = true;
     }
@@ -331,7 +322,7 @@ uint32_t TupleAnnexStep::nextBand(messageqcpp::ByteStream& bs)
     handleException(std::current_exception(), logging::ERR_IN_DELIVERY, logging::ERR_ALWAYS_CRITICAL,
                     "TupleAnnexStep::nextBand()");
     while (more)
-      more = fOutputDL->next(fOutputIterator, &rgDataOut);
+      more = fOutputDL->next(fOutputIterator, &fRgDataOut);
 
     fEndOfResult = true;
   }
@@ -339,8 +330,8 @@ uint32_t TupleAnnexStep::nextBand(messageqcpp::ByteStream& bs)
   if (fEndOfResult)
   {
     // send an empty / error band
-    rgDataOut.reinit(fRowGroupDeliver, 0);
-    fRowGroupDeliver.setData(&rgDataOut);
+    fRgDataOut.reinit(fRowGroupDeliver, 0);
+    fRowGroupDeliver.setData(&fRgDataOut);
     fRowGroupDeliver.resetRowGroup(0);
     fRowGroupDeliver.setStatus(status());
     fRowGroupDeliver.serializeRGData(bs);
@@ -863,7 +854,7 @@ void TupleAnnexStep::finalizeParallelOrderByDistinct()
         break;
       }
     }  // end of limit bound while loop
-  }    // end of if-else
+  }  // end of if-else
 
   if (fRowGroupOut.getRowCount() > 0)
   {
@@ -1050,7 +1041,7 @@ void TupleAnnexStep::finalizeParallelOrderBy()
         break;
       }
     }  // end of limit bound while loop
-  }    // end of if-else
+  }  // end of if-else
 
   if (fRowGroupOut.getRowCount() > 0)
   {
@@ -1070,9 +1061,6 @@ void TupleAnnexStep::finalizeParallelOrderBy()
 
   if (traceOn())
   {
-    if (dlTimes.FirstReadTime().tv_sec == 0)
-      dlTimes.setFirstReadTime();
-
     dlTimes.setLastReadTime();
     dlTimes.setEndOfInputTime();
     printCalTrace();
@@ -1107,6 +1095,13 @@ void TupleAnnexStep::executeParallelOrderBy(uint64_t id)
   try
   {
     more = fInputDL->next(fInputIteratorsList[id], &rgDataIn);
+
+    // Stats collecting.
+    if (more && (id == 1) && traceOn())
+    {
+      dlTimes.setFirstReadTime();
+    }
+
     if (more)
       dlOffset++;
 
@@ -1246,16 +1241,10 @@ void TupleAnnexStep::formatMiniStats()
 {
   ostringstream oss;
   oss << "TNS ";
-  oss << "UM "
-      << "- "
-      << "- "
-      << "- "
-      << "- "
-      << "- "
-      << "- " << JSTimeStamp::tsdiffstr(dlTimes.EndOfInputTime(), dlTimes.FirstReadTime()) << " "
-      << fRowsReturned << " ";
+  oss << "UM " << "- " << "- " << "- " << "- " << "- " << "- "
+      << JSTimeStamp::tsdiffstr(dlTimes.EndOfInputTime(), dlTimes.FirstReadTime()) << " " << fRowsReturned
+      << " ";
   fMiniInfo += oss.str();
 }
 
 }  // namespace joblist
-// vim:ts=4 sw=4:

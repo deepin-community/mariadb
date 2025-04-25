@@ -22,8 +22,7 @@
  *                                                                         *
  ***************************************************************************/
 
-#ifndef BLOCKCACHEREQUESTCLIENT_H
-#define BLOCKCACHEREQUESTCLIENT_H
+#pragma once
 
 #include "blockrequestprocessor.h"
 #include "brmtypes.h"
@@ -177,5 +176,3 @@ class blockCacheClient
 
 }  // namespace dbbc
 
-#endif
-// vim:ts=4 sw=4:

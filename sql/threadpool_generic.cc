@@ -107,7 +107,7 @@ struct pool_timer_t
   mysql_cond_t cond;
   volatile uint64 current_microtime;
   std::atomic<uint64_t> next_timeout_check;
-  int  tick_interval;
+  uint  tick_interval;
   bool shutdown;
   pthread_t timer_thread_id;
 };
@@ -559,6 +559,7 @@ static void* timer_thread(void *param)
   pool_timer_t* timer=(pool_timer_t *)param;
 
   my_thread_init();
+  my_thread_set_name("timer_thread");
   DBUG_ENTER("timer_thread");
   timer->next_timeout_check.store(std::numeric_limits<uint64_t>::max(),
                                   std::memory_order_relaxed);
@@ -569,7 +570,7 @@ static void* timer_thread(void *param)
     struct timespec ts;
     int err;
 
-    set_timespec_nsec(ts,timer->tick_interval*1000000);
+    set_timespec_nsec(ts, timer->tick_interval*1000000LL);
     mysql_mutex_lock(&timer->mutex);
     err= mysql_cond_timedwait(&timer->cond, &timer->mutex, &ts);
     if (timer->shutdown)
@@ -1533,6 +1534,7 @@ static void *worker_main(void *param)
   worker_thread_t this_thread;
   pthread_detach_this_thread();
   my_thread_init();
+  my_thread_set_name("worker_thread");
 
   DBUG_ENTER("worker_main");
 

@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 2000, 2018, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2015, 2022, MariaDB Corporation.
+Copyright (c) 2015, 2023, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -44,7 +44,6 @@ Created 9/17/2000 Heikki Tuuri
 #include "fsp0file.h"
 #include "fts0fts.h"
 #include "fts0types.h"
-#include "ibuf0ibuf.h"
 #include "lock0lock.h"
 #include "log0log.h"
 #include "pars0pars.h"
@@ -210,6 +209,14 @@ row_mysql_read_blob_ref(
 	byte*	data;
 
 	*len = mach_read_from_n_little_endian(ref, col_len - 8);
+
+	if (!*len) {
+		/* Field_blob::store() if (!length) would encode both
+		the length and the pointer in the same area. An empty
+		string must be a valid (nonnull) pointer in the
+		collation functions that cmp_data() may invoke. */
+		return ref;
+	}
 
 	memcpy(&data, ref + col_len - 8, sizeof data);
 
@@ -625,7 +632,7 @@ row_mysql_handle_errors(
 				function */
 	trx_t*		trx,	/*!< in: transaction */
 	que_thr_t*	thr,	/*!< in: query thread, or NULL */
-	trx_savept_t*	savept)	/*!< in: savepoint, or NULL */
+	const undo_no_t*savept)	/*!< in: pointer to savepoint, or nullptr */
 {
 	dberr_t	err;
 
@@ -681,8 +688,7 @@ handle_new_error:
 		}
 		/* MariaDB will roll back the entire transaction. */
 		trx->bulk_insert = false;
-		trx->last_sql_stat_start.least_undo_no = 0;
-		trx->savepoints_discard();
+		trx->last_stmt_start = 0;
 		break;
 	case DB_LOCK_WAIT:
 		err = lock_wait(thr);
@@ -695,11 +701,11 @@ handle_new_error:
 		DBUG_RETURN(true);
 
 	case DB_DEADLOCK:
+	case DB_RECORD_CHANGED:
 	case DB_LOCK_TABLE_FULL:
 	rollback:
 		/* Roll back the whole transaction; this resolution was added
 		to version 3.23.43 */
-
 		trx->rollback();
 		break;
 
@@ -1136,7 +1142,7 @@ row_lock_table_autoinc_for_mysql(
 
 		trx->error_state = err;
 	} while (err != DB_SUCCESS
-		 && row_mysql_handle_errors(&err, trx, thr, NULL));
+		 && row_mysql_handle_errors(&err, trx, thr, nullptr));
 
 	trx->op_info = "";
 
@@ -1178,58 +1184,33 @@ row_lock_table(row_prebuilt_t* prebuilt)
 					 prebuilt->select_lock_type), thr);
 		trx->error_state = err;
 	} while (err != DB_SUCCESS
-		 && row_mysql_handle_errors(&err, trx, thr, NULL));
+		 && row_mysql_handle_errors(&err, trx, thr, nullptr));
 
 	trx->op_info = "";
 
 	return(err);
 }
 
-/** Determine is tablespace encrypted but decryption failed, is table corrupted
-or is tablespace .ibd file missing.
-@param[in]	table		Table
-@param[in]	trx		Transaction
-@param[in]	push_warning	true if we should push warning to user
+/** Report an error for a failure to access a table.
+@param table   unreadable table
+@param trx     transaction
 @retval	DB_DECRYPTION_FAILED	table is encrypted but decryption failed
 @retval	DB_CORRUPTION		table is corrupted
 @retval	DB_TABLESPACE_NOT_FOUND	tablespace .ibd file not found */
-static
-dberr_t
-row_mysql_get_table_status(
-	const dict_table_t*	table,
-	trx_t*			trx,
-	bool 			push_warning = true)
+ATTRIBUTE_COLD
+static dberr_t row_mysql_get_table_error(trx_t *trx, dict_table_t *table)
 {
-	dberr_t err;
-	if (const fil_space_t* space = table->space) {
-		if (space->crypt_data && space->crypt_data->is_encrypted()) {
-			// maybe we cannot access the table due to failing
-			// to decrypt
-			if (push_warning) {
-				ib_push_warning(trx, DB_DECRYPTION_FAILED,
-					"Table %s is encrypted."
-					"However key management plugin or used key_id is not found or"
-					" used encryption algorithm or method does not match.",
-					table->name.m_name);
-			}
+  if (const fil_space_t *space= table->space)
+  {
+    if (space->crypt_data && space->crypt_data->is_encrypted())
+      return innodb_decryption_failed(trx->mysql_thd, table);
+    return DB_CORRUPTION;
+  }
 
-			err = DB_DECRYPTION_FAILED;
-		} else {
-			if (push_warning) {
-				ib_push_warning(trx, DB_CORRUPTION,
-					"Table %s in tablespace %lu corrupted.",
-					table->name.m_name, table->space);
-			}
-
-			err = DB_CORRUPTION;
-		}
-	} else {
-		ib::error() << ".ibd file is missing for table "
-			<< table->name;
-		err = DB_TABLESPACE_NOT_FOUND;
-	}
-
-	return(err);
+  const int dblen= int(table->name.dblen());
+  sql_print_error("InnoDB .ibd file is missing for table %.*sQ.%sQ",
+                  dblen, table->name.m_name, table->name.m_name + dblen + 1);
+  return DB_TABLESPACE_NOT_FOUND;
 }
 
 /** Does an insert for MySQL.
@@ -1242,7 +1223,6 @@ row_insert_for_mysql(
 	row_prebuilt_t*	prebuilt,
 	ins_mode_t	ins_mode)
 {
-	trx_savept_t	savept;
 	que_thr_t*	thr;
 	dberr_t		err;
 	ibool		was_lock_wait;
@@ -1265,7 +1245,7 @@ row_insert_for_mysql(
 
 		return(DB_TABLESPACE_DELETED);
 	} else if (!table->is_readable()) {
-		return row_mysql_get_table_status(table, trx, true);
+		return row_mysql_get_table_error(trx, table);
 	} else if (high_level_read_only) {
 		return(DB_READ_ONLY);
 	} else if (UNIV_UNLIKELY(table->corrupted)
@@ -1296,7 +1276,7 @@ row_insert_for_mysql(
 	roll back to the start of the transaction. For correctness, it
 	would suffice to roll back to the start of the first insert
 	into this empty table, but we will keep it simple and efficient. */
-	savept.least_undo_no = trx->bulk_insert ? 0 : trx->undo_no;
+	const undo_no_t savept{trx->bulk_insert ? 0 : trx->undo_no};
 
 	thr = que_fork_get_first_thr(prebuilt->ins_graph);
 
@@ -1585,7 +1565,8 @@ init_fts_doc_id_for_ref(
 	for (dict_foreign_t* foreign : table->referenced_set) {
 		ut_ad(foreign->foreign_table);
 
-		if (foreign->foreign_table->fts) {
+		if (foreign->foreign_table->space
+		    && foreign->foreign_table->fts) {
 			fts_init_doc_id(foreign->foreign_table);
 		}
 
@@ -1603,7 +1584,6 @@ init_fts_doc_id_for_ref(
 dberr_t
 row_update_for_mysql(row_prebuilt_t* prebuilt)
 {
-	trx_savept_t	savept;
 	dberr_t		err;
 	que_thr_t*	thr;
 	dict_index_t*	clust_index;
@@ -1621,7 +1601,7 @@ row_update_for_mysql(row_prebuilt_t* prebuilt)
 	ut_ad(table->stat_initialized);
 
 	if (!table->is_readable()) {
-		return(row_mysql_get_table_status(table, trx, true));
+		return row_mysql_get_table_error(trx, table);
 	}
 
 	if (high_level_read_only) {
@@ -1660,7 +1640,7 @@ row_update_for_mysql(row_prebuilt_t* prebuilt)
 	generated for the table: MySQL does not know anything about
 	the row id used as the clustered index key */
 
-	savept.least_undo_no = trx->undo_no;
+	undo_no_t savept = trx->undo_no;
 
 	thr = que_fork_get_first_thr(prebuilt->upd_graph);
 
@@ -1816,7 +1796,7 @@ row_unlock_for_mysql(
 
 			lock_rec_unlock(
 				trx,
-				btr_pcur_get_block(pcur)->page.id(),
+				*btr_pcur_get_block(pcur),
 				rec,
 				static_cast<enum lock_mode>(
 					prebuilt->select_lock_type));
@@ -2199,7 +2179,7 @@ row_create_index_for_mysql(
 
 			err = dict_create_index_tree_in_mem(index, trx);
 #ifdef BTR_CUR_HASH_ADAPT
-			ut_ad(!index->search_info->ref_count);
+			ut_ad(!index->search_info.ref_count);
 #endif /* BTR_CUR_HASH_ADAPT */
 
 			if (err != DB_SUCCESS) {
@@ -2322,6 +2302,9 @@ row_discard_tablespace(
 	trx_t*		trx,	/*!< in/out: transaction handle */
 	dict_table_t*	table)	/*!< in/out: table to be discarded */
 {
+	ut_ad(table->magic_n == DICT_TABLE_MAGIC_N);
+	ut_ad(!table->is_temporary());
+
 	dberr_t err;
 
 	/* How do we prevent crashes caused by ongoing operations on
@@ -2337,12 +2320,7 @@ row_discard_tablespace(
 	2) Purge and rollback: we assign a new table id for the
 	table. Since purge and rollback look for the table based on
 	the table id, they see the table as 'dropped' and discard
-	their operations.
-
-	3) Insert buffer: we remove all entries for the tablespace in
-	the insert buffer tree. */
-
-	ibuf_delete_for_discarded_space(table->space_id);
+	their operations. */
 
 	table_id_t	new_id;
 
@@ -2379,11 +2357,16 @@ row_discard_tablespace(
 
 	/* All persistent operations successful, update the
 	data dictionary memory cache. */
+	ut_ad(dict_sys.locked());
 
-	dict_table_change_id_in_cache(table, new_id);
+	/* Remove the table from the hash table of id's */
+	dict_sys.table_id_hash.cell_get(ut_fold_ull(table->id))
+		->remove(*table, &dict_table_t::id_hash);
+	table->id = new_id;
+	dict_sys.table_id_hash.cell_get(ut_fold_ull(table->id))
+		->append(*table, &dict_table_t::id_hash);
 
 	dict_index_t* index = UT_LIST_GET_FIRST(table->indexes);
-	if (index) index->clear_instant_alter();
 
 	/* Reset the root page numbers. */
 	for (; index; index = UT_LIST_GET_NEXT(indexes, index)) {
@@ -2445,15 +2428,23 @@ rollback:
   /* Note: The following cannot be rolled back. Rollback would see the
   UPDATE of SYS_INDEXES.TABLE_ID as two operations: DELETE and INSERT.
   It would invoke btr_free_if_exists() when rolling back the INSERT,
-  effectively dropping all indexes of the table. Furthermore, calls like
-  ibuf_delete_for_discarded_space() are already discarding data
-  before the transaction is committed.
+  effectively dropping all indexes of the table. Furthermore, we are
+  already discarding data before the transaction is committed.
 
   It would be better to remove the integrity-breaking
   ALTER TABLE...DISCARD TABLESPACE operation altogether. */
   table->file_unreadable= true;
   table->space= nullptr;
+#if defined __GNUC__ && !defined __clang__
+# pragma GCC diagnostic push
+# if __GNUC__ < 12 || defined WITH_UBSAN
+#  pragma GCC diagnostic ignored "-Wconversion"
+# endif
+#endif
   table->flags2|= DICT_TF2_DISCARDED;
+#if defined __GNUC__ && !defined __clang__
+# pragma GCC diagnostic pop
+#endif
   err= row_discard_tablespace(trx, table);
   DBUG_EXECUTE_IF("ib_discard_before_commit_crash",
                   log_buffer_flush_to_disk(); DBUG_SUICIDE(););
@@ -2473,7 +2464,6 @@ rollback:
   if (fts_exist)
     purge_sys.resume_FTS();
 
-  ibuf_delete_for_discarded_space(space_id);
   buf_flush_remove_pages(space_id);
   trx->op_info= "";
   return err;
@@ -2543,7 +2533,7 @@ row_rename_table_for_mysql(
 	const char*	old_name,	/*!< in: old table name */
 	const char*	new_name,	/*!< in: new table name */
 	trx_t*		trx,		/*!< in/out: transaction */
-	bool		use_fk)		/*!< in: whether to parse and enforce
+	rename_fk	fk)		/*!< in: how to handle
 					FOREIGN KEY constraints */
 {
 	dict_table_t*	table			= NULL;
@@ -2567,6 +2557,8 @@ row_rename_table_for_mysql(
 
 	old_is_tmp = dict_table_t::is_temporary_name(old_name);
 	new_is_tmp = dict_table_t::is_temporary_name(new_name);
+
+	ut_ad(fk != RENAME_IGNORE_FK || !new_is_tmp);
 
 	table = dict_table_open_on_name(old_name, true,
 					DICT_ERR_IGNORE_FK_NOKEY);
@@ -2594,17 +2586,16 @@ row_rename_table_for_mysql(
 		/* Check for the table using lower
 		case name, including the partition
 		separator "P" */
-		memcpy(par_case_name, old_name,
-			strlen(old_name));
-		par_case_name[strlen(old_name)] = 0;
-		innobase_casedn_str(par_case_name);
+		system_charset_info->casedn_z(
+				old_name, strlen(old_name),
+				par_case_name, sizeof(par_case_name));
 #else
 		/* On Windows platfrom, check
 		whether there exists table name in
 		system table whose name is
 		not being normalized to lower case */
 		normalize_table_name_c_low(
-			par_case_name, old_name, FALSE);
+			par_case_name, sizeof(par_case_name), old_name, FALSE);
 #endif
 		table = dict_table_open_on_name(par_case_name, true,
 						DICT_ERR_IGNORE_FK_NOKEY);
@@ -2627,10 +2618,9 @@ row_rename_table_for_mysql(
 			<< TROUBLESHOOTING_MSG;
 
 		goto funct_exit;
-
-	} else if (use_fk && !old_is_tmp && new_is_tmp) {
-		/* MySQL is doing an ALTER TABLE command and it renames the
-		original table to a temporary table name. We want to preserve
+	} else if (fk == RENAME_ALTER_COPY && !old_is_tmp && new_is_tmp) {
+		/* Non-native ALTER TABLE is renaming the
+		original table to a temporary name. We want to preserve
 		the original foreign key constraint definitions despite the
 		name change. An exception is those constraints for which
 		the ALTER TABLE contained DROP FOREIGN KEY <foreign key id>.*/
@@ -2674,7 +2664,7 @@ row_rename_table_for_mysql(
 		goto rollback_and_exit;
 	}
 
-	if (!new_is_tmp) {
+	if (/* fk == RENAME_IGNORE_FK || */ !new_is_tmp) {
 		/* Rename all constraints. */
 		char	new_table_name[MAX_TABLE_NAME_LEN + 1];
 		char	old_table_utf8[MAX_TABLE_NAME_LEN + 1];
@@ -2848,7 +2838,7 @@ row_rename_table_for_mysql(
 		err = dict_load_foreigns(
 			new_name, nullptr, trx->id,
 			!old_is_tmp || trx->check_foreigns,
-			use_fk
+			fk == RENAME_ALTER_COPY
 			? DICT_ERR_IGNORE_NONE
 			: DICT_ERR_IGNORE_FK_NOKEY,
 			fk_tables);

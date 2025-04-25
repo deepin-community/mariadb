@@ -17,8 +17,7 @@
 
 // Defines stuff client code will use to construct messages to StorageManager.
 
-#ifndef MESSAGEFORMAT_H_
-#define MESSAGEFORMAT_H_
+#pragma once
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -85,7 +84,9 @@ enum Opcodes
   LIST_DIRECTORY,
   PING,
   COPY,
-  SYNC
+  SYNC,
+  LIST_IOTASKS,
+  TERMINATE_IOTASK
 };
 
 /*
@@ -301,8 +302,46 @@ struct copy_cmd
   // use f_name as an overlay at the end of file1 to get file2.
 };
 
+/*
+    LIST_IOTASKS
+    ------------
+    command format:
+    1-byte opcode
+
+    response format:
+    4-byte num elements|(8-byte id|double runningTime) * num elements
+*/
+struct list_iotask_cmd
+{
+  uint8_t opcode;
+};
+
+struct list_iotask_resp_entry
+{
+  uint64_t id;
+  double runningTime;
+};
+
+struct list_iotask_resp
+{
+  uint32_t elements;
+  list_iotask_resp_entry entries[];
+};
+
+/*
+    TERMINATE_IOTASK
+    ----------------
+    command format:
+    1-byte opcode|8-byte id
+
+    response format:
+*/
+struct terminate_iotask_cmd
+{
+  uint8_t opcode;
+  uint64_t id;
+};
+
 #pragma pack(pop)
 
 }  // namespace storagemanager
-
-#endif

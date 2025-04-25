@@ -31,12 +31,37 @@ Created 11/26/1995 Heikki Tuuri
 #include "log0crypt.h"
 #ifdef BTR_CUR_HASH_ADAPT
 # include "btr0sea.h"
-#else
-# include "btr0cur.h"
 #endif
+#include "btr0cur.h"
 #include "srv0start.h"
 #include "log.h"
 #include "mariadb_stats.h"
+#include "my_cpu.h"
+
+#ifdef HAVE_PMEM
+void (*mtr_t::commit_logger)(mtr_t *, std::pair<lsn_t,page_flush_ahead>);
+#endif
+
+std::pair<lsn_t,mtr_t::page_flush_ahead> (*mtr_t::finisher)(mtr_t *, size_t);
+unsigned mtr_t::spin_wait_delay;
+
+void mtr_t::finisher_update()
+{
+  ut_ad(log_sys.latch_have_wr());
+#ifdef HAVE_PMEM
+  if (log_sys.is_mmap())
+  {
+    commit_logger= mtr_t::commit_log<true>;
+    finisher= spin_wait_delay
+      ? mtr_t::finish_writer<true,true> : mtr_t::finish_writer<false,true>;
+    return;
+  }
+  commit_logger= mtr_t::commit_log<false>;
+#endif
+  finisher=
+    (spin_wait_delay
+     ? mtr_t::finish_writer<true,false> : mtr_t::finish_writer<false,false>);
+}
 
 void mtr_memo_slot_t::release() const
 {
@@ -82,9 +107,7 @@ void mtr_memo_slot_t::release() const
 inline buf_page_t *buf_pool_t::prepare_insert_into_flush_list(lsn_t lsn)
   noexcept
 {
-#ifndef SUX_LOCK_GENERIC
-  ut_ad(recv_recovery_is_on() || log_sys.latch.is_locked());
-#endif
+  ut_ad(recv_recovery_is_on() || log_sys.latch_have_any());
   ut_ad(lsn >= log_sys.last_checkpoint_lsn);
   mysql_mutex_assert_owner(&flush_list_mutex);
   static_assert(log_t::FIRST_LSN >= 2, "compatibility");
@@ -180,7 +203,6 @@ void mtr_t::start()
 
   m_made_dirty= false;
   m_latch_ex= false;
-  m_inside_ibuf= false;
   m_modifications= false;
   m_log_mode= MTR_LOG_ALL;
   ut_d(m_user_space_id= TRX_SYS_SPACE);
@@ -234,7 +256,14 @@ static void insert_imported(buf_block_t *block)
   if (block->page.oldest_modification() <= 1)
   {
     log_sys.latch.rd_lock(SRW_LOCK_CALL);
-    const lsn_t lsn= log_sys.last_checkpoint_lsn;
+    /* For unlogged mtrs (MTR_LOG_NO_REDO), we use the current system LSN. The
+    mtr that generated the LSN is either already committed or in mtr_t::commit.
+    Shared latch and relaxed atomics should be fine here as it is guaranteed
+    that both the current mtr and the mtr that generated the LSN would have
+    added the dirty pages to flush list before we access the minimum LSN during
+    checkpoint. log_checkpoint_low() acquires exclusive log_sys.latch before
+    commencing. */
+    const lsn_t lsn= log_sys.get_lsn();
     mysql_mutex_lock(&buf_pool.flush_list_mutex);
     buf_pool.insert_into_flush_list
       (buf_pool.prepare_insert_into_flush_list(lsn), block, lsn);
@@ -308,11 +337,151 @@ void mtr_t::release()
   m_memo.clear();
 }
 
+inline lsn_t log_t::get_write_target() const
+{
+  ut_ad(latch_have_any());
+  if (UNIV_LIKELY(buf_free_ok()))
+    return 0;
+  /* The LSN corresponding to the end of buf is
+  write_lsn - (first_lsn & 4095) + buf_free,
+  but we use simpler arithmetics to return a smaller write target in
+  order to minimize waiting in log_write_up_to(). */
+  ut_ad(max_buf_free >= 4096 * 4);
+  return write_lsn + max_buf_free / 2;
+}
+
+template<bool mmap>
+void mtr_t::commit_log(mtr_t *mtr, std::pair<lsn_t,page_flush_ahead> lsns)
+{
+  size_t modified= 0;
+  const lsn_t write_lsn= mmap ? 0 : log_sys.get_write_target();
+
+  if (mtr->m_made_dirty)
+  {
+    auto it= mtr->m_memo.rbegin();
+
+    mysql_mutex_lock(&buf_pool.flush_list_mutex);
+
+    buf_page_t *const prev=
+      buf_pool.prepare_insert_into_flush_list(lsns.first);
+
+    while (it != mtr->m_memo.rend())
+    {
+      const mtr_memo_slot_t &slot= *it++;
+      if (slot.type & MTR_MEMO_MODIFY)
+      {
+        ut_ad(slot.type == MTR_MEMO_PAGE_X_MODIFY ||
+              slot.type == MTR_MEMO_PAGE_SX_MODIFY);
+        modified++;
+        buf_block_t *b= static_cast<buf_block_t*>(slot.object);
+        ut_ad(b->page.id() < end_page_id);
+        ut_d(const auto s= b->page.state());
+        ut_ad(s > buf_page_t::FREED);
+        ut_ad(s < buf_page_t::READ_FIX);
+        ut_ad(mach_read_from_8(b->page.frame + FIL_PAGE_LSN) <=
+              mtr->m_commit_lsn);
+        mach_write_to_8(b->page.frame + FIL_PAGE_LSN, mtr->m_commit_lsn);
+        if (UNIV_LIKELY_NULL(b->page.zip.data))
+          memcpy_aligned<8>(FIL_PAGE_LSN + b->page.zip.data,
+                            FIL_PAGE_LSN + b->page.frame, 8);
+        buf_pool.insert_into_flush_list(prev, b, lsns.first);
+      }
+    }
+
+    ut_ad(modified);
+    buf_pool.flush_list_requests+= modified;
+    buf_pool.page_cleaner_wakeup();
+    mysql_mutex_unlock(&buf_pool.flush_list_mutex);
+
+    if (mtr->m_latch_ex)
+    {
+      log_sys.latch.wr_unlock();
+      mtr->m_latch_ex= false;
+    }
+    else
+      log_sys.latch.rd_unlock();
+
+    mtr->release();
+  }
+  else
+  {
+    if (mtr->m_latch_ex)
+    {
+      log_sys.latch.wr_unlock();
+      mtr->m_latch_ex= false;
+    }
+    else
+      log_sys.latch.rd_unlock();
+
+    for (auto it= mtr->m_memo.rbegin(); it != mtr->m_memo.rend(); )
+    {
+      const mtr_memo_slot_t &slot= *it++;
+      ut_ad(slot.object);
+      switch (slot.type) {
+      case MTR_MEMO_S_LOCK:
+        static_cast<index_lock*>(slot.object)->s_unlock();
+        break;
+      case MTR_MEMO_SPACE_X_LOCK:
+        static_cast<fil_space_t*>(slot.object)->set_committed_size();
+        static_cast<fil_space_t*>(slot.object)->x_unlock();
+        break;
+      case MTR_MEMO_X_LOCK:
+      case MTR_MEMO_SX_LOCK:
+        static_cast<index_lock*>(slot.object)->
+          u_or_x_unlock(slot.type == MTR_MEMO_SX_LOCK);
+        break;
+      default:
+        buf_page_t *bpage= static_cast<buf_page_t*>(slot.object);
+        ut_d(const auto s=)
+          bpage->unfix();
+        if (slot.type & MTR_MEMO_MODIFY)
+        {
+          ut_ad(slot.type == MTR_MEMO_PAGE_X_MODIFY ||
+                slot.type == MTR_MEMO_PAGE_SX_MODIFY);
+          ut_ad(bpage->oldest_modification() > 1);
+          ut_ad(bpage->oldest_modification() < mtr->m_commit_lsn);
+          ut_ad(bpage->id() < end_page_id);
+          ut_ad(s >= buf_page_t::FREED);
+          ut_ad(s < buf_page_t::READ_FIX);
+          ut_ad(mach_read_from_8(bpage->frame + FIL_PAGE_LSN) <=
+                mtr->m_commit_lsn);
+          mach_write_to_8(bpage->frame + FIL_PAGE_LSN, mtr->m_commit_lsn);
+          if (UNIV_LIKELY_NULL(bpage->zip.data))
+            memcpy_aligned<8>(FIL_PAGE_LSN + bpage->zip.data,
+                              FIL_PAGE_LSN + bpage->frame, 8);
+          modified++;
+        }
+        switch (auto latch= slot.type & ~MTR_MEMO_MODIFY) {
+        case MTR_MEMO_PAGE_S_FIX:
+          bpage->lock.s_unlock();
+          continue;
+        case MTR_MEMO_PAGE_SX_FIX:
+        case MTR_MEMO_PAGE_X_FIX:
+          bpage->lock.u_or_x_unlock(latch == MTR_MEMO_PAGE_SX_FIX);
+          continue;
+        default:
+          ut_ad(latch == MTR_MEMO_BUF_FIX);
+        }
+      }
+    }
+
+    buf_pool.add_flush_list_requests(modified);
+    mtr->m_memo.clear();
+  }
+
+  mariadb_increment_pages_updated(modified);
+
+  if (UNIV_UNLIKELY(lsns.second != PAGE_FLUSH_NO))
+    buf_flush_ahead(mtr->m_commit_lsn, lsns.second == PAGE_FLUSH_SYNC);
+
+  if (!mmap && UNIV_UNLIKELY(write_lsn != 0))
+    log_write_up_to(write_lsn, false);
+}
+
 /** Commit a mini-transaction. */
 void mtr_t::commit()
 {
   ut_ad(is_active());
-  ut_ad(!is_inside_ibuf());
 
   /* This is a dirty read, for debugging. */
   ut_ad(!m_modifications || !recv_no_log_write);
@@ -330,127 +499,11 @@ void mtr_t::commit()
     ut_ad(!srv_read_only_mode);
     std::pair<lsn_t,page_flush_ahead> lsns{do_write()};
     process_freed_pages();
-    size_t modified= 0;
-
-    if (m_made_dirty)
-    {
-      auto it= m_memo.rbegin();
-
-      mysql_mutex_lock(&buf_pool.flush_list_mutex);
-
-      buf_page_t *const prev=
-        buf_pool.prepare_insert_into_flush_list(lsns.first);
-
-      while (it != m_memo.rend())
-      {
-        const mtr_memo_slot_t &slot= *it++;
-        if (slot.type & MTR_MEMO_MODIFY)
-        {
-          ut_ad(slot.type == MTR_MEMO_PAGE_X_MODIFY ||
-                slot.type == MTR_MEMO_PAGE_SX_MODIFY);
-          modified++;
-          buf_block_t *b= static_cast<buf_block_t*>(slot.object);
-          ut_ad(b->page.id() < end_page_id);
-          ut_d(const auto s= b->page.state());
-          ut_ad(s > buf_page_t::FREED);
-          ut_ad(s < buf_page_t::READ_FIX);
-          ut_ad(mach_read_from_8(b->page.frame + FIL_PAGE_LSN) <=
-                m_commit_lsn);
-          mach_write_to_8(b->page.frame + FIL_PAGE_LSN, m_commit_lsn);
-          if (UNIV_LIKELY_NULL(b->page.zip.data))
-            memcpy_aligned<8>(FIL_PAGE_LSN + b->page.zip.data,
-                              FIL_PAGE_LSN + b->page.frame, 8);
-          buf_pool.insert_into_flush_list(prev, b, lsns.first);
-        }
-      }
-
-      ut_ad(modified);
-      buf_pool.flush_list_requests+= modified;
-      buf_pool.page_cleaner_wakeup();
-      mysql_mutex_unlock(&buf_pool.flush_list_mutex);
-
-      if (m_latch_ex)
-      {
-        log_sys.latch.wr_unlock();
-        m_latch_ex= false;
-      }
-      else
-        log_sys.latch.rd_unlock();
-
-      release();
-    }
-    else
-    {
-      if (m_latch_ex)
-      {
-        log_sys.latch.wr_unlock();
-        m_latch_ex= false;
-      }
-      else
-        log_sys.latch.rd_unlock();
-
-      for (auto it= m_memo.rbegin(); it != m_memo.rend(); )
-      {
-        const mtr_memo_slot_t &slot= *it++;
-        ut_ad(slot.object);
-        switch (slot.type) {
-        case MTR_MEMO_S_LOCK:
-          static_cast<index_lock*>(slot.object)->s_unlock();
-          break;
-        case MTR_MEMO_SPACE_X_LOCK:
-          static_cast<fil_space_t*>(slot.object)->set_committed_size();
-          static_cast<fil_space_t*>(slot.object)->x_unlock();
-          break;
-        case MTR_MEMO_X_LOCK:
-        case MTR_MEMO_SX_LOCK:
-          static_cast<index_lock*>(slot.object)->
-            u_or_x_unlock(slot.type == MTR_MEMO_SX_LOCK);
-          break;
-        default:
-          buf_page_t *bpage= static_cast<buf_page_t*>(slot.object);
-          const auto s= bpage->unfix();
-          if (slot.type & MTR_MEMO_MODIFY)
-          {
-            ut_ad(slot.type == MTR_MEMO_PAGE_X_MODIFY ||
-                  slot.type == MTR_MEMO_PAGE_SX_MODIFY);
-            ut_ad(bpage->oldest_modification() > 1);
-            ut_ad(bpage->oldest_modification() < m_commit_lsn);
-            ut_ad(bpage->id() < end_page_id);
-            ut_ad(s >= buf_page_t::FREED);
-            ut_ad(s < buf_page_t::READ_FIX);
-            ut_ad(mach_read_from_8(bpage->frame + FIL_PAGE_LSN) <=
-                  m_commit_lsn);
-            if (s >= buf_page_t::UNFIXED)
-            {
-              mach_write_to_8(bpage->frame + FIL_PAGE_LSN, m_commit_lsn);
-              if (UNIV_LIKELY_NULL(bpage->zip.data))
-                memcpy_aligned<8>(FIL_PAGE_LSN + bpage->zip.data,
-                                  FIL_PAGE_LSN + bpage->frame, 8);
-            }
-            modified++;
-          }
-          switch (auto latch= slot.type & ~MTR_MEMO_MODIFY) {
-          case MTR_MEMO_PAGE_S_FIX:
-            bpage->lock.s_unlock();
-            continue;
-          case MTR_MEMO_PAGE_SX_FIX:
-          case MTR_MEMO_PAGE_X_FIX:
-            bpage->lock.u_or_x_unlock(latch == MTR_MEMO_PAGE_SX_FIX);
-            continue;
-          default:
-            ut_ad(latch == MTR_MEMO_BUF_FIX);
-          }
-        }
-      }
-
-      buf_pool.add_flush_list_requests(modified);
-      m_memo.clear();
-    }
-
-    mariadb_increment_pages_updated(modified);
-
-    if (UNIV_UNLIKELY(lsns.second != PAGE_FLUSH_NO))
-      buf_flush_ahead(m_commit_lsn, lsns.second == PAGE_FLUSH_SYNC);
+#ifdef HAVE_PMEM
+    commit_logger(this, lsns);
+#else
+    commit_log<false>(this, lsns);
+#endif
   }
   else
   {
@@ -492,20 +545,26 @@ void mtr_t::rollback_to_savepoint(ulint begin, ulint end)
   m_memo.erase(m_memo.begin() + begin, m_memo.begin() + end);
 }
 
+/** Set create_lsn. */
+inline void fil_space_t::set_create_lsn(lsn_t lsn) noexcept
+{
+  /* Concurrent log_checkpoint_low() must be impossible. */
+  ut_ad(latch.have_wr());
+  create_lsn= lsn;
+}
+
 /** Commit a mini-transaction that is shrinking a tablespace.
-@param space   tablespace that is being shrunk */
-void mtr_t::commit_shrink(fil_space_t &space)
+@param space   tablespace that is being shrunk
+@param size    new size in pages */
+void mtr_t::commit_shrink(fil_space_t &space, uint32_t size)
 {
   ut_ad(is_active());
-  ut_ad(!is_inside_ibuf());
   ut_ad(!high_level_read_only);
   ut_ad(m_modifications);
-  ut_ad(m_made_dirty);
   ut_ad(!m_memo.empty());
   ut_ad(!recv_recovery_is_on());
   ut_ad(m_log_mode == MTR_LOG_ALL);
   ut_ad(!m_freed_pages);
-  ut_ad(UT_LIST_GET_LEN(space.chain) == 1);
 
   log_write_and_flush_prepare();
   m_latch_ex= true;
@@ -514,18 +573,33 @@ void mtr_t::commit_shrink(fil_space_t &space)
   const lsn_t start_lsn= do_write().first;
   ut_d(m_log.erase());
 
-  /* Durably write the reduced FSP_SIZE before truncating the data file. */
-  log_write_and_flush();
-#ifndef SUX_LOCK_GENERIC
-  ut_ad(log_sys.latch.is_write_locked());
-#endif
+  fil_node_t *file= UT_LIST_GET_LAST(space.chain);
+  mysql_mutex_lock(&fil_system.mutex);
+  ut_ad(file->is_open());
+  ut_ad(space.size >= size);
+  ut_ad(file->size >= space.size - size);
+  file->size-= space.size - size;
+  space.size= space.size_in_header= size;
 
-  os_file_truncate(space.chain.start->name, space.chain.start->handle,
-                   os_offset_t{space.size} << srv_page_size_shift, true);
+  if (space.id == TRX_SYS_SPACE)
+    srv_sys_space.set_last_file_size(file->size);
+  else
+    space.set_create_lsn(m_commit_lsn);
+
+  mysql_mutex_unlock(&fil_system.mutex);
 
   space.clear_freed_ranges();
 
-  const page_id_t high{space.id, space.size};
+  /* Durably write the reduced FSP_SIZE before truncating the data file. */
+  log_write_and_flush();
+  ut_ad(log_sys.latch_have_wr());
+
+  os_file_truncate(file->name, file->handle,
+                   os_offset_t{file->size} << srv_page_size_shift, true);
+
+  space.clear_freed_ranges();
+
+  const page_id_t high{space.id, size};
   size_t modified= 0;
   auto it= m_memo.rbegin();
   mysql_mutex_lock(&buf_pool.flush_list_mutex);
@@ -586,13 +660,6 @@ void mtr_t::commit_shrink(fil_space_t &space)
   log_sys.latch.wr_unlock();
   m_latch_ex= false;
 
-  mysql_mutex_lock(&fil_system.mutex);
-  ut_ad(space.is_being_truncated);
-  ut_ad(space.is_stopping_writes());
-  space.clear_stopping();
-  space.is_being_truncated= false;
-  mysql_mutex_unlock(&fil_system.mutex);
-
   release();
   release_resources();
 }
@@ -604,7 +671,6 @@ void mtr_t::commit_shrink(fil_space_t &space)
 bool mtr_t::commit_file(fil_space_t &space, const char *name)
 {
   ut_ad(is_active());
-  ut_ad(!is_inside_ibuf());
   ut_ad(!high_level_read_only);
   ut_ad(m_modifications);
   ut_ad(!m_made_dirty);
@@ -680,13 +746,10 @@ The caller must hold exclusive log_sys.latch.
 This is to be used at log_checkpoint().
 @param checkpoint_lsn   the log sequence number of a checkpoint, or 0
 @return current LSN */
-lsn_t mtr_t::commit_files(lsn_t checkpoint_lsn)
+ATTRIBUTE_COLD lsn_t mtr_t::commit_files(lsn_t checkpoint_lsn)
 {
-#ifndef SUX_LOCK_GENERIC
-  ut_ad(log_sys.latch.is_write_locked());
-#endif
+  ut_ad(log_sys.latch_have_wr());
   ut_ad(is_active());
-  ut_ad(!is_inside_ibuf());
   ut_ad(m_log_mode == MTR_LOG_ALL);
   ut_ad(!m_made_dirty);
   ut_ad(m_memo.empty());
@@ -772,8 +835,7 @@ fil_space_t *mtr_t::x_lock_space(uint32_t space_id)
 	} else {
 		space = fil_space_get(space_id);
 		ut_ad(m_log_mode != MTR_LOG_NO_REDO
-		      || space->purpose == FIL_TYPE_TEMPORARY
-		      || space->purpose == FIL_TYPE_IMPORT);
+		      || space->is_temporary() || space->is_being_imported());
 	}
 
 	ut_ad(space);
@@ -786,9 +848,6 @@ fil_space_t *mtr_t::x_lock_space(uint32_t space_id)
 @param space  tablespace */
 void mtr_t::x_lock_space(fil_space_t *space)
 {
-  ut_ad(space->purpose == FIL_TYPE_TEMPORARY ||
-        space->purpose == FIL_TYPE_IMPORT ||
-        space->purpose == FIL_TYPE_TABLESPACE);
   if (!memo_contains(*space))
   {
     memo_push(space, MTR_MEMO_SPACE_X_LOCK);
@@ -835,79 +894,185 @@ ATTRIBUTE_COLD static void log_overwrite_warning(lsn_t lsn)
                   " last checkpoint LSN=" LSN_PF ", current LSN=" LSN_PF
                   "%s.",
                   lsn_t{log_sys.last_checkpoint_lsn}, lsn,
-                  srv_shutdown_state != SRV_SHUTDOWN_INITIATED
+                  srv_shutdown_state > SRV_SHUTDOWN_INITIATED
                   ? ". Shutdown is in progress" : "");
 }
 
-/** Wait in append_prepare() for buffer to become available
-@param ex   whether log_sys.latch is exclusively locked */
-ATTRIBUTE_COLD void log_t::append_prepare_wait(bool ex) noexcept
+static ATTRIBUTE_NOINLINE void lsn_delay(size_t delay, size_t mult) noexcept
 {
-  log_sys.waits++;
-  log_sys.unlock_lsn();
+  delay*= mult * 2; // GCC 13.2.0 -O2 targeting AMD64 wants to unroll twice
+  HMT_low();
+  do
+    MY_RELAX_CPU();
+  while (--delay);
+  HMT_medium();
+}
+
+#if defined __clang_major__ && __clang_major__ < 10
+/* Only clang-10 introduced support for asm goto */
+#elif defined __APPLE__
+/* At least some versions of Apple Xcode do not support asm goto */
+#elif defined __GNUC__ && (defined __i386__ || defined __x86_64__)
+# if SIZEOF_SIZE_T == 8
+#  define LOCK_TSET                                             \
+  __asm__ goto("lock btsq $63, %0\n\t" "jnc %l1"                \
+               : : "m"(buf_free) : "cc", "memory" : got)
+# else
+#  define LOCK_TSET                                             \
+  __asm__ goto("lock btsl $31, %0\n\t" "jnc %l1"                \
+               : : "m"(buf_free) : "cc", "memory" : got)
+# endif
+#elif defined _MSC_VER && (defined _M_IX86 || defined _M_X64)
+# if SIZEOF_SIZE_T == 8
+#  define LOCK_TSET                                                     \
+  if (!_interlockedbittestandset64                                      \
+      (reinterpret_cast<volatile LONG64*>(&buf_free), 63)) return
+# else
+#  define LOCK_TSET                                                     \
+  if (!_interlockedbittestandset                                        \
+      (reinterpret_cast<volatile long*>(&buf_free), 31)) return
+# endif
+#endif
+
+#ifdef LOCK_TSET
+ATTRIBUTE_NOINLINE
+void log_t::lsn_lock_bts() noexcept
+{
+  LOCK_TSET;
+  {
+    const size_t m= mtr_t::spin_wait_delay;
+    constexpr size_t DELAY= 10, MAX_ITERATIONS= 10;
+    for (size_t delay_count= DELAY, delay_iterations= 1;;
+         lsn_delay(delay_iterations, m))
+    {
+      if (!(buf_free.load(std::memory_order_relaxed) & buf_free_LOCK))
+        LOCK_TSET;
+      if (!delay_count);
+      else if (delay_iterations < MAX_ITERATIONS)
+        delay_count= DELAY, delay_iterations++;
+      else
+        delay_count--;
+    }
+  }
+
+# ifdef __GNUC__
+ got:
+  return;
+# endif
+}
+
+inline
+#else
+ATTRIBUTE_NOINLINE
+#endif
+size_t log_t::lock_lsn() noexcept
+{
+#ifdef LOCK_TSET
+  lsn_lock_bts();
+  return ~buf_free_LOCK & buf_free.load(std::memory_order_relaxed);
+# undef LOCK_TSET
+#else
+  size_t b= buf_free.fetch_or(buf_free_LOCK, std::memory_order_acquire);
+  if (b & buf_free_LOCK)
+  {
+    const size_t m= mtr_t::spin_wait_delay;
+    constexpr size_t DELAY= 10, MAX_ITERATIONS= 10;
+    for (size_t delay_count= DELAY, delay_iterations= 1;
+         ((b= buf_free.load(std::memory_order_relaxed)) & buf_free_LOCK) ||
+           (buf_free_LOCK & (b= buf_free.fetch_or(buf_free_LOCK,
+                                                  std::memory_order_acquire)));
+         lsn_delay(delay_iterations, m))
+      if (!delay_count);
+      else if (delay_iterations < MAX_ITERATIONS)
+        delay_count= DELAY, delay_iterations++;
+      else
+        delay_count--;
+  }
+  return b;
+#endif
+}
+
+template<bool spin>
+ATTRIBUTE_COLD size_t log_t::append_prepare_wait(size_t b, bool ex, lsn_t lsn)
+  noexcept
+{
+  waits++;
+  ut_ad(buf_free.load(std::memory_order_relaxed) ==
+        (spin ? (b | buf_free_LOCK) : b));
+  if (spin)
+    buf_free.store(b, std::memory_order_release);
+  else
+    lsn_lock.wr_unlock();
 
   if (ex)
-    log_sys.latch.wr_unlock();
+    latch.wr_unlock();
   else
-    log_sys.latch.rd_unlock();
+    latch.rd_unlock();
 
-  DEBUG_SYNC_C("log_buf_size_exceeded");
-  log_buffer_flush_to_disk(log_sys.is_pmem());
+  log_write_up_to(lsn, is_mmap());
 
   if (ex)
-    log_sys.latch.wr_lock(SRW_LOCK_CALL);
+    latch.wr_lock(SRW_LOCK_CALL);
   else
-    log_sys.latch.rd_lock(SRW_LOCK_CALL);
+    latch.rd_lock(SRW_LOCK_CALL);
 
-  log_sys.lock_lsn();
+  if (spin)
+    return lock_lsn();
+
+  lsn_lock.wr_lock();
+  return buf_free.load(std::memory_order_relaxed);
 }
 
 /** Reserve space in the log buffer for appending data.
-@tparam pmem  log_sys.is_pmem()
+@tparam spin  whether to use the spin-only lock_lsn()
+@tparam mmap  log_sys.is_mmap()
 @param size   total length of the data to append(), in bytes
 @param ex     whether log_sys.latch is exclusively locked
 @return the start LSN and the buffer position for append() */
-template<bool pmem>
+template<bool spin,bool mmap>
 inline
 std::pair<lsn_t,byte*> log_t::append_prepare(size_t size, bool ex) noexcept
 {
-#ifndef SUX_LOCK_GENERIC
-  ut_ad(latch.is_locked());
-# ifndef _WIN32 // there is no accurate is_write_locked() on SRWLOCK
-  ut_ad(ex == latch.is_write_locked());
-# endif
-#endif
-  ut_ad(pmem == is_pmem());
-  const lsn_t checkpoint_margin{last_checkpoint_lsn + log_capacity - size};
-  const size_t avail{(pmem ? size_t(capacity()) : buf_size) - size};
-  lock_lsn();
+  ut_ad(ex ? latch_have_wr() : latch_have_rd());
+  ut_ad(mmap == is_mmap());
+  if (!spin)
+    lsn_lock.wr_lock();
+  size_t b{spin ? lock_lsn() : buf_free.load(std::memory_order_relaxed)};
   write_to_buf++;
 
-  for (ut_d(int count= 50);
-       UNIV_UNLIKELY((pmem
-                      ? size_t(get_lsn() -
-                               get_flushed_lsn(std::memory_order_relaxed))
-                      : size_t{buf_free}) > avail); )
+  lsn_t l{lsn.load(std::memory_order_relaxed)}, end_lsn{l + size};
+
+  if (UNIV_UNLIKELY(mmap
+                    ? (end_lsn -
+                       get_flushed_lsn(std::memory_order_relaxed)) > capacity()
+                    : b + size >= buf_size))
   {
-    append_prepare_wait(ex);
-    ut_ad(count--);
+    b= append_prepare_wait<spin>(b, ex, l);
+    /* While flushing log, we had released the lsn lock and LSN could have
+    progressed in the meantime. */
+    l= lsn.load(std::memory_order_relaxed);
+    end_lsn= l + size;
   }
 
-  const lsn_t l{lsn.load(std::memory_order_relaxed)};
-  lsn.store(l + size, std::memory_order_relaxed);
-  const size_t b{buf_free};
-  size_t new_buf_free{b};
-  new_buf_free+= size;
-  if (pmem && new_buf_free >= file_size)
+  size_t new_buf_free= b + size;
+  if (mmap && new_buf_free >= file_size)
     new_buf_free-= size_t(capacity());
-  buf_free= new_buf_free;
-  unlock_lsn();
 
-  if (UNIV_UNLIKELY(l > checkpoint_margin) ||
-      (!pmem && b >= max_buf_free))
-    set_check_flush_or_checkpoint();
+  lsn.store(end_lsn, std::memory_order_relaxed);
 
-  return {l, &buf[b]};
+  if (UNIV_UNLIKELY(end_lsn >= last_checkpoint_lsn + log_capacity))
+    set_check_for_checkpoint(true);
+
+  byte *our_buf= buf;
+  if (spin)
+    buf_free.store(new_buf_free, std::memory_order_release);
+  else
+  {
+    buf_free.store(new_buf_free, std::memory_order_relaxed);
+    lsn_lock.wr_unlock();
+  }
+
+  return {l, our_buf + b};
 }
 
 /** Finish appending data to the log.
@@ -915,9 +1080,7 @@ std::pair<lsn_t,byte*> log_t::append_prepare(size_t size, bool ex) noexcept
 @return whether buf_flush_ahead() will have to be invoked */
 static mtr_t::page_flush_ahead log_close(lsn_t lsn) noexcept
 {
-#ifndef SUX_LOCK_GENERIC
-  ut_ad(log_sys.latch.is_locked());
-#endif
+  ut_ad(log_sys.latch_have_any());
 
   const lsn_t checkpoint_age= lsn - log_sys.last_checkpoint_lsn;
 
@@ -930,7 +1093,7 @@ static mtr_t::page_flush_ahead log_close(lsn_t lsn) noexcept
   else if (UNIV_LIKELY(checkpoint_age <= log_sys.max_checkpoint_age))
     return mtr_t::PAGE_FLUSH_ASYNC;
 
-  log_sys.set_check_flush_or_checkpoint();
+  log_sys.set_check_for_checkpoint();
   return mtr_t::PAGE_FLUSH_SYNC;
 }
 
@@ -982,17 +1145,16 @@ std::pair<lsn_t,mtr_t::page_flush_ahead> mtr_t::do_write()
   ut_ad(!recv_no_log_write);
   ut_ad(is_logged());
   ut_ad(m_log.size());
-#ifndef SUX_LOCK_GENERIC
-  ut_ad(!m_latch_ex || log_sys.latch.is_write_locked());
-#endif
+  ut_ad(!m_latch_ex || log_sys.latch_have_wr());
+  ut_ad(!m_user_space ||
+        (m_user_space->id > 0 && m_user_space->id < SRV_SPACE_ID_UPPER_BOUND));
 
 #ifndef DBUG_OFF
   do
   {
-    if (m_log_mode != MTR_LOG_ALL)
+    if (m_log_mode != MTR_LOG_ALL ||
+        _db_keyword_(nullptr, "skip_page_checksum", 1))
       continue;
-    DBUG_EXECUTE_IF("skip_page_checksum", continue;);
-
     for (const mtr_memo_slot_t& slot : m_memo)
       if (slot.type & MTR_MEMO_MODIFY)
       {
@@ -1024,7 +1186,7 @@ std::pair<lsn_t,mtr_t::page_flush_ahead> mtr_t::do_write()
     log_sys.latch.rd_lock(SRW_LOCK_CALL);
 
   if (UNIV_UNLIKELY(m_user_space && !m_user_space->max_lsn &&
-                    !is_predefined_tablespace(m_user_space->id)))
+                    !srv_is_undo_tablespace((m_user_space->id))))
   {
     if (!m_latch_ex)
     {
@@ -1043,9 +1205,7 @@ func_exit:
 inline void log_t::resize_write(lsn_t lsn, const byte *end, size_t len,
                                 size_t seq) noexcept
 {
-#ifndef SUX_LOCK_GENERIC
-  ut_ad(latch.is_locked());
-#endif
+  ut_ad(latch_have_any());
 
   if (UNIV_LIKELY_NULL(resize_buf))
   {
@@ -1056,20 +1216,44 @@ inline void log_t::resize_write(lsn_t lsn, const byte *end, size_t len,
 #ifdef HAVE_PMEM
     if (!resize_flush_buf)
     {
-      ut_ad(is_pmem());
+      ut_ad(is_mmap());
+      lsn_lock.wr_lock();
       const size_t resize_capacity{resize_target - START_OFFSET};
-      const lsn_t resizing{resize_in_progress()};
-      if (UNIV_UNLIKELY(lsn < resizing))
       {
-        size_t l= resizing - lsn;
-        if (l >= len)
-          return;
-        end+= l - len;
-        len-= l;
-        lsn+= l;
+        const lsn_t resizing{resize_in_progress()};
+        /* For memory-mapped log, log_t::resize_start() would never
+        set log_sys.resize_lsn to less than log_sys.lsn. It cannot
+        execute concurrently with this thread, because we are holding
+        log_sys.latch and it would hold an exclusive log_sys.latch. */
+        if (UNIV_UNLIKELY(lsn < resizing))
+        {
+          /* This function may execute in multiple concurrent threads
+          that hold a shared log_sys.latch. Before we got lsn_lock,
+          another thread could have executed resize_lsn.store(lsn) below
+          with a larger lsn than ours.
+
+          append_prepare() guarantees that the concurrent writes
+          cannot overlap, that is, our entire log must be discarded.
+          Besides, incomplete mini-transactions cannot be parsed anyway. */
+          ut_ad(resizing >= lsn + len);
+          goto mmap_done;
+        }
+
+        s= START_OFFSET;
+
+        if (UNIV_UNLIKELY(lsn - resizing + len >= resize_capacity))
+        {
+          resize_lsn.store(lsn, std::memory_order_relaxed);
+          lsn= 0;
+        }
+        else
+        {
+          lsn-= resizing;
+          s+= lsn;
+        }
       }
-      lsn-= resizing;
-      s= START_OFFSET + lsn % resize_capacity;
+
+      ut_ad(s + len <= resize_target);
 
       if (UNIV_UNLIKELY(end < &buf[START_OFFSET]))
       {
@@ -1079,59 +1263,22 @@ inline void log_t::resize_write(lsn_t lsn, const byte *end, size_t len,
         ut_ad(end + capacity() + len >= &buf[file_size]);
 
         size_t l= size_t(buf - (end - START_OFFSET));
-        if (UNIV_LIKELY(s + len <= resize_target))
-        {
-          /* The destination buffer (log_sys.resize_buf) did not wrap around */
-          memcpy(resize_buf + s, end + capacity(), l);
-          memcpy(resize_buf + s + l, &buf[START_OFFSET], len - l);
-          goto pmem_nowrap;
-        }
-        else
-        {
-          /* Both log_sys.buf and log_sys.resize_buf wrapped around */
-          const size_t rl= resize_target - s;
-          if (l <= rl)
-          {
-            /* log_sys.buf wraps around first */
-            memcpy(resize_buf + s, end + capacity(), l);
-            memcpy(resize_buf + s + l, &buf[START_OFFSET], rl - l);
-            memcpy(resize_buf + START_OFFSET, &buf[START_OFFSET + rl - l],
-                   len - l);
-          }
-          else
-          {
-            /* log_sys.resize_buf wraps around first */
-            memcpy(resize_buf + s, end + capacity(), rl);
-            memcpy(resize_buf + START_OFFSET, end + capacity() + rl, l - rl);
-            memcpy(resize_buf + START_OFFSET + (l - rl),
-                   &buf[START_OFFSET], len - l);
-          }
-          goto pmem_wrap;
-        }
+        memcpy(resize_buf + s, end + capacity(), l);
+        memcpy(resize_buf + s + l, &buf[START_OFFSET], len - l);
       }
       else
       {
         ut_ad(end + len <= &buf[file_size]);
-
-        if (UNIV_LIKELY(s + len <= resize_target))
-        {
-          memcpy(resize_buf + s, end, len);
-        pmem_nowrap:
-          s+= len - seq;
-        }
-        else
-        {
-          /* The log_sys.resize_buf wrapped around */
-          memcpy(resize_buf + s, end, resize_target - s);
-          memcpy(resize_buf + START_OFFSET, end + (resize_target - s),
-                 len - (resize_target - s));
-        pmem_wrap:
-          s+= len - seq;
-          if (s >= resize_target)
-            s-= resize_capacity;
-          resize_lsn.fetch_add(resize_capacity); /* Move the target ahead. */
-        }
+        memcpy(resize_buf + s, end, len);
       }
+      s+= len - seq;
+
+      /* Always set the sequence bit. If the resized log were to wrap around,
+      we will advance resize_lsn. */
+      ut_ad(resize_buf[s] <= 1);
+      resize_buf[s]= 1;
+    mmap_done:
+      lsn_lock.wr_unlock();
     }
     else
 #endif
@@ -1141,62 +1288,61 @@ inline void log_t::resize_write(lsn_t lsn, const byte *end, size_t len,
       ut_ad(s + len <= buf_size);
       memcpy(resize_buf + s, end, len);
       s+= len - seq;
+      /* Always set the sequence bit. If the resized log were to wrap around,
+      we will advance resize_lsn. */
+      ut_ad(resize_buf[s] <= 1);
+      resize_buf[s]= 1;
     }
-
-    /* Always set the sequence bit. If the resized log were to wrap around,
-    we will advance resize_lsn. */
-    ut_ad(resize_buf[s] <= 1);
-    resize_buf[s]= 1;
   }
 }
 
-/** Write the mini-transaction log to the redo log buffer.
-@param len   number of bytes to write
-@return {start_lsn,flush_ahead} */
-std::pair<lsn_t,mtr_t::page_flush_ahead>
-mtr_t::finish_write(size_t len)
+inline void log_t::append(byte *&d, const void *s, size_t size) noexcept
 {
+  ut_ad(log_sys.latch_have_any());
+  ut_ad(d + size <= log_sys.buf +
+        (log_sys.is_mmap() ? log_sys.file_size : log_sys.buf_size));
+  memcpy(d, s, size);
+  d+= size;
+}
+
+template<bool spin,bool mmap>
+std::pair<lsn_t,mtr_t::page_flush_ahead>
+mtr_t::finish_writer(mtr_t *mtr, size_t len)
+{
+  ut_ad(log_sys.is_latest());
   ut_ad(!recv_no_log_write);
-  ut_ad(is_logged());
-#ifndef SUX_LOCK_GENERIC
-# ifndef _WIN32 // there is no accurate is_write_locked() on SRWLOCK
-  ut_ad(m_latch_ex == log_sys.latch.is_write_locked());
-# endif
-#endif
+  ut_ad(mtr->is_logged());
+  ut_ad(mtr->m_latch_ex ? log_sys.latch_have_wr() : log_sys.latch_have_rd());
 
-  const size_t size{m_commit_lsn ? 5U + 8U : 5U};
-  std::pair<lsn_t, byte*> start;
+  const size_t size{mtr->m_commit_lsn ? 5U + 8U : 5U};
+  std::pair<lsn_t, byte*> start=
+    log_sys.append_prepare<spin,mmap>(len, mtr->m_latch_ex);
 
-  if (!log_sys.is_pmem())
+  if (!mmap)
   {
-    start= log_sys.append_prepare<false>(len, m_latch_ex);
-    m_log.for_each_block([&start](const mtr_buf_t::block_t *b)
+    mtr->m_log.for_each_block([&start](const mtr_buf_t::block_t *b)
     { log_sys.append(start.second, b->begin(), b->used()); return true; });
 
-#ifdef HAVE_PMEM
   write_trailer:
-#endif
     *start.second++= log_sys.get_sequence_bit(start.first + len - size);
-    if (m_commit_lsn)
+    if (mtr->m_commit_lsn)
     {
-      mach_write_to_8(start.second, m_commit_lsn);
-      m_crc= my_crc32c(m_crc, start.second, 8);
+      mach_write_to_8(start.second, mtr->m_commit_lsn);
+      mtr->m_crc= my_crc32c(mtr->m_crc, start.second, 8);
       start.second+= 8;
     }
-    mach_write_to_4(start.second, m_crc);
+    mach_write_to_4(start.second, mtr->m_crc);
     start.second+= 4;
   }
-#ifdef HAVE_PMEM
   else
   {
-    start= log_sys.append_prepare<true>(len, m_latch_ex);
     if (UNIV_LIKELY(start.second + len <= &log_sys.buf[log_sys.file_size]))
     {
-      m_log.for_each_block([&start](const mtr_buf_t::block_t *b)
+      mtr->m_log.for_each_block([&start](const mtr_buf_t::block_t *b)
       { log_sys.append(start.second, b->begin(), b->used()); return true; });
       goto write_trailer;
     }
-    m_log.for_each_block([&start](const mtr_buf_t::block_t *b)
+    mtr->m_log.for_each_block([&start](const mtr_buf_t::block_t *b)
     {
       size_t size{b->used()};
       const size_t size_left(&log_sys.buf[log_sys.file_size] - start.second);
@@ -1219,14 +1365,14 @@ mtr_t::finish_write(size_t len)
     byte tail[5 + 8];
     tail[0]= log_sys.get_sequence_bit(start.first + len - size);
 
-    if (m_commit_lsn)
+    if (mtr->m_commit_lsn)
     {
-      mach_write_to_8(tail + 1, m_commit_lsn);
-      m_crc= my_crc32c(m_crc, tail + 1, 8);
-      mach_write_to_4(tail + 9, m_crc);
+      mach_write_to_8(tail + 1, mtr->m_commit_lsn);
+      mtr->m_crc= my_crc32c(mtr->m_crc, tail + 1, 8);
+      mach_write_to_4(tail + 9, mtr->m_crc);
     }
     else
-      mach_write_to_4(tail + 1, m_crc);
+      mach_write_to_4(tail + 1, mtr->m_crc);
 
     ::memcpy(start.second, tail, size_left);
     ::memcpy(log_sys.buf + log_sys.START_OFFSET, tail + size_left,
@@ -1235,12 +1381,11 @@ mtr_t::finish_write(size_t len)
       ((size >= size_left) ? log_sys.START_OFFSET : log_sys.file_size) +
       (size - size_left);
   }
-#endif
 
   log_sys.resize_write(start.first, start.second, len, size);
 
-  m_commit_lsn= start.first + len;
-  return {start.first, log_close(m_commit_lsn)};
+  mtr->m_commit_lsn= start.first + len;
+  return {start.first, log_close(mtr->m_commit_lsn)};
 }
 
 bool mtr_t::have_x_latch(const buf_block_t &block) const
@@ -1296,7 +1441,7 @@ bool mtr_t::memo_contains(const fil_space_t& space) const
   return false;
 }
 
-void mtr_t::page_lock_upgrade(const buf_block_t &block)
+buf_block_t *mtr_t::page_lock_upgrade(const buf_block_t &block) noexcept
 {
   ut_ad(block.page.lock.have_x());
 
@@ -1306,14 +1451,13 @@ void mtr_t::page_lock_upgrade(const buf_block_t &block)
                                  (MTR_MEMO_PAGE_SX_FIX | MTR_MEMO_PAGE_X_FIX));
 
 #ifdef BTR_CUR_HASH_ADAPT
-  ut_ad(!block.index || !block.index->freed());
+  ut_d(if (dict_index_t *index= block.index))
+  ut_ad(!index->freed());
 #endif /* BTR_CUR_HASH_ADAPT */
+  return const_cast<buf_block_t*>(&block);
 }
 
-/** Latch a buffer pool block.
-@param block    block to be latched
-@param rw_latch RW_S_LATCH, RW_SX_LATCH, RW_X_LATCH, RW_NO_LATCH */
-void mtr_t::page_lock(buf_block_t *block, ulint rw_latch)
+buf_block_t *mtr_t::page_lock(buf_block_t *block, ulint rw_latch) noexcept
 {
   mtr_memo_type_t fix_type;
   ut_d(const auto state= block->page.state());
@@ -1339,30 +1483,28 @@ void mtr_t::page_lock(buf_block_t *block, ulint rw_latch)
     {
       block->unfix();
       page_lock_upgrade(*block);
-      return;
+      return block;
     }
     ut_ad(!block->page.is_io_fixed());
   }
-
-#ifdef BTR_CUR_HASH_ADAPT
-  btr_search_drop_page_hash_index(block, true);
-#endif
 
 done:
   ut_ad(state < buf_page_t::UNFIXED ||
         page_id_t(page_get_space_id(block->page.frame),
                   page_get_page_no(block->page.frame)) == block->page.id());
   memo_push(block, fix_type);
+  return block;
 }
 
 void mtr_t::upgrade_buffer_fix(ulint savepoint, rw_lock_type_t rw_latch)
+  noexcept
 {
   ut_ad(is_active());
   mtr_memo_slot_t &slot= m_memo[savepoint];
   ut_ad(slot.type == MTR_MEMO_BUF_FIX);
   buf_block_t *block= static_cast<buf_block_t*>(slot.object);
   ut_d(const auto state= block->page.state());
-  ut_ad(state > buf_page_t::UNFIXED);
+  ut_ad(state > buf_page_t::FREED);
   ut_ad(state > buf_page_t::WRITE_FIX || state < buf_page_t::READ_FIX);
   static_assert(int{MTR_MEMO_PAGE_S_FIX} == int{RW_S_LATCH}, "");
   static_assert(int{MTR_MEMO_PAGE_X_FIX} == int{RW_X_LATCH}, "");
@@ -1385,9 +1527,6 @@ void mtr_t::upgrade_buffer_fix(ulint savepoint, rw_lock_type_t rw_latch)
     ut_ad(!block->page.is_io_fixed());
   }
 
-#ifdef BTR_CUR_HASH_ADAPT
-  btr_search_drop_page_hash_index(block, true);
-#endif
   ut_ad(page_id_t(page_get_space_id(block->page.frame),
                   page_get_page_no(block->page.frame)) == block->page.id());
 }
@@ -1617,7 +1756,7 @@ void mtr_t::free(const fil_space_t &space, uint32_t offset)
       }
     }
     else if (slot.type & (MTR_MEMO_PAGE_X_FIX | MTR_MEMO_PAGE_SX_FIX) &&
-               block->page.id() == id)
+             block->page.id() == id)
     {
       ut_ad(!block->page.is_freed());
       ut_ad(!freed);
@@ -1640,7 +1779,7 @@ void mtr_t::free(const fil_space_t &space, uint32_t offset)
       }
 #ifdef BTR_CUR_HASH_ADAPT
       if (block->index)
-        btr_search_drop_page_hash_index(block, false);
+        btr_search_drop_page_hash_index(block, nullptr);
 #endif /* BTR_CUR_HASH_ADAPT */
       block->page.set_freed(block->page.state());
     }
@@ -1650,14 +1789,14 @@ void mtr_t::free(const fil_space_t &space, uint32_t offset)
     m_log.close(log_write<FREE_PAGE>(id, nullptr));
 }
 
-void small_vector_base::grow_by_1(void *small, size_t element_size)
+void small_vector_base::grow_by_1(void *small, size_t element_size) noexcept
 {
   const size_t cap= Capacity*= 2, s= cap * element_size;
   void *new_begin;
   if (BeginX == small)
   {
     new_begin= my_malloc(PSI_NOT_INSTRUMENTED, s, MYF(0));
-    memcpy(new_begin, BeginX, size() * element_size);
+    memcpy(new_begin, BeginX, s / 2);
     TRASH_FREE(small, size() * element_size);
   }
   else

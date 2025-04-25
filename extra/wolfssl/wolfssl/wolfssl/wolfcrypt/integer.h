@@ -1,6 +1,6 @@
 /* integer.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -42,6 +42,8 @@
 
 #else
 
+#include <wolfssl/wolfcrypt/types.h>
+#include <wolfssl/wolfcrypt/error-crypt.h>
 #include <wolfssl/wolfcrypt/random.h>
 
 #ifndef CHAR_BIT
@@ -69,7 +71,7 @@ extern "C" {
 #else
 
 /* C on the other hand doesn't care */
-#define  OPT_CAST(x)
+#define  OPT_CAST(x) /* null expansion */
 
 #endif /* __cplusplus */
 
@@ -162,9 +164,6 @@ extern "C" {
 #define MP_NEG        1   /* negative */
 
 #define MP_OKAY       0   /* ok result */
-#define MP_MEM       (-2) /* out of mem */
-#define MP_VAL       (-3) /* invalid input */
-#define MP_NOT_INF   (-4) /* point not at infinity */
 #define MP_RANGE      MP_NOT_INF
 
 #define MP_YES        1   /* yes response */
@@ -206,7 +205,7 @@ typedef int           mp_err;
 #define NEW_MP_INT_SIZE(name, bits, heap, type) \
     XMEMSET(name, 0, sizeof(mp_int))
 /* Dispose of static mp_int. */
-#define FREE_MP_INT_SIZE(name, heap, type)
+#define FREE_MP_INT_SIZE(name, heap, type) WC_DO_NOTHING
 /* Initialize an mp_int. */
 #define INIT_MP_INT_SIZE(name, bits) \
     mp_init(name)
@@ -222,6 +221,9 @@ typedef int           mp_err;
     } WC_BIGINT;
     #define WOLF_BIGINT_DEFINED
 #endif
+
+#define wc_mp_size_t int
+#define wc_mp_sign_t int
 
 /* the mp_int structure */
 typedef struct mp_int {
@@ -313,6 +315,7 @@ MP_API int  mp_unsigned_bin_size(const mp_int * a);
 MP_API int  mp_read_unsigned_bin (mp_int * a, const unsigned char *b, int c);
 MP_API int  mp_to_unsigned_bin_at_pos(int x, mp_int *t, unsigned char *b);
 MP_API int  mp_to_unsigned_bin (mp_int * a, unsigned char *b);
+#define mp_to_unsigned_bin_len_ct mp_to_unsigned_bin_len
 MP_API int  mp_to_unsigned_bin_len(mp_int * a, unsigned char *b, int c);
 MP_API int  mp_exptmod (mp_int * G, mp_int * X, mp_int * P, mp_int * Y);
 MP_API int  mp_exptmod_ex (mp_int * G, mp_int * X, int digits, mp_int * P,
@@ -329,6 +332,8 @@ MP_API int  mp_div_2d (mp_int * a, int b, mp_int * c, mp_int * d);
 MP_API void mp_zero (mp_int * a);
 MP_API void mp_clamp (mp_int * a);
 MP_API int  mp_exch (mp_int * a, mp_int * b);
+MP_API int  mp_cond_swap_ct_ex (mp_int * a, mp_int * b, int c, int m,
+                                mp_int * t);
 MP_API int  mp_cond_swap_ct (mp_int * a, mp_int * b, int c, int m);
 MP_API void mp_rshd (mp_int * a, int b);
 MP_API void mp_rshb (mp_int * a, int b);
@@ -341,6 +346,7 @@ int  fast_mp_invmod (mp_int * a, mp_int * b, mp_int * c);
 MP_API int  mp_invmod_slow (mp_int * a, mp_int * b, mp_int * c);
 MP_API int  mp_cmp_mag (mp_int * a, mp_int * b);
 MP_API int  mp_cmp (mp_int * a, mp_int * b);
+#define mp_cmp_ct(a, b, n) mp_cmp(a, b)
 MP_API int  mp_cmp_d(mp_int * a, mp_digit b);
 MP_API int  mp_set (mp_int * a, mp_digit b);
 MP_API int  mp_is_bit_set (mp_int * a, mp_digit b);
@@ -363,6 +369,7 @@ MP_API int  mp_montgomery_setup (mp_int * n, mp_digit * rho);
 int  fast_mp_montgomery_reduce (mp_int * x, mp_int * n, mp_digit rho);
 MP_API int  mp_montgomery_reduce (mp_int * x, mp_int * n, mp_digit rho);
 #define mp_montgomery_reduce_ex(x, n, rho, ct) mp_montgomery_reduce (x, n, rho)
+#define mp_montgomery_reduce_ct(x, n, rho)     mp_montgomery_reduce (x, n, rho)
 MP_API void mp_dr_setup(mp_int *a, mp_digit *d);
 MP_API int  mp_dr_reduce (mp_int * x, mp_int * n, mp_digit k);
 MP_API int  mp_reduce_2k(mp_int *a, mp_int *n, mp_digit d);
@@ -406,7 +413,7 @@ MP_API int mp_radix_size (mp_int * a, int radix, int *size);
 #ifdef WOLFSSL_DEBUG_MATH
     MP_API void mp_dump(const char* desc, mp_int* a, byte verbose);
 #else
-    #define mp_dump(desc, a, verbose)
+    #define mp_dump(desc, a, verbose) WC_DO_NOTHING
 #endif
 
 #if defined(HAVE_ECC) || defined(WOLFSSL_KEY_GEN) || !defined(NO_RSA) || \

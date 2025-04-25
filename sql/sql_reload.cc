@@ -68,6 +68,15 @@ bool reload_acl_and_cache(THD *thd, unsigned long long options,
   bool result=0;
   select_errors=0;				/* Write if more errors */
   int tmp_write_to_binlog= *write_to_binlog= 1;
+#ifndef DBUG_OFF
+  /*
+    When invoked for handling a SIGHUP by rpl_shutdown_sighup.test, we need to
+    force the signal handler to wait after REFRESH_TABLES, as that will check
+    for a killed server, and we need to call hostname_cache_refresh after
+    server cleanup has happened to trigger MDEV-30260.
+  */
+  int do_dbug_sleep= 0;
+#endif
 
   DBUG_ASSERT(!thd || !thd->in_sub_stmt);
 
@@ -81,8 +90,9 @@ bool reload_acl_and_cache(THD *thd, unsigned long long options,
     */
     if (unlikely(!thd) && (thd= (tmp_thd= new THD(0))))
     {
-      thd->thread_stack= (char*) &tmp_thd;
       thd->store_globals();
+      thd->set_query_inner((char*) STRING_WITH_LEN("intern:reload_acl"),
+                           default_charset_info);
     }
 
     if (likely(thd))
@@ -100,6 +110,15 @@ bool reload_acl_and_cache(THD *thd, unsigned long long options,
         */
         my_error(ER_UNKNOWN_ERROR, MYF(0));
       }
+
+#ifndef DBUG_OFF
+      DBUG_EXECUTE_IF("hold_sighup_log_refresh", {
+        DBUG_ASSERT(!debug_sync_set_action(
+            thd, STRING_WITH_LEN("now SIGNAL in_reload_acl_and_cache "
+                                 "WAIT_FOR refresh_logs")));
+        do_dbug_sleep= 1;
+      });
+#endif
     }
     opt_noacl= 0;
 
@@ -205,7 +224,6 @@ bool reload_acl_and_cache(THD *thd, unsigned long long options,
     }
 #endif
   }
-#ifdef HAVE_QUERY_CACHE
   if (options & REFRESH_QUERY_CACHE_FREE)
   {
     query_cache.pack(thd);              // FLUSH QUERY CACHE
@@ -215,7 +233,6 @@ bool reload_acl_and_cache(THD *thd, unsigned long long options,
   {
     query_cache.flush();			// RESET QUERY CACHE
   }
-#endif /*HAVE_QUERY_CACHE*/
 
   DBUG_ASSERT(!thd || thd->locked_tables_mode ||
               !thd->mdl_context.has_locks() ||
@@ -352,10 +369,19 @@ bool reload_acl_and_cache(THD *thd, unsigned long long options,
     }
     my_dbopt_cleanup();
   }
+
+#ifndef DBUG_OFF
+  if (do_dbug_sleep)
+    my_sleep(3000000); // 3s
+#endif
   if (options & REFRESH_HOSTS)
     hostname_cache_refresh();
   if (thd && (options & REFRESH_STATUS))
-    refresh_status(thd);
+    refresh_status_legacy(thd);
+  if (thd && (options & REFRESH_SESSION_STATUS))
+    refresh_session_status(thd);
+  if ((options & REFRESH_GLOBAL_STATUS))
+    refresh_global_status();
   if (options & REFRESH_THREADS)
     thread_cache.flush();
 #ifdef HAVE_REPLICATION
@@ -370,7 +396,7 @@ bool reload_acl_and_cache(THD *thd, unsigned long long options,
     }
   }
 #endif
-#ifdef HAVE_OPENSSL
+#ifdef HAVE_des
    if (options & REFRESH_DES_KEY_FILE)
    {
      if (des_key_file && load_des_key_file(des_key_file))
@@ -615,6 +641,9 @@ bool flush_tables_with_read_lock(THD *thd, TABLE_LIST *all_tables)
           table_list->table &&
           table_list->table->file->extra(HA_EXTRA_FLUSH))
         goto error_reset_bits;
+      if (table_list->table &&
+          table_list->table->open_hlindexes_for_write())
+        goto error_reset_bits;
     }
   }
 
@@ -651,6 +680,6 @@ static void disable_checkpoints(THD *thd)
   {
     thd->global_disable_checkpoint= 1;
     if (!global_disable_checkpoint++)
-      ha_checkpoint_state(1);                   // Disable checkpoints
+      ha_disable_internal_writes(1);                   // Disable checkpoints
   }
 }

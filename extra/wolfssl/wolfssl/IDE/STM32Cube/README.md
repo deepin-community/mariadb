@@ -31,11 +31,14 @@ You need both the STM32 IDE and the STM32 initialization code generator (STM32Cu
 2. Under “Software Packs” choose “Select Components”.
 3. Find and check all components for the wolfSSL.wolfSSL packs (wolfSSL / Core, wolfCrypt / Core and wolfCrypt / Test). Close
 4. Under the “Software Packs” section click on “wolfSSL.wolfSSL” and configure the parameters.
-5. For Cortex-M recommend “Math Configuration” -> “Single Precision Cortex-M Math” for the fastest option.
+5. For Cortex-M recommend “Math Configuration” -> “Single Precision Cortex-M Math” for the fastest option. If seeing `error: r7 cannot be used in 'asm` add `-fomit-frame-pointer` to the CFLAGS. This only happens in debug builds, because r7 is used for debug.
 6. Hit the "Generate Code" button
 7. Open the project in STM32CubeIDE
 8. The Benchmark example uses float. To enable go to "Project Properties" -> "C/C++ Build" -> "Settings" -> "Tool Settings" -> "MCU Settings" -> Check "Use float with printf".
 9. To enable printf make the `main.c` changes below in the [STM32 Printf](#stm32-printf) section.
+
+
+**Note:** The STM32MP13 will likely require you to use DDR RAM, as well as enabling MMU and caches for optimum performance. Please see the `STM32MP13.md` file in `wolfcrypt/src/port/st` for more information on how to do this.
 
 ### Creating your own STM32CubeMX configuration
 
@@ -87,12 +90,14 @@ The section for "Hardware platform" may need to be adjusted depending on your pr
 * To enable STM32L5 support define `WOLFSSL_STM32L5`.
 * To enable STM32H7 support define `WOLFSSL_STM32H7`.
 * To enable STM32WB support define `WOLFSSL_STM32WB`.
+* To enable STM32WL support define `WOLFSSL_STM32WL`.
 * To enable STM32U5 support define `WOLFSSL_STM32U5`.
 * To enable STM32H5 support define `WOLFSSL_STM32H5`.
+* To enable STM32MP13 support define `WOLFSSL_STM32MP13`.
 
 To use the STM32 Cube HAL support make sure `WOLFSSL_STM32_CUBEMX` is defined.
 
-The PKA acceleration for ECC is available on some U5, L5 and WB55 chips.
+The PKA acceleration for ECC is available on some U5, L5, WB55 and MP13 chips.
 This is enabled with `WOLFSSL_STM32_PKA`. You can see some of the benchmarks [here](STM32_Benchmarks.md).
 
 To disable hardware crypto acceleration you can define:

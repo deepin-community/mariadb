@@ -120,7 +120,7 @@ boost::shared_ptr<WindowFunctionType> WF_min_max<T>::makeFunction(int id, const 
 
     default:
     {
-      func.reset(new WF_min_max<string>(id, name));
+      func.reset(new WF_min_max<utils::NullString>(id, name));
       break;
     }
   }
@@ -185,4 +185,3 @@ template boost::shared_ptr<WindowFunctionType> WF_min_max<int64_t>::makeFunction
                                                                                  WindowFunctionColumn*);
 
 }  // namespace windowfunction
-// vim:ts=4 sw=4:

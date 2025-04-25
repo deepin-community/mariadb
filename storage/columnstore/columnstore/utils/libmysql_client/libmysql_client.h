@@ -19,7 +19,11 @@
 #define UTILS LIBMYSQL_CL_H
 
 #include <my_config.h>
+#ifdef MYSQL_DYNAMIC_PLUGIN
+#include <mysql/service_sql.h>
+#else
 #include <mysql.h>
+#endif
 
 #include <boost/scoped_array.hpp>
 
@@ -91,4 +95,3 @@ class LibMySQL
 
 #endif  // UTILS_LIBMYSQL_CL_H
 
-// vim:ts=4 sw=4:

@@ -1,7 +1,11 @@
 --source include/innodb_page_size.inc
 --source include/have_sequence.inc
+--source include/test_db_charset_latin1.inc
 
 let $datadir=`select @@datadir`;
+
+SET @save_stats_persistent = @@GLOBAL.innodb_stats_persistent;
+SET GLOBAL innodb_stats_persistent = 0;
 
 --echo #
 --echo # MDEV-11369: Instant ADD COLUMN for InnoDB
@@ -805,18 +809,24 @@ SELECT * FROM t1;
 DROP TABLE t1;
 
 eval CREATE TABLE t1 (t TINYINT PRIMARY KEY, m MEDIUMINT UNIQUE) $engine;
+--disable_cursor_protocol
 SELECT table_id INTO @table_id1 FROM INFORMATION_SCHEMA.INNODB_SYS_TABLESTATS
 WHERE name = 'test/t1';
+--enable_cursor_protocol
 INSERT INTO t1 VALUES (-42, -123456);
 --enable_info
 ALTER TABLE t1 CHANGE t s SMALLINT;
+--disable_cursor_protocol
 SELECT table_id INTO @table_id2 FROM INFORMATION_SCHEMA.INNODB_SYS_TABLESTATS
 WHERE name = 'test/t1';
+--enable_cursor_protocol
 --error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
 ALTER TABLE t1 CHANGE m i INT, ALGORITHM=INSTANT;
 ALTER TABLE t1 CHANGE m i INT;
+--disable_cursor_protocol
 SELECT table_id INTO @table_id3 FROM INFORMATION_SCHEMA.INNODB_SYS_TABLESTATS
 WHERE name = 'test/t1';
+--enable_cursor_protocol
 --disable_info
 SELECT @table_id1 = @table_id2, @table_id2 = @table_id3;
 INSERT IGNORE INTO t1 VALUES (0, -123456);
@@ -964,3 +974,6 @@ remove_file $datadir/test/mdev28822_100427_innodb.frm;
 copy_file std_data/mysql_upgrade/mdev28822_100427_innodb.frm $datadir/test/mdev28822_100427_innodb.frm;
 ALTER TABLE mdev28822_100427_innodb ADD i1 INTEGER, ALGORITHM=INSTANT;
 DROP TABLE mdev28822_100427_innodb;
+SET GLOBAL innodb_stats_persistent = @save_stats_persistent;
+
+--source include/test_db_charset_restore.inc

@@ -21,10 +21,6 @@
 
 /* This file defines all string functions */
 
-#ifdef USE_PRAGMA_INTERFACE
-#pragma interface			/* gcc class implementation */
-#endif
-
 extern size_t username_char_length;
 
 class Item_str_func :public Item_func
@@ -109,7 +105,7 @@ public:
    :Item_str_ascii_func(thd, a) { }
   Item_str_ascii_checksum_func(THD *thd, Item *a, Item *b)
    :Item_str_ascii_func(thd, a, b) { }
-  bool eq(const Item *item, bool binary_cmp) const
+  bool eq(const Item *item, bool binary_cmp) const override
   {
     // Always use binary argument comparison: MD5('x') != MD5('X')
     return Item_func::eq(item, true);
@@ -129,7 +125,13 @@ public:
    :Item_str_func(thd, a) { }
   Item_str_binary_checksum_func(THD *thd, Item *a, Item *b)
    :Item_str_func(thd, a, b) { }
-  bool eq(const Item *item, bool binary_cmp) const
+  Item_str_binary_checksum_func(THD *thd, Item *a, Item *b, Item *c)
+   :Item_str_func(thd, a, b, c) { }
+  Item_str_binary_checksum_func(THD *thd, Item *a, Item *b, Item *c, Item *d)
+   :Item_str_func(thd, a, b, c, d) { }
+  Item_str_binary_checksum_func(THD *thd, Item *a, Item *b, Item *c, Item *d, Item *e)
+   :Item_str_func(thd, a, b, c, d, e) { }
+  bool eq(const Item *item, bool binary_cmp) const override
   {
     /*
       Always use binary argument comparison:
@@ -155,7 +157,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("md5") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_md5>(thd, this); }
 };
 
@@ -171,7 +173,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("sha") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_sha>(thd, this); }
 };
 
@@ -187,7 +189,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("sha2") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_sha2>(thd, this); }
 };
 
@@ -204,7 +206,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("to_base64") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_to_base64>(thd, this); }
 };
 
@@ -221,7 +223,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("from_base64") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_from_base64>(thd, this); }
 };
 
@@ -229,30 +231,46 @@ public:
 
 class Item_aes_crypt :public Item_str_binary_checksum_func
 {
-  enum { AES_KEY_LENGTH = 128 };
   void create_key(String *user_key, uchar* key);
-
-protected:
-  int what;
+  int parse_mode();
   String tmp_value;
+  const int what;
+  uint aes_key_length;
+  enum my_aes_mode aes_mode;
+
 public:
-  Item_aes_crypt(THD *thd, Item *a, Item *b)
-   :Item_str_binary_checksum_func(thd, a, b) {}
-  String *val_str(String *);
+  Item_aes_crypt(THD *thd, int what, Item *a, Item *b)
+   : Item_str_binary_checksum_func(thd, a, b), what(what) {}
+  Item_aes_crypt(THD *thd, int what, Item *a, Item *b, Item *c)
+   : Item_str_binary_checksum_func(thd, a, b, c), what(what) {}
+  Item_aes_crypt(THD *thd, int what, Item *a, Item *b, Item *c, Item *d)
+   : Item_str_binary_checksum_func(thd, a, b, c, d), what(what) {}
+  bool fix_fields(THD *thd, Item **ref) override;
+  String *val_str(String *) override;
+  bool check_vcol_func_processor(void *arg) override
+  {
+    if (arg_count > 3)
+      return FALSE;
+    return mark_unsupported_function(func_name(), "()", arg, VCOL_SESSION_FUNC);
+  }
 };
 
 class Item_func_aes_encrypt :public Item_aes_crypt
 {
 public:
   Item_func_aes_encrypt(THD *thd, Item *a, Item *b)
-   :Item_aes_crypt(thd, a, b) {}
+   :Item_aes_crypt(thd, ENCRYPTION_FLAG_ENCRYPT, a, b) {}
+  Item_func_aes_encrypt(THD *thd, Item *a, Item *b, Item *c)
+   :Item_aes_crypt(thd, ENCRYPTION_FLAG_ENCRYPT, a, b, c) {}
+  Item_func_aes_encrypt(THD *thd, Item *a, Item *b, Item *c, Item *d)
+   :Item_aes_crypt(thd, ENCRYPTION_FLAG_ENCRYPT, a, b, c, d) {}
   bool fix_length_and_dec(THD *thd) override;
   LEX_CSTRING func_name_cstring() const override
   {
     static LEX_CSTRING name= {STRING_WITH_LEN("aes_encrypt") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_aes_encrypt>(thd, this); }
 };
 
@@ -260,15 +278,48 @@ class Item_func_aes_decrypt :public Item_aes_crypt
 {
 public:
   Item_func_aes_decrypt(THD *thd, Item *a, Item *b):
-    Item_aes_crypt(thd, a, b) {}
+    Item_aes_crypt(thd, ENCRYPTION_FLAG_DECRYPT, a, b) {}
+  Item_func_aes_decrypt(THD *thd, Item *a, Item *b, Item *c):
+    Item_aes_crypt(thd, ENCRYPTION_FLAG_DECRYPT, a, b, c) {}
+  Item_func_aes_decrypt(THD *thd, Item *a, Item *b, Item *c, Item *d):
+    Item_aes_crypt(thd, ENCRYPTION_FLAG_DECRYPT, a, b, c, d) {}
   bool fix_length_and_dec(THD *thd) override;
   LEX_CSTRING func_name_cstring() const override
   {
     static LEX_CSTRING name= {STRING_WITH_LEN("aes_decrypt") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_aes_decrypt>(thd, this); }
+};
+
+class Item_func_kdf :public Item_str_binary_checksum_func
+{
+  uint key_length;
+public:
+  Item_func_kdf(THD *thd, Item *a, Item *b)
+   : Item_str_binary_checksum_func(thd, a, b) {}
+  Item_func_kdf(THD *thd, Item *a, Item *b, Item *c)
+   : Item_str_binary_checksum_func(thd, a, b, c) {}
+  Item_func_kdf(THD *thd, Item *a, Item *b, Item *c, Item *d)
+   : Item_str_binary_checksum_func(thd, a, b, c, d) {}
+  Item_func_kdf(THD *thd, Item *a, Item *b, Item *c, Item *d, Item *e)
+   : Item_str_binary_checksum_func(thd, a, b, c, d, e) {}
+  bool fix_length_and_dec(THD *thd) override;
+  String *val_str(String *) override;
+  bool check_vcol_func_processor(void *arg) override
+  {
+    if (arg_count > 4)
+      return FALSE;
+    return mark_unsupported_function(func_name(), "()", arg, VCOL_SESSION_FUNC);
+  }
+  LEX_CSTRING func_name_cstring() const override
+  {
+    static LEX_CSTRING name= {STRING_WITH_LEN("kdf") };
+    return name;
+  }
+  Item *do_get_copy(THD *thd) const override
+  { return get_item_copy<Item_func_kdf>(thd, this); }
 };
 
 class Item_func_natural_sort_key : public Item_str_func
@@ -283,7 +334,7 @@ public:
     return name;
   }
   bool fix_length_and_dec(THD *thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   {
     return get_item_copy<Item_func_natural_sort_key>(thd, this);
   }
@@ -307,6 +358,12 @@ protected:
 public:
   Item_func_concat(THD *thd, List<Item> &list): Item_str_func(thd, list) {}
   Item_func_concat(THD *thd, Item *a, Item *b): Item_str_func(thd, a, b) {}
+  const Schema *schema() const override { return &mariadb_schema; }
+  void print(String *str, enum_query_type query_type) override
+  {
+    print_sql_mode_qualified_name(str, query_type);
+    print_args_parenthesized(str, query_type);
+  }
   String *val_str(String *) override;
   bool fix_length_and_dec(THD *thd) override;
   LEX_CSTRING func_name_cstring() const override
@@ -314,7 +371,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("concat") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_concat>(thd, this); }
 };
 
@@ -333,12 +390,19 @@ public:
    :Item_func_concat(thd, a, b)
   { }
   String *val_str(String *) override;
-  LEX_CSTRING func_name_cstring() const override
+  const Schema *schema() const override { return &oracle_schema_ref; }
+  void print(String *str, enum_query_type query_type) override
   {
-    static LEX_CSTRING name= {STRING_WITH_LEN("concat_operator_oracle") };
-    return name;
+    if (query_type & QT_FOR_FRM)
+    {
+      // 10.3 downgrade compatibility for FRM
+      str->append(STRING_WITH_LEN("concat_operator_oracle"));
+    }
+    else
+      print_sql_mode_qualified_name(str, query_type);
+    print_args_parenthesized(str, query_type);
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   {
     return get_item_copy<Item_func_concat_operator_oracle>(thd, this);
   }
@@ -353,7 +417,7 @@ public:
   String *val_str(String *) override;
   bool fix_length_and_dec(THD *thd) override
   {
-    collation.set(system_charset_info);
+    collation.set(system_charset_info_for_i_s);
     max_length= MAX_BLOB_WIDTH;
     set_maybe_null();
     return FALSE;
@@ -363,7 +427,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("decode_histogram") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_decode_histogram>(thd, this); }
 };
 
@@ -380,7 +444,7 @@ public:
     return name;
   }
   table_map not_null_tables() const override { return 0; }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_concat_ws>(thd, this); }
 };
 
@@ -399,10 +463,9 @@ public:
   }
   bool check_vcol_func_processor(void *arg) override
   {
-    return mark_unsupported_function(func_name(), "()", arg,
-                                     VCOL_NON_DETERMINISTIC | VCOL_NEXTVAL);
+    return mark_unsupported_function(func_name(), "()", arg, VCOL_NON_DETERMINISTIC);
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   {
     return get_item_copy<Item_func_random_bytes>(thd, this);
   }
@@ -422,7 +485,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("reverse") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_reverse>(thd, this); }
 };
 
@@ -430,18 +493,25 @@ public:
 class Item_func_replace :public Item_str_func
 {
   String tmp_value,tmp_value2;
+protected:
+  String *val_str_internal(String *str, bool null_to_empty);
 public:
   Item_func_replace(THD *thd, Item *org, Item *find, Item *replace):
     Item_str_func(thd, org, find, replace) {}
-  String *val_str(String *to) override { return val_str_internal(to, NULL); };
+  String *val_str(String *to) override { return val_str_internal(to, false); };
   bool fix_length_and_dec(THD *thd) override;
-  String *val_str_internal(String *str, String *empty_string_for_null);
+  const Schema *schema() const override { return &mariadb_schema; }
+  void print(String *str, enum_query_type query_type) override
+  {
+    print_sql_mode_qualified_name(str, query_type);
+    print_args_parenthesized(str, query_type);
+  }
   LEX_CSTRING func_name_cstring() const override
   {
     static LEX_CSTRING name= {STRING_WITH_LEN("replace") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_replace>(thd, this); }
 };
 
@@ -453,13 +523,20 @@ public:
   Item_func_replace_oracle(THD *thd, Item *org, Item *find, Item *replace):
     Item_func_replace(thd, org, find, replace) {}
   String *val_str(String *to) override
-  { return val_str_internal(to, &tmp_emtpystr); };
-  LEX_CSTRING func_name_cstring() const override
+  { return val_str_internal(to, true); };
+  const Schema *schema() const override { return &oracle_schema_ref; }
+  void print(String *str, enum_query_type query_type) override
   {
-    static LEX_CSTRING name= {STRING_WITH_LEN("replace_oracle") };
-    return name;
+    if (query_type & QT_FOR_FRM)
+    {
+      // 10.3 downgrade compatibility for FRM
+      str->append(STRING_WITH_LEN("replace_oracle"));
+    }
+    else
+      print_sql_mode_qualified_name(str, query_type);
+    print_args_parenthesized(str, query_type);
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_replace_oracle>(thd, this); }
 };
 
@@ -470,10 +547,18 @@ class Item_func_regexp_replace :public Item_str_func
   bool append_replacement(String *str,
                           const LEX_CSTRING *source,
                           const LEX_CSTRING *replace);
+protected:
+  String *val_str_internal(String *str, bool null_to_empty);
 public:
   Item_func_regexp_replace(THD *thd, Item *a, Item *b, Item *c):
     Item_str_func(thd, a, b, c)
     {}
+  const Schema *schema() const override { return &mariadb_schema; }
+  void print(String *str, enum_query_type query_type) override
+  {
+    print_sql_mode_qualified_name(str, query_type);
+    print_args_parenthesized(str, query_type);
+  }
   void cleanup() override
   {
     DBUG_ENTER("Item_func_regexp_replace::cleanup");
@@ -481,14 +566,37 @@ public:
     re.cleanup();
     DBUG_VOID_RETURN;
   }
-  String *val_str(String *str) override;
+  String *val_str(String *str) override
+  {
+    return val_str_internal(str, false);
+  }
   bool fix_length_and_dec(THD *thd) override;
   LEX_CSTRING func_name_cstring() const override
   {
     static LEX_CSTRING name= {STRING_WITH_LEN("regexp_replace") };
     return name;
   }
-  Item *get_copy(THD *thd) override { return 0;}
+  Item *do_get_copy(THD *thd) const override { return 0;}
+};
+
+
+class Item_func_regexp_replace_oracle: public Item_func_regexp_replace
+{
+public:
+  Item_func_regexp_replace_oracle(THD *thd, Item *a, Item *b, Item *c)
+   :Item_func_regexp_replace(thd, a, b, c)
+  {}
+  const Schema *schema() const override { return &oracle_schema_ref; }
+  bool fix_length_and_dec(THD *thd) override
+  {
+    bool rc= Item_func_regexp_replace::fix_length_and_dec(thd);
+    set_maybe_null(); // Empty result is converted to NULL
+    return rc;
+  }
+  String *val_str(String *str) override
+  {
+    return val_str_internal(str, true);
+  }
 };
 
 
@@ -513,7 +621,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("regexp_substr") };
     return name;
   }
-  Item *get_copy(THD *thd) override { return 0; }
+  Item *do_get_copy(THD *thd) const override { return 0; }
 };
 
 
@@ -531,7 +639,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("insert") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_insert>(thd, this); }
 };
 
@@ -558,7 +666,7 @@ public:
     return name;
   }
   bool fix_length_and_dec(THD *thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_lcase>(thd, this); }
 };
 
@@ -572,7 +680,7 @@ public:
     return name;
   }
   bool fix_length_and_dec(THD *thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_ucase>(thd, this); }
 };
 
@@ -585,12 +693,13 @@ public:
   bool hash_not_null(Hasher *hasher) override;
   String *val_str(String *) override;
   bool fix_length_and_dec(THD *thd) override;
+  enum Functype functype() const override { return LEFT_FUNC; }
   LEX_CSTRING func_name_cstring() const override
   {
     static LEX_CSTRING name= {STRING_WITH_LEN("left") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_left>(thd, this); }
 };
 
@@ -607,7 +716,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("right") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_right>(thd, this); }
 };
 
@@ -621,14 +730,23 @@ public:
   Item_func_substr(THD *thd, Item *a, Item *b): Item_str_func(thd, a, b) {}
   Item_func_substr(THD *thd, Item *a, Item *b, Item *c):
     Item_str_func(thd, a, b, c) {}
+  Item_func_substr(THD *thd, List<Item> &list)
+    :Item_str_func(thd, list) {}
   String *val_str(String *) override;
   bool fix_length_and_dec(THD *thd) override;
+  const Schema *schema() const override { return &mariadb_schema; }
+  void print(String *str, enum_query_type query_type) override
+  {
+    print_sql_mode_qualified_name(str, query_type);
+    print_args_parenthesized(str, query_type);
+  }
+  enum Functype functype() const override { return SUBSTR_FUNC; }
   LEX_CSTRING func_name_cstring() const override
   {
     static LEX_CSTRING name= {STRING_WITH_LEN("substr") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_substr>(thd, this); }
 };
 
@@ -645,7 +763,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("sformat") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_sformat>(thd, this); }
 };
 
@@ -661,18 +779,27 @@ public:
     Item_func_substr(thd, a, b) {}
   Item_func_substr_oracle(THD *thd, Item *a, Item *b, Item *c):
     Item_func_substr(thd, a, b, c) {}
+  Item_func_substr_oracle(THD *thd, List<Item> &list)
+    :Item_func_substr(thd, list) {}
   bool fix_length_and_dec(THD *thd) override
   {
     bool res= Item_func_substr::fix_length_and_dec(thd);
     set_maybe_null();
     return res;
   }
-  LEX_CSTRING func_name_cstring() const override
+  const Schema *schema() const override { return &oracle_schema_ref; }
+  void print(String *str, enum_query_type query_type) override
   {
-    static LEX_CSTRING name= {STRING_WITH_LEN("substr_oracle") };
-    return name;
+    if (query_type & QT_FOR_FRM)
+    {
+      // 10.3 downgrade compatibility for FRM
+      str->append(STRING_WITH_LEN("substr_oracle"));
+    }
+    else
+      print_sql_mode_qualified_name(str, query_type);
+    print_args_parenthesized(str, query_type);
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_substr_oracle>(thd, this); }
 };
 
@@ -689,7 +816,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("substring_index") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_substr_index>(thd, this); }
 
 };
@@ -718,17 +845,13 @@ protected:
   {
     return trimmed_value(res, 0, res->length());
   }
-  virtual LEX_CSTRING func_name_ext() const
-  {
-    static LEX_CSTRING name_ext= {STRING_WITH_LEN("") };
-    return name_ext;
-  }
 public:
   Item_func_trim(THD *thd, Item *a, Item *b): Item_str_func(thd, a, b) {}
   Item_func_trim(THD *thd, Item *a): Item_str_func(thd, a) {}
   Sql_mode_dependency value_depends_on_sql_mode() const override;
   String *val_str(String *) override;
   bool fix_length_and_dec(THD *thd) override;
+  const Schema *schema() const override { return &mariadb_schema; }
   LEX_CSTRING func_name_cstring() const override
   {
     static LEX_CSTRING name= {STRING_WITH_LEN("trim") };
@@ -736,7 +859,7 @@ public:
   }
   void print(String *str, enum_query_type query_type) override;
   virtual LEX_CSTRING mode_name() const { return { "both", 4}; }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_trim>(thd, this); }
 };
 
@@ -746,27 +869,18 @@ class Item_func_trim_oracle :public Item_func_trim
 protected:
   String *make_empty_result(String *str) override
   { null_value= 1; return NULL; }
-  LEX_CSTRING func_name_ext() const override
-  {
-    static LEX_CSTRING name_ext= {STRING_WITH_LEN("_oracle") };
-    return name_ext;
-  }
 public:
   Item_func_trim_oracle(THD *thd, Item *a, Item *b):
     Item_func_trim(thd, a, b) {}
   Item_func_trim_oracle(THD *thd, Item *a): Item_func_trim(thd, a) {}
-  LEX_CSTRING func_name_cstring() const override
-  {
-    static LEX_CSTRING name= {STRING_WITH_LEN("trim_oracle") };
-    return name;
-  }
+  const Schema *schema() const override { return &oracle_schema_ref; }
   bool fix_length_and_dec(THD *thd) override
   {
     bool res= Item_func_trim::fix_length_and_dec(thd);
     set_maybe_null();
     return res;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_trim_oracle>(thd, this); }
 };
 
@@ -781,6 +895,7 @@ public:
     return Item_func::value_depends_on_sql_mode();
   }
   String *val_str(String *) override;
+  const Schema *schema() const override { return &mariadb_schema; }
   LEX_CSTRING func_name_cstring() const override
   {
     static LEX_CSTRING name= {STRING_WITH_LEN("ltrim") };
@@ -788,7 +903,7 @@ public:
   }
   LEX_CSTRING mode_name() const override
   { return { STRING_WITH_LEN("leading") }; }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_ltrim>(thd, this); }
 };
 
@@ -798,27 +913,18 @@ class Item_func_ltrim_oracle :public Item_func_ltrim
 protected:
   String *make_empty_result(String *str) override
   { null_value= 1; return NULL; }
-  LEX_CSTRING func_name_ext() const override
-  {
-    static LEX_CSTRING name_ext= {STRING_WITH_LEN("_oracle") };
-    return name_ext;
-  }
 public:
   Item_func_ltrim_oracle(THD *thd, Item *a, Item *b):
     Item_func_ltrim(thd, a, b) {}
   Item_func_ltrim_oracle(THD *thd, Item *a): Item_func_ltrim(thd, a) {}
-  LEX_CSTRING func_name_cstring() const override
-  {
-    static LEX_CSTRING name= {STRING_WITH_LEN("ltrim_oracle") };
-    return name;
-  }
+  const Schema *schema() const override { return &oracle_schema_ref; }
   bool fix_length_and_dec(THD *thd) override
   {
     bool res= Item_func_ltrim::fix_length_and_dec(thd);
     set_maybe_null();
     return res;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_ltrim_oracle>(thd, this); }
 };
 
@@ -829,6 +935,7 @@ public:
   Item_func_rtrim(THD *thd, Item *a, Item *b): Item_func_trim(thd, a, b) {}
   Item_func_rtrim(THD *thd, Item *a): Item_func_trim(thd, a) {}
   String *val_str(String *) override;
+  const Schema *schema() const override { return &mariadb_schema; }
   LEX_CSTRING func_name_cstring() const override
   {
     static LEX_CSTRING name= {STRING_WITH_LEN("rtrim") };
@@ -836,7 +943,7 @@ public:
   }
   LEX_CSTRING mode_name() const override
   { return { STRING_WITH_LEN("trailing") }; }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_rtrim>(thd, this); }
 };
 
@@ -846,27 +953,18 @@ class Item_func_rtrim_oracle :public Item_func_rtrim
 protected:
   String *make_empty_result(String *str) override
   { null_value= 1; return NULL; }
-  LEX_CSTRING func_name_ext() const override
-  {
-    static LEX_CSTRING name_ext= {STRING_WITH_LEN("_oracle") };
-    return name_ext;
-  }
 public:
   Item_func_rtrim_oracle(THD *thd, Item *a, Item *b):
     Item_func_rtrim(thd, a, b) {}
   Item_func_rtrim_oracle(THD *thd, Item *a): Item_func_rtrim(thd, a) {}
-  LEX_CSTRING func_name_cstring() const override
-  {
-    static LEX_CSTRING name= {STRING_WITH_LEN("rtrim_oracle") };
-    return name;
-  }
+  const Schema *schema() const override { return &oracle_schema_ref; }
   bool fix_length_and_dec(THD *thd) override
   {
     bool res= Item_func_rtrim::fix_length_and_dec(thd);
     set_maybe_null();
     return res;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_rtrim_oracle>(thd, this); }
 };
 
@@ -909,7 +1007,7 @@ public:
   }
   static char *alloc(THD *thd, const char *password, size_t pass_len,
                      enum PW_Alg al);
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_password>(thd, this); }
 };
 
@@ -930,7 +1028,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("des_encrypt") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_des_encrypt>(thd, this); }
 };
 
@@ -949,7 +1047,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("des_decrypt") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_des_decrypt>(thd, this); }
 };
 
@@ -994,7 +1092,7 @@ public:
   {
     return FALSE;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_encrypt>(thd, this); }
 };
 
@@ -1018,7 +1116,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("encode") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_encode>(thd, this); }
 protected:
   virtual void crypto_transform(String *);
@@ -1032,12 +1130,18 @@ class Item_func_decode :public Item_func_encode
 {
 public:
   Item_func_decode(THD *thd, Item *a, Item *seed_arg): Item_func_encode(thd, a, seed_arg) {}
+  const Schema *schema() const override { return &mariadb_schema; }
+  void print(String *str, enum_query_type query_type) override
+  {
+    print_sql_mode_qualified_name(str, query_type);
+    print_args_parenthesized(str, query_type);
+  }
   LEX_CSTRING func_name_cstring() const override
   {
     static LEX_CSTRING name= {STRING_WITH_LEN("decode") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_decode>(thd, this); }
 protected:
   void crypto_transform(String *) override;
@@ -1048,20 +1152,20 @@ class Item_func_sysconst :public Item_str_func
 {
 public:
   Item_func_sysconst(THD *thd): Item_str_func(thd)
-  { collation.set(system_charset_info,DERIVATION_SYSCONST); }
-  Item *safe_charset_converter(THD *thd, CHARSET_INFO *tocs);
+  { collation.set(system_charset_info_for_i_s, DERIVATION_SYSCONST); }
+  Item *safe_charset_converter(THD *thd, CHARSET_INFO *tocs) override;
   /*
     Used to create correct Item name in new converted item in
     safe_charset_converter, return string representation of this function
     call
   */
-  virtual const char *fully_qualified_func_name() const = 0;
-  bool check_vcol_func_processor(void *arg)
+  virtual const Lex_ident_routine fully_qualified_func_name() const = 0;
+  bool check_vcol_func_processor(void *arg) override
   {
-    return mark_unsupported_function(fully_qualified_func_name(), arg,
+    return mark_unsupported_function(fully_qualified_func_name().str, arg,
                                      VCOL_SESSION_FUNC);
   }
-  bool const_item() const;
+  bool const_item() const override;
 };
 
 
@@ -1072,7 +1176,7 @@ public:
   String *val_str(String *) override;
   bool fix_length_and_dec(THD *thd) override
   {
-    max_length= NAME_CHAR_LEN * system_charset_info->mbmaxlen;
+    fix_char_length(NAME_CHAR_LEN);
     set_maybe_null();
     return FALSE;
   }
@@ -1081,9 +1185,9 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("database") };
     return name;
   }
-  const char *fully_qualified_func_name() const override
-  { return "database()"; }
-  Item *get_copy(THD *thd) override
+  const Lex_ident_routine fully_qualified_func_name() const override
+  { return Lex_ident_routine("database()"_LEX_CSTRING); }
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_database>(thd, this); }
 };
 
@@ -1098,20 +1202,20 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("SQLERRM") };
     return name;
   }
-  const char *fully_qualified_func_name() const override
-  { return "SQLERRM"; }
+  const Lex_ident_routine fully_qualified_func_name() const override
+  { return Lex_ident_routine("SQLERRM"_LEX_CSTRING); }
   void print(String *str, enum_query_type query_type) override
   {
     str->append(func_name_cstring());
   }
   bool fix_length_and_dec(THD *thd) override
   {
-    max_length= 512 * system_charset_info->mbmaxlen;
+    fix_char_length(512);
     null_value= false;
     base_flags&= ~item_base_t::MAYBE_NULL;
     return FALSE;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_sqlerrm>(thd, this); }
 };
 
@@ -1124,7 +1228,7 @@ protected:
 public:
   Item_func_user(THD *thd): Item_func_sysconst(thd)
   {
-    str_value.set("", 0, system_charset_info);
+    str_value.set("", 0, collation.collation);
   }
   String *val_str(String *) override
   {
@@ -1143,13 +1247,13 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("user") };
     return name;
   }
-  const char *fully_qualified_func_name() const override
-  { return "user()"; }
+  const Lex_ident_routine fully_qualified_func_name() const override
+  { return Lex_ident_routine("user()"_LEX_CSTRING); }
   int save_in_field(Field *field, bool no_conversions) override
   {
     return save_str_value_in_field(field, &str_value);
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_user>(thd, this); }
 };
 
@@ -1167,14 +1271,33 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("current_user") };
     return name;
   }
-  const char *fully_qualified_func_name() const override
-  { return "current_user()"; }
+  const Lex_ident_routine fully_qualified_func_name() const override
+  { return Lex_ident_routine("current_user()"_LEX_CSTRING); }
   bool check_vcol_func_processor(void *arg) override
   {
     context= 0;
-    return mark_unsupported_function(fully_qualified_func_name(), arg,
+    return mark_unsupported_function(fully_qualified_func_name().str, arg,
                                      VCOL_SESSION_FUNC);
   }
+  Item *do_get_copy(THD *thd) const override
+  { return get_item_copy<Item_func_current_user>(thd, this); }
+};
+
+class Item_func_session_user :public Item_func_user
+{
+public:
+  Item_func_session_user(THD *thd):
+    Item_func_user(thd) {}
+  bool fix_fields(THD *thd, Item **ref) override;
+  LEX_CSTRING func_name_cstring() const override
+  {
+    static LEX_CSTRING name= {STRING_WITH_LEN("session_user") };
+    return name;
+  }
+  const Lex_ident_routine fully_qualified_func_name() const override
+  { return Lex_ident_routine("session_user()"_LEX_CSTRING); }
+  Item *do_get_copy(THD *thd) const override
+  { return get_item_copy<Item_func_session_user>(thd, this); }
 };
 
 
@@ -1198,8 +1321,8 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("current_role") };
     return name;
   }
-  const char *fully_qualified_func_name() const override
-  { return "current_role()"; }
+  const Lex_ident_routine fully_qualified_func_name() const override
+  { return Lex_ident_routine("current_role()"_LEX_CSTRING); }
   String *val_str(String *) override
   {
     DBUG_ASSERT(fixed());
@@ -1208,10 +1331,10 @@ public:
   bool check_vcol_func_processor(void *arg) override
   {
     context= 0;
-    return mark_unsupported_function(fully_qualified_func_name(), arg,
+    return mark_unsupported_function(fully_qualified_func_name().str, arg,
                                      VCOL_SESSION_FUNC);
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_current_role>(thd, this); }
 };
 
@@ -1228,7 +1351,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("soundex") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_soundex>(thd, this); }
 };
 
@@ -1246,7 +1369,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("elt") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_elt>(thd, this); }
 };
 
@@ -1264,7 +1387,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("make_set") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_make_set>(thd, this); }
 };
 
@@ -1285,7 +1408,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("format") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_format>(thd, this); }
 };
 
@@ -1314,7 +1437,7 @@ public:
     return name;
   }
   void print(String *str, enum_query_type query_type) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_char>(thd, this); }
 };
 
@@ -1334,7 +1457,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("chr") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_chr>(thd, this); }
 };
 
@@ -1351,7 +1474,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("repeat") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_repeat>(thd, this); }
 };
 
@@ -1367,7 +1490,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("space") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_space>(thd, this); }
 };
 
@@ -1388,7 +1511,7 @@ public:
   {
     return mark_unsupported_function(func_name(), "()", arg, VCOL_IMPOSSIBLE);
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_binlog_gtid_pos>(thd, this); }
 };
 
@@ -1402,6 +1525,8 @@ public:
     Item_str_func(thd, arg1, arg2, arg3) {}
   Item_func_pad(THD *thd, Item *arg1, Item *arg2):
     Item_str_func(thd, arg1, arg2) {}
+  Item_func_pad(THD *thd, List<Item> &list):
+    Item_str_func(thd,list) {}
   bool fix_length_and_dec(THD *thd) override;
 };
 
@@ -1413,14 +1538,22 @@ public:
     Item_func_pad(thd, arg1, arg2, arg3) {}
   Item_func_rpad(THD *thd, Item *arg1, Item *arg2):
     Item_func_pad(thd, arg1, arg2) {}
+  Item_func_rpad(THD *thd, List<Item> &list):
+    Item_func_pad(thd,list) {}
   String *val_str(String *) override;
+  const Schema *schema() const override { return &mariadb_schema; }
+  void print(String *str, enum_query_type query_type) override
+  {
+    print_sql_mode_qualified_name(str, query_type);
+    print_args_parenthesized(str, query_type);
+  }
   LEX_CSTRING func_name_cstring() const override
   {
     static LEX_CSTRING name= {STRING_WITH_LEN("rpad") };
     return name;
   }
   Sql_mode_dependency value_depends_on_sql_mode() const override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_rpad>(thd, this); }
 };
 
@@ -1434,18 +1567,27 @@ public:
     Item_func_rpad(thd, arg1, arg2, arg3) {}
   Item_func_rpad_oracle(THD *thd, Item *arg1, Item *arg2):
     Item_func_rpad(thd, arg1, arg2) {}
+  Item_func_rpad_oracle(THD *thd, List<Item> &list):
+    Item_func_rpad(thd,list) {}
   bool fix_length_and_dec(THD *thd) override
   {
     bool res= Item_func_rpad::fix_length_and_dec(thd);
     set_maybe_null();
     return res;
   }
-  LEX_CSTRING func_name_cstring() const override
+  const Schema *schema() const override { return &oracle_schema_ref; }
+  void print(String *str, enum_query_type query_type) override
   {
-    static LEX_CSTRING name= {STRING_WITH_LEN("rpad_oracle") };
-    return name;
+    if (query_type & QT_FOR_FRM)
+    {
+      // 10.3 downgrade compatibility for FRM
+      str->append(STRING_WITH_LEN("rpad_oracle"));
+    }
+    else
+      print_sql_mode_qualified_name(str, query_type);
+    print_args_parenthesized(str, query_type);
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_rpad_oracle>(thd, this); }
 };
 
@@ -1457,13 +1599,21 @@ public:
     Item_func_pad(thd, arg1, arg2, arg3) {}
   Item_func_lpad(THD *thd, Item *arg1, Item *arg2):
     Item_func_pad(thd, arg1, arg2) {}
+  Item_func_lpad(THD *thd, List<Item> &list):
+    Item_func_pad(thd,list) {}
   String *val_str(String *) override;
+  const Schema *schema() const override { return &mariadb_schema; }
+  void print(String *str, enum_query_type query_type) override
+  {
+    print_sql_mode_qualified_name(str, query_type);
+    print_args_parenthesized(str, query_type);
+  }
   LEX_CSTRING func_name_cstring() const override
   {
     static LEX_CSTRING name= {STRING_WITH_LEN("lpad") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_lpad>(thd, this); }
 };
 
@@ -1477,18 +1627,27 @@ public:
     Item_func_lpad(thd, arg1, arg2, arg3) {}
   Item_func_lpad_oracle(THD *thd, Item *arg1, Item *arg2):
     Item_func_lpad(thd, arg1, arg2) {}
+  Item_func_lpad_oracle(THD *thd, List<Item> &list):
+    Item_func_lpad(thd,list) {}
   bool fix_length_and_dec(THD *thd) override
   {
     bool res= Item_func_lpad::fix_length_and_dec(thd);
     set_maybe_null();
     return res;
   }
-  LEX_CSTRING func_name_cstring() const override
+  const Schema *schema() const override { return &oracle_schema_ref; }
+  void print(String *str, enum_query_type query_type) override
   {
-    static LEX_CSTRING name= {STRING_WITH_LEN("lpad_oracle") };
-    return name;
+    if (query_type & QT_FOR_FRM)
+    {
+      // 10.3 downgrade compatibility for FRM
+      str->append(STRING_WITH_LEN("lpad_oracle"));
+    }
+    else
+      print_sql_mode_qualified_name(str, query_type);
+    print_args_parenthesized(str, query_type);
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_lpad_oracle>(thd, this); }
 };
 
@@ -1507,11 +1666,11 @@ public:
   bool fix_length_and_dec(THD *thd) override
   {
     collation.set(default_charset());
-    fix_char_length(64);
+    fix_char_length(65);
     set_maybe_null();
     return FALSE;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_conv>(thd, this); }
 };
 
@@ -1545,13 +1704,23 @@ public:
   }
   bool fix_length_and_dec(THD *thd) override
   {
+    m_arg0_type_handler= args[0]->type_handler();
     collation.set(default_charset(), DERIVATION_COERCIBLE, MY_REPERTOIRE_ASCII);
     decimals=0;
-    fix_char_length(args[0]->max_length * 2);
-    m_arg0_type_handler= args[0]->type_handler();
+    /*
+      Reserve space for 16 characters for signed numeric data types:
+        hex(-1) -> 'FFFFFFFFFFFFFFFF'.
+      For unsigned numeric types, HEX() can create too large columns.
+      This should be eventually fixed to create minimum possible columns.
+    */
+    const Type_handler_numeric *tn=
+      dynamic_cast<const Type_handler_numeric*>(m_arg0_type_handler);
+    size_t char_length= (tn && !(tn->flags() & UNSIGNED_FLAG)) ?
+                        (size_t) 16 : (size_t) args[0]->max_length * 2;
+    fix_char_length(char_length);
     return FALSE;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_hex>(thd, this); }
 };
 
@@ -1577,7 +1746,7 @@ public:
     max_length=(1+args[0]->max_length)/2;
     return FALSE;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_unhex>(thd, this); }
 };
 
@@ -1616,7 +1785,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("like_range_min") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_like_range_min>(thd, this); }
 };
 
@@ -1631,7 +1800,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("like_range_max") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_like_range_max>(thd, this); }
 };
 #endif
@@ -1663,7 +1832,7 @@ public:
     return name;
   }
   bool need_parentheses_in_default() override { return true; }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_binary>(thd, this); }
 };
 
@@ -1690,7 +1859,7 @@ public:
   {
     return mark_unsupported_function(func_name(), "()", arg, VCOL_IMPOSSIBLE);
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_load_file>(thd, this); }
 };
 
@@ -1711,7 +1880,7 @@ class Item_func_export_set: public Item_str_func
     static LEX_CSTRING name= {STRING_WITH_LEN("export_set") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_export_set>(thd, this); }
 };
 
@@ -1732,10 +1901,13 @@ public:
     collation.set(args[0]->collation);
     ulonglong max_result_length= (ulonglong) args[0]->max_length * 2 +
                                   2 * collation.collation->mbmaxlen;
+    // NULL argument is returned as a string "NULL" without quotes
+    if (args[0]->maybe_null())
+      set_if_bigger(max_result_length, 4 * collation.collation->mbmaxlen);
     max_length= (uint32) MY_MIN(max_result_length, MAX_BLOB_WIDTH);
     return FALSE;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_quote>(thd, this); }
 };
 
@@ -1748,13 +1920,13 @@ public:
   Item_func_conv_charset(THD *thd, Item *a, CHARSET_INFO *cs):
     Item_str_func(thd, a)
   {
-    collation.set(cs, DERIVATION_IMPLICIT);
+    collation= DTCollation::string_typecast(cs);
     use_cached_value= 0; safe= 0;
   }
   Item_func_conv_charset(THD *thd, Item *a, CHARSET_INFO *cs, bool cache_if_const):
     Item_str_func(thd, a)
   {
-    collation.set(cs, DERIVATION_IMPLICIT);
+    collation= DTCollation::string_typecast(cs);
     if (cache_if_const && args[0]->can_eval_in_optimize())
     {
       uint errors= 0;
@@ -1831,7 +2003,7 @@ public:
     return name;
   }
   void print(String *str, enum_query_type query_type) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_conv_charset>(thd, this); }
   int save_in_field(Field*, bool) override;
 };
@@ -1860,7 +2032,7 @@ public:
     return args[0]->field_for_view_update();
   }
   bool need_parentheses_in_default() override { return true; }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_set_collation>(thd, this); }
 };
 
@@ -1871,7 +2043,7 @@ public:
   Item_func_expr_str_metadata(THD *thd, Item *a): Item_str_func(thd, a) { }
   bool fix_length_and_dec(THD *thd) override
   {
-     collation.set(system_charset_info);
+     collation.set(system_charset_info_for_i_s, DERIVATION_SYSCONST);
      max_length= 64 * collation.collation->mbmaxlen; // should be enough
      base_flags&= ~item_base_t::MAYBE_NULL;
      return FALSE;
@@ -1886,6 +2058,8 @@ public:
 
 class Item_func_charset :public Item_func_expr_str_metadata
 {
+  LEX_CSTRING m_cached_charset_info;
+
 public:
   Item_func_charset(THD *thd, Item *a)
     :Item_func_expr_str_metadata(thd, a) { }
@@ -1895,8 +2069,25 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("charset") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_charset>(thd, this); }
+  table_map used_tables() const override { return 0; }
+  bool fix_length_and_dec(THD* thd) override
+  {
+    if (Item_func_expr_str_metadata::fix_length_and_dec(thd))
+      return true;
+    /*
+      Since this is a const item which doesn't use tables (see used_tables()),
+      we don't want to access the function arguments during execution.
+      That's why we store the charset here during the preparation phase
+      and only return it later at the execution phase
+    */
+    DBUG_ASSERT(args[0]->fixed());
+    m_cached_charset_info.str= args[0]->charset_for_protocol()->cs_name.str;
+    m_cached_charset_info.length=
+        args[0]->charset_for_protocol()->cs_name.length;
+    return false;
+  }
 };
 
 
@@ -1911,7 +2102,7 @@ public:
     static LEX_CSTRING name= {STRING_WITH_LEN("collation") };
     return name;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_collation>(thd, this); }
 };
 
@@ -1951,7 +2142,7 @@ public:
     override
   { return this; }
   void print(String *str, enum_query_type query_type) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_weight_string>(thd, this); }
 };
 
@@ -1982,7 +2173,7 @@ public:
   }
   bool fix_length_and_dec(THD *thd) override { max_length=10; return FALSE; }
   longlong val_int() override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_crc32>(thd, this); }
 };
 
@@ -2003,7 +2194,7 @@ public:
     set_maybe_null();
     return FALSE; }
   longlong val_int() override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_uncompressed_length>(thd, this); }
 };
 
@@ -2030,7 +2221,7 @@ public:
     return name;
   }
   String *val_str(String *) override ZLIB_DEPENDED_FUNCTION
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_compress>(thd, this); }
 };
 
@@ -2052,7 +2243,7 @@ public:
     return name;
   }
   String *val_str(String *) override ZLIB_DEPENDED_FUNCTION
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_uncompress>(thd, this); }
 };
 
@@ -2079,7 +2270,7 @@ public:
   String *val_str(String *) override;
   void print(String *str, enum_query_type query_type) override;
   enum Functype functype() const override { return DYNCOL_FUNC; }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_dyncol_create>(thd, this); }
 };
 
@@ -2097,7 +2288,7 @@ public:
   }
   String *val_str(String *) override;
   void print(String *str, enum_query_type query_type) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_dyncol_add>(thd, this); }
 };
 
@@ -2119,7 +2310,7 @@ public:
     decimals= 0;
     return FALSE;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_dyncol_json>(thd, this); }
 };
 
@@ -2169,7 +2360,7 @@ public:
   bool get_dyn_value(THD *thd, DYNAMIC_COLUMN_VALUE *val, String *tmp);
   bool get_date(THD *thd, MYSQL_TIME *ltime, date_mode_t fuzzydate) override;
   void print(String *str, enum_query_type query_type) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_dyncol_get>(thd, this); }
 };
 
@@ -2191,7 +2382,7 @@ public:
     return name;
   }
   String *val_str(String *) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_dyncol_list>(thd, this); }
 };
 
@@ -2217,9 +2408,64 @@ public:
     return name;
   }
   bool fix_length_and_dec(THD *thd) override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_temptable_rowid>(thd, this); }
 };
+
+
+class Item_func_format_pico_time : public Item_str_ascii_func
+{
+  /* Format is 'AAAA.BB UUU' = 11 characters or 'AAA ps' = 6 characters. */
+  char m_value_buffer[12];
+  String m_value;
+
+public:
+  Item_func_format_pico_time(THD *thd, Item *a): Item_str_ascii_func(thd, a) {}
+  String *val_str_ascii(String *) override;
+  LEX_CSTRING func_name_cstring() const override
+  {
+    static LEX_CSTRING name= {STRING_WITH_LEN("format_pico_time")};
+    return name;
+  }
+  bool fix_length_and_dec(THD *thd) override
+  {
+    m_value.set(m_value_buffer, sizeof(m_value_buffer), default_charset());
+    fix_length_and_charset(sizeof(m_value_buffer), default_charset());
+    return false;
+  }
+  Item *do_get_copy(THD *thd) const override
+  {
+    return get_item_copy<Item_func_format_pico_time>(thd, this);
+  }
+};
+
+
+class Item_func_format_bytes : public Item_str_ascii_func
+{
+  /* Format is '-A.AAe+BB UUU' = 13 or 'AAAA.BB UUU' = 11 characters or 'AAAA bytes' = 10 characters. */
+  char m_value_buffer[14];
+  String m_value;
+
+public:
+    Item_func_format_bytes(THD *thd, Item *a): Item_str_ascii_func(thd, a) {}
+  String *val_str_ascii(String *) override;
+  LEX_CSTRING func_name_cstring() const override
+  {
+    static LEX_CSTRING name= {STRING_WITH_LEN("format_bytes")};
+    return name;
+  }
+  bool fix_length_and_dec(THD *thd) override
+  {
+    m_value.set(m_value_buffer, sizeof(m_value_buffer), default_charset());
+    fix_length_and_charset(sizeof(m_value_buffer), default_charset());
+    return false;
+  }
+  Item *do_get_copy(THD *thd) const override
+  {
+    return get_item_copy<Item_func_format_bytes>(thd, this);
+  }
+};
+
 #ifdef WITH_WSREP
 
 #include "wsrep_api.h"
@@ -2241,7 +2487,7 @@ public:
     set_maybe_null();
     return FALSE;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_wsrep_last_written_gtid>(thd, this); }
 };
 
@@ -2262,7 +2508,7 @@ public:
     set_maybe_null();
     return FALSE;
   }
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_wsrep_last_seen_gtid>(thd, this); }
 };
 
@@ -2280,7 +2526,7 @@ public:
     return name;
   }
   longlong val_int() override;
-  Item *get_copy(THD *thd) override
+  Item *do_get_copy(THD *thd) const override
   { return get_item_copy<Item_func_wsrep_sync_wait_upto>(thd, this); }
 };
 #endif /* WITH_WSREP */

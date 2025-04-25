@@ -25,7 +25,7 @@ Table	Create Table
 t1	CREATE TABLE `t1` (
   `b` blob DEFAULT NULL,
   UNIQUE KEY `b` (`b`) USING HASH
-) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 drop table t1;
 #
 # MDEV-18713 Assertion `strcmp(share->unique_file_name,filename) || share->last_version' failed in test_if_reopen upon REPLACE into table with key on blob
@@ -175,7 +175,7 @@ Cardinality	0
 Sub_part	NULL
 Packed	NULL
 Null	
-Index_type	BTREE
+Index_type	HASH
 Comment	
 Index_comment	
 Ignored	NO
@@ -301,9 +301,9 @@ unique key a using hash (c(1))
 show create table t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
-  `c` char(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `c` char(10) DEFAULT NULL,
   UNIQUE KEY `a` (`c`(1)) USING HASH
-) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 insert into t1 values ('б');
 insert into t1 values ('бб');
 ERROR 23000: Duplicate entry '�' for key 'a'
@@ -464,7 +464,7 @@ f1 varchar(25),
 v1 mediumtext generated always as (concat('f1:', f1)) virtual,
 unique key (f1) using hash,
 key (v1(1000))
-);
+) charset=latin1;
 flush status;
 insert ignore t1 (f1) values (9599),(94410);
 show status like 'handler_read_next';
@@ -574,5 +574,200 @@ insert into t1 values (1,10),(2,20);
 update t1 set b = 30 limit 1;
 drop table t1;
 #
-# End of 10.5 tests
+# MDEV-32839 LONG UNIQUE gives error when used with REPLACE
 #
+create table t1 (
+f1 bigint(20) not null auto_increment primary key,
+f2 varchar(30) default null,
+f3 varchar(30) default null,
+f4 varchar(255) default null,
+f5 varchar(30) default null,
+f6 varchar(255) default null,
+f7 varchar(255) default null,
+unique problem_key (f3,f5,f6,f2,f4,f7) using hash
+) engine=myisam;
+insert  t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'd');
+replace t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'd');
+insert  t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'e');
+replace t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'e');
+select * from t1;
+f1	f2	f3	f4	f5	f6	f7
+2	00004	0001009089999		netstes	psit	d
+4	00004	0001009089999		netstes	psit	e
+drop table t1;
+create table t1 (
+f1 bigint(20) not null auto_increment primary key,
+f2 varchar(30) default null,
+f3 varchar(30) default null,
+f4 varchar(255) default null,
+f5 varchar(30) default null,
+f6 varchar(255) default null,
+f7 varchar(255) default null,
+unique problem_key (f3,f5,f6,f2,f4,f7) using hash
+) engine=innodb;
+insert  t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'd');
+replace t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'd');
+insert  t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'e');
+replace t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'e');
+select * from t1;
+f1	f2	f3	f4	f5	f6	f7
+2	00004	0001009089999		netstes	psit	d
+4	00004	0001009089999		netstes	psit	e
+drop table t1;
+create table t1 (
+f1 bigint(20) not null auto_increment primary key,
+f2 varchar(30) default null,
+f3 varchar(30) default null,
+f4 varchar(255) default null,
+f5 varchar(30) default null,
+f6 varchar(255) default null,
+f7 varchar(255) default null,
+unique problem_key (f3,f5,f6,f2,f4,f7) using hash
+) engine=myisam partition by key(f1) partitions 2;
+insert  t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'd');
+replace t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'd');
+insert  t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'e');
+replace t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'e');
+select * from t1;
+f1	f2	f3	f4	f5	f6	f7
+2	00004	0001009089999		netstes	psit	d
+4	00004	0001009089999		netstes	psit	e
+drop table t1;
+create table t1 (
+f1 bigint(20) not null auto_increment primary key,
+f2 varchar(30) default null,
+f3 varchar(30) default null,
+f4 varchar(255) default null,
+f5 varchar(30) default null,
+f6 varchar(255) default null,
+f7 varchar(255) default null,
+unique problem_key (f3,f5,f6,f2,f4,f7) using hash
+) engine=innodb partition by key(f1) partitions 2;
+insert  t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'd');
+replace t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'd');
+insert  t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'e');
+replace t1 (f2, f3, f4, f5, f6, f7) values ('00004', '0001009089999', '', 'netstes', 'psit', 'e');
+select * from t1;
+f1	f2	f3	f4	f5	f6	f7
+2	00004	0001009089999		netstes	psit	d
+4	00004	0001009089999		netstes	psit	e
+drop table t1;
+#
+# MDEV-29954 Unique hash key on column prefix is computed incorrectly
+#
+create table t1 (c char(10),unique key a using hash (c(1)));
+insert into t1 values (0);
+check table t1 extended;
+Table	Op	Msg_type	Msg_text
+test.t1	check	status	OK
+drop table t1;
+#
+# MDEV-32837 long unique does not work like unique key when using replace
+#
+CREATE TABLE t1 (a INT PRIMARY KEY, b INT, c INT, UNIQUE KEY `test` (b,c) USING HASH) ENGINE=MyISAM;
+INSERT INTO t1 VALUES (1,1,1),(2,2,2);
+REPLACE INTO t1 VALUES (3,1,1);
+SELECT * FROM t1 ORDER BY a;
+a	b	c
+2	2	2
+3	1	1
+REPLACE INTO t1 VALUES (3,2,2);
+SELECT * FROM t1;
+a	b	c
+3	2	2
+DROP TABLE t1;
+# MDEV-30046 wrong row targeted with "insert ... on duplicate" and
+# "replace", leading to data corruption
+create table t (s blob, n int, unique (s)) engine=innodb;
+insert into t values ('Hrecvx_0004ln-00',1), ('Hrecvx_0004mm-00',1);
+replace into t values ('Hrecvx_0004mm-00',2);
+select * from t;
+s	n
+Hrecvx_0004ln-00	1
+Hrecvx_0004mm-00	2
+drop table t;
+create table t (s blob, n int, unique (s)) engine=innodb;
+insert into t values ('Hrecvx_0004ln-00',1), ('Hrecvx_0004mm-00',1);
+insert into t values ('Hrecvx_0004mm-00',2)
+on duplicate key update n = values (n);
+select * from t;
+s	n
+Hrecvx_0004ln-00	1
+Hrecvx_0004mm-00	2
+drop table t;
+#
+# MDEV-29345 update case insensitive (large) unique key with insensitive change of value - duplicate key
+#
+create table t1 (a int, b text, unique (b));
+insert ignore t1 values (1, 'a'), (2, 'A');
+Warnings:
+Warning	1062	Duplicate entry 'A' for key 'b'
+select * from t1;
+a	b
+1	a
+update t1 set b='A' where a=1;
+select * from t1;
+a	b
+1	A
+drop table t1;
+create table t1 (a int, b blob, unique (b));
+insert t1 values (1, 'a'), (2, 'A');
+select * from t1;
+a	b
+1	a
+2	A
+update t1 set b='A' where a=1;
+ERROR 23000: Duplicate entry 'A' for key 'b'
+drop table t1;
+#
+# MDEV-25102 UNIQUE USING HASH error after ALTER ... DISABLE KEYS
+#
+create table t1 (i int, unique key (i) using hash);
+alter table t1 disable keys;
+insert into t1 values (1),(2);
+insert into t1 values (1);
+ERROR 23000: Duplicate entry '1' for key 'i'
+alter table t1 enable keys;
+insert into t1 values (2);
+ERROR 23000: Duplicate entry '2' for key 'i'
+drop table t1;
+#
+# MDEV-25654 Unexpected ER_CRASHED_ON_USAGE and Assertion `limit >= trx_id' failed in purge_node_t::skip
+#
+create table t1 (a int, unique using hash (a)) engine=innodb
+partition by range(a) (
+partition p1 values less than (2),
+partition p2 values less than (101)
+);
+insert into t1 select seq from seq_1_to_100;
+alter table t1 add partition (partition p3 values less than (maxvalue));
+alter table t1 force;
+drop table t1;
+#
+# MDEV-33658 cannot add a foreign key on a table with a long UNIQUE
+# multi-column index, that contains a foreign key as a prefix.
+#
+create table a (id int primary key) engine = innodb;
+create table b (id int,
+long_text varchar(1000),
+constraint unique_b unique key (id, long_text)
+) engine=innodb default charset utf8mb4;
+alter table b add constraint b_fk_id foreign key (id) references a (id);
+show create table b;
+Table	Create Table
+b	CREATE TABLE `b` (
+  `id` int(11) DEFAULT NULL,
+  `long_text` varchar(1000) DEFAULT NULL,
+  UNIQUE KEY `unique_b` (`id`,`long_text`) USING HASH,
+  KEY `b_fk_id` (`id`),
+  CONSTRAINT `b_fk_id` FOREIGN KEY (`id`) REFERENCES `a` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+drop table b;
+drop table a;
+# veirfy that duplicate has unique is detected
+create table t1 (a blob unique);
+alter table t1 add constraint constraint_1 unique (a);
+Warnings:
+Note	1831	Duplicate index `constraint_1`. This is deprecated and will be disallowed in a future release
+drop table t1;
+# End of 10.5 tests

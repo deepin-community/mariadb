@@ -1,6 +1,6 @@
 /* sctp-client-dtls.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -19,6 +19,9 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335, USA
  */
 
+#ifdef HAVE_CONFIG_H
+    #include <config.h>
+#endif
 
 /* wolfssl */
 #ifndef WOLFSSL_USER_SETTINGS
@@ -27,7 +30,7 @@
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/ssl.h>
 
-#if defined(WOLFSSL_SCTP) && defined(WOLFSSL_DTLS)
+#if defined(WOLFSSL_SCTP) && defined(WOLFSSL_DTLS) && !defined(WOLFSSL_NO_TLS12)
 /* sctp */
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -47,13 +50,13 @@ static int err_sys(const char* msg)
     perror(msg);
     exit(EXIT_FAILURE);
 }
-#endif /* WOLFSSL_SCTP && WOLFSSL_DTLS */
+#endif /* WOLFSSL_SCTP && WOLFSSL_DTLS && !WOLFSSL_NO_TLS12 */
 
 int main(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-#if defined(WOLFSSL_SCTP) && defined(WOLFSSL_DTLS)
+#if defined(WOLFSSL_SCTP) && defined(WOLFSSL_DTLS) && !defined(WOLFSSL_NO_TLS12)
     int sd = socket(PF_INET, SOCK_STREAM, IPPROTO_SCTP);
 
     if (sd < 0)
@@ -126,7 +129,7 @@ int main(int argc, char **argv)
     wolfSSL_CTX_free(ctx);
 
     close(sd);
-#endif /* WOLFSSL_SCTP && WOLFSSL_DTLS */
+#endif /* WOLFSSL_SCTP && WOLFSSL_DTLS && !WOLFSSL_NO_TLS12 */
 
     return 0;
 }

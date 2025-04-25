@@ -66,8 +66,6 @@ before transaction commit and must be rolled back explicitly are as follows:
 #include "dict0stats.h"
 #include "dict0stats_bg.h"
 
-#include "dict0defrag_bg.h"
-#include "btr0defragment.h"
 #include "ibuf0ibuf.h"
 #include "lock0lock.h"
 
@@ -240,19 +238,18 @@ void trx_t::commit(std::vector<pfs_os_file_t> &deleted)
   flush_log_later= false;
   if (dict_operation)
   {
-    std::vector<uint32_t> space_ids;
-    space_ids.reserve(mod_tables.size());
     ut_ad(dict_sys.locked());
     lock_sys.wr_lock(SRW_LOCK_CALL);
     mutex_lock();
     lock_release_on_drop(this);
     ut_ad(UT_LIST_GET_LEN(lock.trx_locks) == 0);
-    ut_ad(ib_vector_is_empty(autoinc_locks));
+    ut_ad(autoinc_locks.empty());
     mem_heap_empty(lock.lock_heap);
     lock.table_locks.clear();
     /* commit_persist() already reset this. */
     ut_ad(!lock.was_chosen_as_deadlock_victim);
     lock.n_rec_locks= 0;
+    lock.set_nth_bit_calls= 0;
     while (dict_table_t *table= UT_LIST_GET_FIRST(lock.evicted_tables))
     {
       UT_LIST_REMOVE(lock.evicted_tables, table);
@@ -268,15 +265,11 @@ void trx_t::commit(std::vector<pfs_os_file_t> &deleted)
       {
         dict_table_t *table= p.first;
         dict_stats_recalc_pool_del(table->id, true);
-        dict_stats_defrag_pool_del(table, nullptr);
-        if (btr_defragment_active)
-          btr_defragment_remove_table(table);
         const fil_space_t *space= table->space;
         ut_ad(!p.second.is_aux_table() || purge_sys.must_wait_FTS());
         dict_sys.remove(table);
         if (const auto id= space ? space->id : 0)
         {
-          space_ids.emplace_back(id);
           pfs_os_file_t d= fil_delete_tablespace(id);
           if (d != OS_FILE_CLOSED)
             deleted.emplace_back(d);
@@ -289,9 +282,6 @@ void trx_t::commit(std::vector<pfs_os_file_t> &deleted)
     mysql_mutex_lock(&lock_sys.wait_mutex);
     lock_sys.deadlock_check();
     mysql_mutex_unlock(&lock_sys.wait_mutex);
-
-    for (const auto id : space_ids)
-      ibuf_delete_for_discarded_space(id);
   }
   commit_cleanup();
 }

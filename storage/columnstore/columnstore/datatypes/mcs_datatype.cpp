@@ -19,20 +19,12 @@
 #include <string>
 #include <iostream>
 #include <stack>
-#ifdef _MSC_VER
-#include <unordered_map>
-#else
 #include <tr1/unordered_map>
-#endif
 #include <fstream>
 #include <sstream>
 #include <cerrno>
 #include <cstring>
-#ifdef _MSC_VER
-#include <unordered_set>
-#else
 #include <tr1/unordered_set>
-#endif
 #include <utility>
 #include <cassert>
 using namespace std;
@@ -64,6 +56,51 @@ int128_t SystemCatalog::TypeAttributesStd::decimal128FromString(const std::strin
   dataconvert::number_int_value<int128_t>(value, SystemCatalog::DECIMAL, *this, pushWarning, noRoundup,
                                           result, saturate);
   return result;
+}
+
+// SQL parser checks that given `value` is in a valid format.
+// The first symbol can be `-`. The `value` can contain `.` symbol.
+void decimalPrecisionAndScale(const utils::NullString& value, int& precision, int& scale)
+{
+  if (value.isNull())
+  {
+    scale = 0;
+    precision = -1;
+    return;
+  }
+
+  const auto strValue = value.unsafeStringRef();
+  if (strValue.empty())
+  {
+    scale = 0;
+    precision = -1;
+    return;
+  }
+
+  const int len = strValue.size();
+  const auto dotIndex = strValue.find('.');
+  const int minExists = strValue.front() == '-' ? 1 : 0;
+
+  if (dotIndex == std::string::npos)
+  {
+    scale = 0;
+    precision = len - minExists;
+  }
+  else
+  {
+    scale = len - dotIndex - 1;
+    precision = len - 1 - minExists;
+  }
+}
+
+int128_t SystemCatalog::TypeAttributesStd::decimal128FromString(const utils::NullString& value,
+                                                                bool* saturate) const
+{
+  if (value.isNull())
+  {
+    return TSInt128::NullValue;
+  }
+  return decimal128FromString(value.unsafeStringRef(), saturate);
 }
 
 const string& TypeHandlerSInt8::name() const
@@ -478,49 +515,49 @@ int TypeHandlerVarbinary::storeValueToField(rowgroup::Row& row, int pos, StoreFi
 int TypeHandlerSInt64::storeValueToField(rowgroup::Row& row, int pos, StoreField* f) const
 {
   int64_t val = row.getIntField<8>(pos);
-  return f->store_xlonglong(val);
+  return f->store_longlong(val);
 }
 
 int TypeHandlerUInt64::storeValueToField(rowgroup::Row& row, int pos, StoreField* f) const
 {
   uint64_t val = row.getUintField<8>(pos);
-  return f->store_xlonglong(static_cast<int64_t>(val));
+  return f->store_ulonglong(val);
 }
 
 int TypeHandlerInt::storeValueToFieldSInt32(rowgroup::Row& row, int pos, StoreField* f) const
 {
   int64_t val = row.getIntField<4>(pos);
-  return f->store_xlonglong(val);
+  return f->store_longlong(val);
 }
 
 int TypeHandlerInt::storeValueToFieldUInt32(rowgroup::Row& row, int pos, StoreField* f) const
 {
   uint64_t val = row.getUintField<4>(pos);
-  return f->store_xlonglong(static_cast<int64_t>(val));
+  return f->store_ulonglong(val);
 }
 
 int TypeHandlerSInt16::storeValueToField(rowgroup::Row& row, int pos, StoreField* f) const
 {
   int64_t val = row.getIntField<2>(pos);
-  return f->store_xlonglong(val);
+  return f->store_longlong(val);
 }
 
 int TypeHandlerUInt16::storeValueToField(rowgroup::Row& row, int pos, StoreField* f) const
 {
   uint64_t val = row.getUintField<2>(pos);
-  return f->store_xlonglong(static_cast<int64_t>(val));
+  return f->store_ulonglong(val);
 }
 
 int TypeHandlerSInt8::storeValueToField(rowgroup::Row& row, int pos, StoreField* f) const
 {
   int64_t val = row.getIntField<1>(pos);
-  return f->store_xlonglong(val);
+  return f->store_longlong(val);
 }
 
 int TypeHandlerUInt8::storeValueToField(rowgroup::Row& row, int pos, StoreField* f) const
 {
   uint64_t val = row.getUintField<1>(pos);
-  return f->store_xlonglong(static_cast<int64_t>(val));
+  return f->store_ulonglong(val);
 }
 
 /*
@@ -552,8 +589,7 @@ int TypeHandlerXDecimal::storeValueToField64(rowgroup::Row& row, int pos, StoreF
 
 int TypeHandlerXDecimal::storeValueToField128(rowgroup::Row& row, int pos, StoreField* f) const
 {
-  int128_t* decPtr = row.getBinaryField<int128_t>(pos);
-  return f->store_decimal128(datatypes::Decimal(0, f->scale(), f->precision(), decPtr));
+  return f->store_decimal128(datatypes::Decimal(row.getTSInt128Field(pos), f->scale(), f->precision()));
 }
 
 int TypeHandlerStr::storeValueToFieldBlobText(rowgroup::Row& row, int pos, StoreField* f) const
@@ -1915,4 +1951,3 @@ const uint8_t* TypeHandlerUDecimal128::getEmptyValueForType(
 
 }  // end of namespace datatypes
 
-// vim:ts=2 sw=2:

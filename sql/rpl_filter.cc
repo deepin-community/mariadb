@@ -206,8 +206,8 @@ Rpl_filter::db_ok(const char* db)
 
   SYNOPSIS
     db_ok_with_wild_table()
-    db		name of the db to check.
-		Is tested with check_db_name() before calling this function.
+    db          name of the db to check. Is tested with
+                Lex_ident_db::check_name() before calling this function.
 
   NOTES
     Here is the reason for this function.
@@ -265,6 +265,13 @@ bool
 Rpl_filter::is_on()
 {
   return table_rules_on;
+}
+
+
+bool
+Rpl_filter::is_db_empty()
+{
+  return do_db.is_empty() && ignore_db.is_empty();
 }
 
 
@@ -645,16 +652,14 @@ Rpl_filter::set_ignore_db(const char* db_spec)
 }
 
 
-extern "C" uchar *get_table_key(const uchar *, size_t *, my_bool);
+extern "C" const uchar *get_table_key(const void *, size_t *, my_bool);
 extern "C" void free_table_ent(void* a);
 
-uchar *get_table_key(const uchar* a, size_t *len,
-                     my_bool __attribute__((unused)))
+const uchar *get_table_key(const void *a, size_t *len, my_bool)
 {
-  TABLE_RULE_ENT *e= (TABLE_RULE_ENT *) a;
-
+  auto e= static_cast<const TABLE_RULE_ENT *>(a);
   *len= e->key_len;
-  return (uchar*)e->db;
+  return reinterpret_cast<const uchar *>(e->db);
 }
 
 
@@ -670,7 +675,8 @@ void
 Rpl_filter::init_table_rule_hash(HASH* h, bool* h_inited)
 {
   my_hash_init(key_memory_TABLE_RULE_ENT, h,
-               system_charset_info,TABLE_RULE_HASH_SIZE,0,0, get_table_key,
+               Lex_ident_rpl_filter::charset_info(),
+               TABLE_RULE_HASH_SIZE,0,0, get_table_key,
                free_table_ent, 0);
   *h_inited = 1;
 }

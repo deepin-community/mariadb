@@ -22,8 +22,7 @@
  ***********************************************************************/
 /** @file */
 
-#ifndef DMLPACKAGEPROCESSOR_H
-#define DMLPACKAGEPROCESSOR_H
+#pragma once
 #include <stdexcept>
 #include <string>
 #include <sstream>
@@ -44,11 +43,7 @@
 #include "querystats.h"
 #include "clientrotator.h"
 
-#if defined(_MSC_VER) && defined(DMLPKGPROC_DLLEXPORT)
-#define EXPORT __declspec(dllexport)
-#else
 #define EXPORT
-#endif
 
 //#define IDB_DML_DEBUG
 namespace dmlpackageprocessor
@@ -102,7 +97,9 @@ class DMLPackageProcessor
     ACTIVE_TRANSACTION_ERROR,
     TABLE_LOCK_ERROR,
     JOB_ERROR,
-    JOB_CANCELED
+    JOB_CANCELED,
+    DBRM_READ_ONLY,
+    PP_LOST_CONNECTION
   };
 
   enum DebugLevel /** @brief Debug level type enumeration */
@@ -152,30 +149,6 @@ class DMLPackageProcessor
       spare = 0x3E;
     }
   };
-  /** @brief a structure to hold a datetime
-   */
-  struct dateTime
-  {
-    unsigned msecond : 20;
-    unsigned second : 6;
-    unsigned minute : 6;
-    unsigned hour : 6;
-    unsigned day : 6;
-    unsigned month : 4;
-    unsigned year : 16;
-    // NULL column value = 0xFFFFFFFFFFFFFFFE
-    dateTime()
-    {
-      year = 0xFFFF;
-      month = 0xF;
-      day = 0x3F;
-      hour = 0x3F;
-      minute = 0x3F;
-      second = 0x3F;
-      msecond = 0xFFFFE;
-    }
-  };
-
   /** @brief ctor
    */
   DMLPackageProcessor(BRM::DBRM* aDbrm, uint32_t sid)
@@ -240,7 +213,11 @@ class DMLPackageProcessor
    *
    * @param cpackage the CalpontDMLPackage to process
    */
-  virtual DMLResult processPackage(dmlpackage::CalpontDMLPackage& cpackage) = 0;
+  DMLResult processPackage(dmlpackage::CalpontDMLPackage& cpackage);
+
+  /** @brief Check that give exception is related to PP lost connection.
+   */
+  bool checkPPLostConnection(std::exception& ex);
 
   inline void setRM(joblist::ResourceManager* frm)
   {
@@ -249,6 +226,9 @@ class DMLPackageProcessor
 
   EXPORT int rollBackTransaction(uint64_t uniqueId, BRM::TxnID txnID, uint32_t sessionID,
                                  std::string& errorMsg);
+
+  EXPORT int32_t tryToRollBackTransaction(uint64_t uniqueId, BRM::TxnID txnID, uint32_t sessionID,
+                                          std::string& errorMsg);
 
   EXPORT int rollBackBatchAutoOnTransaction(uint64_t uniqueId, BRM::TxnID txnID, uint32_t sessionID,
                                             const uint32_t tableOid, std::string& errorMsg);
@@ -527,6 +507,8 @@ class DMLPackageProcessor
   execplan::ClientRotator* fExeMgr;
 
  private:
+  virtual DMLResult processPackageInternal(dmlpackage::CalpontDMLPackage& cpackage) = 0;
+
   /** @brief clean beginning and ending glitches and spaces from string
    *
    * @param s string to be cleaned
@@ -534,6 +516,8 @@ class DMLPackageProcessor
   void cleanString(std::string& s);
 
   DebugLevel fDebugLevel;  // internal use debug level
+
+  const std::string PPLostConnectionErrorCode = "MCS-2045";
 };
 
 /** @brief helper template function to do safe from string to type conversions
@@ -549,5 +533,3 @@ bool from_string(T& t, const std::string& s, std::ios_base& (*f)(std::ios_base&)
 }  // namespace dmlpackageprocessor
 
 #undef EXPORT
-
-#endif  // DMLPACKAGEPROCESSOR_H

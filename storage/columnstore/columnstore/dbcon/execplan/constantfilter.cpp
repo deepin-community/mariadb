@@ -40,7 +40,7 @@ using namespace std;
 namespace
 {
 template <class T>
-struct deleter : public unary_function<T&, void>
+struct deleter
 {
   void operator()(T& x)
   {
@@ -62,16 +62,14 @@ ConstantFilter::ConstantFilter(const SOP& op, ReturnedColumn* lhs, ReturnedColum
 {
   SSFP ssfp(new SimpleFilter(op, lhs, rhs));
   fFilterList.push_back(ssfp);
-  SimpleColumn* sc = dynamic_cast<SimpleColumn*>(lhs);
-  fCol.reset(sc->clone());
+  fCol.reset(lhs->clone());
 }
 
 ConstantFilter::ConstantFilter(SimpleFilter* sf)
 {
   SSFP ssfp(sf);
   fFilterList.push_back(ssfp);
-  const SimpleColumn* sc = dynamic_cast<const SimpleColumn*>(sf->lhs());
-  fCol.reset(sc->clone());
+  fCol.reset(sf->lhs()->clone());
 }
 
 ConstantFilter::ConstantFilter(const ConstantFilter& rhs) : Filter(rhs), fOp(rhs.fOp), fCol(rhs.fCol)
@@ -92,6 +90,13 @@ ConstantFilter::ConstantFilter(const ConstantFilter& rhs) : Filter(rhs), fOp(rhs
                                      ssfp->windowfunctionColumnList().begin(),
                                      ssfp->windowfunctionColumnList().end());
   }
+}
+
+ConstantFilter::ConstantFilter(const SOP& op, const FilterList& filterList, const SRCP& col,
+                               const std::string& functionName, const std::string& data)
+ : fOp(op), fFilterList(filterList), fCol(col), fFunctionName(functionName)
+{
+  fData = data;
 }
 
 ConstantFilter::~ConstantFilter()
@@ -120,6 +125,25 @@ const string ConstantFilter::toString() const
     output << "  " << *fFilterList[i] << endl;
 
   return output.str();
+}
+
+string ConstantFilter::toCppCode(IncludeSet& includes) const
+{
+  includes.insert("constantfilter.h");
+  stringstream ss;
+  ss << "ConstantFilter(boost::shared_ptr<Operator>(new " << fOp->toCppCode(includes)
+     << "), ConstantFilter::FilterList{";
+  if (!fFilterList.empty())
+  {
+    for (size_t i = 0; i < fFilterList.size() - 1; i++)
+      ss << "boost::shared_ptr<SimpleFilter>(new " << fFilterList.at(i)->toCppCode(includes) << "), ";
+    ss << "boost::shared_ptr<SimpleFilter>(new " << fFilterList.back()->toCppCode(includes) << ")";
+  }
+  ss << "}, ";
+  ss << "boost::shared_ptr<ReturnedColumn>(new " << fCol->toCppCode(includes) << "), "
+     << std::quoted(fFunctionName) << ", " << std::quoted(fData) << ")";
+
+  return ss.str();
 }
 
 ostream& operator<<(ostream& output, const ConstantFilter& rhs)
@@ -308,4 +332,3 @@ void ConstantFilter::setSimpleColumnList()
 }
 
 }  // namespace execplan
-// vim:ts=4 sw=4:

@@ -47,11 +47,7 @@
 #include "funcexp.h"
 #include "functor.h"
 
-#if defined(_MSC_VER) && defined(UDFSDK_DLLEXPORT)
-#define EXPORT __declspec(dllexport)
-#else
 #define EXPORT
-#endif
 
 namespace udfsdk
 {
@@ -314,4 +310,3 @@ class MCS_isnull : public funcexp::Func
 
 #undef EXPORT
 
-// vim:ts=4 sw=4:

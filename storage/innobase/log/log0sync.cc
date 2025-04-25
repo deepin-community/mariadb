@@ -68,6 +68,7 @@ Note that if write operation is very fast, a) or b) can be fine as alternative.
 #include <sys/syscall.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <thread>
 #include <mutex>
@@ -187,7 +188,7 @@ void group_commit_lock::set_pending(group_commit_lock::value_type num)
 }
 
 const unsigned int MAX_SPINS = 1; /** max spins in acquire */
-thread_local group_commit_waiter_t thread_local_waiter;
+static thread_local group_commit_waiter_t thread_local_waiter;
 
 static inline void do_completion_callback(const completion_callback* cb)
 {

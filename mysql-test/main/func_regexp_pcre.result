@@ -62,7 +62,7 @@ INSERT INTO t2 VALUES ('\\p{Han}'),('\\p{Hangul}');
 INSERT INTO t2 VALUES ('\\p{Sinhala}'), ('\\p{Tamil}');
 INSERT INTO t2 VALUES ('\\p{L}'),('\\p{Ll}'),('\\p{Lu}'),('\\p{L&}');
 INSERT INTO t2 VALUES ('[[:alpha:]]'),('[[:digit:]]');
-SELECT class, ch, ch RLIKE class FROM t1, t2 ORDER BY class, BINARY ch;
+SELECT class, ch, ch RLIKE class FROM t1, t2 ORDER BY BINARY class, BINARY ch;
 class	ch	ch RLIKE class
 [[:alpha:]]	1	0
 [[:alpha:]]	A	1
@@ -436,8 +436,8 @@ CREATE TABLE t1 AS SELECT REGEXP_REPLACE('abc','b','x');
 SHOW CREATE TABLE t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
-  `REGEXP_REPLACE('abc','b','x')` longtext CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL
-) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+  `REGEXP_REPLACE('abc','b','x')` longtext CHARACTER SET utf8mb3 COLLATE utf8mb3_uca1400_ai_ci DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 DROP TABLE t1;
 EXPLAIN EXTENDED SELECT REGEXP_REPLACE('abc','b','x');
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
@@ -452,7 +452,7 @@ SHOW CREATE TABLE t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
   `REGEXP_REPLACE('abc','b','x')+0` double NOT NULL
-) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 DROP TABLE t1;
 SELECT REGEXP_REPLACE(NULL,'b','c');
 REGEXP_REPLACE(NULL,'b','c')
@@ -720,17 +720,17 @@ REGEXP_INSTR('вася','с')
 SELECT REGEXP_INSTR('вася','я');
 REGEXP_INSTR('вася','я')
 4
-SELECT REGEXP_INSTR(CONVERT('вася' USING koi8r), CONVERT('в' USING koi8r));
-REGEXP_INSTR(CONVERT('вася' USING koi8r), CONVERT('в' USING koi8r))
+SELECT REGEXP_INSTR(CONVERT('вася' USING koi8r), CONVERT('в' USING koi8r)) as exp;
+exp
 1
-SELECT REGEXP_INSTR(CONVERT('вася' USING koi8r), CONVERT('а' USING koi8r));
-REGEXP_INSTR(CONVERT('вася' USING koi8r), CONVERT('а' USING koi8r))
+SELECT REGEXP_INSTR(CONVERT('вася' USING koi8r), CONVERT('а' USING koi8r)) as exp;
+exp
 2
-SELECT REGEXP_INSTR(CONVERT('вася' USING koi8r), CONVERT('с' USING koi8r));
-REGEXP_INSTR(CONVERT('вася' USING koi8r), CONVERT('с' USING koi8r))
+SELECT REGEXP_INSTR(CONVERT('вася' USING koi8r), CONVERT('с' USING koi8r)) as exp;
+exp
 3
-SELECT REGEXP_INSTR(CONVERT('вася' USING koi8r), CONVERT('я' USING koi8r));
-REGEXP_INSTR(CONVERT('вася' USING koi8r), CONVERT('я' USING koi8r))
+SELECT REGEXP_INSTR(CONVERT('вася' USING koi8r), CONVERT('я' USING koi8r)) as exp;
+exp
 4
 #
 # Checking REGEXP_SUBSTR
@@ -739,8 +739,8 @@ CREATE TABLE t1 AS SELECT REGEXP_SUBSTR('abc','b');
 SHOW CREATE TABLE t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
-  `REGEXP_SUBSTR('abc','b')` varchar(3) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL
-) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+  `REGEXP_SUBSTR('abc','b')` varchar(3) CHARACTER SET utf8mb3 COLLATE utf8mb3_uca1400_ai_ci DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 DROP TABLE t1;
 EXPLAIN EXTENDED SELECT REGEXP_SUBSTR('abc','b');
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
@@ -755,10 +755,10 @@ SHOW CREATE TABLE t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
   `REGEXP_SUBSTR('abc','b')+0` double NOT NULL
-) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 DROP TABLE t1;
-SELECT REGEXP_SUBSTR('See https://mariadb.org/en/foundation/ for details', 'https?://[^/]*');
-REGEXP_SUBSTR('See https://mariadb.org/en/foundation/ for details', 'https?://[^/]*')
+SELECT REGEXP_SUBSTR('See https://mariadb.org/en/foundation/ for details', 'https?://[^/]*') as exp;
+exp
 https://mariadb.org
 #
 # MDEV-6027 RLIKE: "." no longer matching new line
@@ -792,14 +792,14 @@ SELECT 'a\nb' RLIKE '(?-s)a.b';
 'a\nb' RLIKE '(?-s)a.b'
 0
 SET default_regex_flags=DEFAULT;
-SELECT REGEXP_SUBSTR('Monday Mon','^((?<DN>Mon|Fri|Sun)day|(?<DN>Tue)sday).*(?P=DN)$');
+SELECT REGEXP_SUBSTR('Monday Mon','^((?<DN>Mon|Fri|Sun)day|(?<DN>Tue)sday).*(?P=DN)$') as exp;
 ERROR 42000: Regex error 'two named subpatterns have the same name (PCRE2_DUPNAMES not set) at offset 30'
 SET default_regex_flags='DUPNAMES';
-SELECT REGEXP_SUBSTR('Monday Mon','^((?<DN>Mon|Fri|Sun)day|(?<DN>Tue)sday).*(?P=DN)$');
-REGEXP_SUBSTR('Monday Mon','^((?<DN>Mon|Fri|Sun)day|(?<DN>Tue)sday).*(?P=DN)$')
+SELECT REGEXP_SUBSTR('Monday Mon','^((?<DN>Mon|Fri|Sun)day|(?<DN>Tue)sday).*(?P=DN)$') as exp;
+exp
 Monday Mon
-SELECT REGEXP_SUBSTR('Tuesday Tue','^((?<DN>Mon|Fri|Sun)day|(?<DN>Tue)sday).*(?P=DN)$');
-REGEXP_SUBSTR('Tuesday Tue','^((?<DN>Mon|Fri|Sun)day|(?<DN>Tue)sday).*(?P=DN)$')
+SELECT REGEXP_SUBSTR('Tuesday Tue','^((?<DN>Mon|Fri|Sun)day|(?<DN>Tue)sday).*(?P=DN)$') as exp;
+exp
 Tuesday Tue
 SET default_regex_flags=DEFAULT;
 SELECT 'AB' RLIKE 'A B';
@@ -850,8 +850,8 @@ SET default_regex_flags=DEFAULT;
 #
 # MDEV-6965 non-captured group \2 in regexp_replace
 #
-SELECT REGEXP_REPLACE('1 foo and bar', '(\\d+) foo and (\\d+ )?bar', '\\1 this and \\2that');
-REGEXP_REPLACE('1 foo and bar', '(\\d+) foo and (\\d+ )?bar', '\\1 this and \\2that')
+SELECT REGEXP_REPLACE('1 foo and bar', '(\\d+) foo and (\\d+ )?bar', '\\1 this and \\2that') as exp;
+exp
 1 this and that
 #
 # MDEV-8102 REGEXP function fails to match hex values when expression is stored as a variable
@@ -859,8 +859,28 @@ REGEXP_REPLACE('1 foo and bar', '(\\d+) foo and (\\d+ )?bar', '\\1 this and \\2t
 # Testing a warning
 SET NAMES latin1;
 SET @regCheck= '\\xE0\\x01';
-SELECT 0xE001 REGEXP @regCheck;
-0xE001 REGEXP @regCheck
+SELECT 0xE001 REGEXP @regCheck COLLATE latin1_bin;
+0xE001 REGEXP @regCheck COLLATE latin1_bin
+0
+Warnings:
+Warning	1139	Regex error 'UTF-8 error: 1 byte missing at end'
+SELECT 0xE001 REGEXP CAST(@regCheck AS CHAR);
+0xE001 REGEXP CAST(@regCheck AS CHAR)
+0
+Warnings:
+Warning	1139	Regex error 'UTF-8 error: 1 byte missing at end'
+# Since 11.5 (MDEV-25829) user variables have DERIVATION_COERCIBLE
+# so a user variable and a literal in the pattern gave equal results
+# But since 11.6 (MDEV-35041) user variables have DERIVATION_USERVAR
+# so the query with a literal is performece as binary:
+SELECT 0xE001 REGEXP '\\xE0\\x01' AS c1;
+c1
+1
+# while the query with a user variable is performed as string
+# with a warning, like in 11.4
+SET @regCheck= '\\xE0\\x01';
+SELECT 0xE001 REGEXP @regCheck AS c2;
+c2
 0
 Warnings:
 Warning	1139	Regex error 'UTF-8 error: 1 byte missing at end'
@@ -895,3 +915,12 @@ REGEXP_INSTR('a_kollision', 'o([lm])\\1')
 4
 SELECT a FROM (SELECT "aa" a) t WHERE a REGEXP '[0-9]';
 a
+#
+# MDEV-11777 REGEXP_REPLACE converts utf8mb4 supplementary characters to '?'
+#
+select hex(regexp_replace(cast(x'F09F9881' as char character set 'utf8mb4'), _utf8mb4'a', _utf8mb4'b')) as Text;
+Text
+F09F9881
+#
+# End of 10.6 tests
+#

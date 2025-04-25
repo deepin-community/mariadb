@@ -94,7 +94,7 @@ static MARIA_HA *maria_clone_internal(MARIA_SHARE *share,
   uint errpos;
   MARIA_HA info,*m_info;
   my_bitmap_map *changed_fields_bitmap;
-  myf flag= MY_WME | (share->temporary ? MY_THREAD_SPECIFIC : 0);
+  myf flag= MY_WME | share->malloc_flag;
   DBUG_ENTER("maria_clone_internal");
 
   errpos= 0;
@@ -171,7 +171,6 @@ static MARIA_HA *maria_clone_internal(MARIA_SHARE *share,
   mysql_mutex_lock(&share->intern_lock);
   info.read_record= share->read_record;
   share->reopen++;
-  share->write_flag=MYF(MY_NABP | MY_WAIT_IF_FULL);
   if (share->options & HA_OPTION_READ_ONLY_DATA)
   {
     info.lock_type=F_RDLCK;
@@ -266,7 +265,9 @@ MARIA_HA *maria_open(const char *name, int mode, uint open_flags,
   uint i,j,len,errpos,head_length,base_pos,keys, realpath_err,
     key_parts,base_key_parts,unique_key_parts,fulltext_keys,uniques;
   uint internal_table= MY_TEST(open_flags & HA_OPEN_INTERNAL_TABLE);
-  myf common_flag= open_flags & HA_OPEN_TMP_TABLE ? MY_THREAD_SPECIFIC : 0;
+  myf common_flag= (((open_flags & HA_OPEN_TMP_TABLE) &&
+                     !(open_flags & HA_OPEN_GLOBAL_TMP_TABLE)) ?
+                    MY_THREAD_SPECIFIC : 0);
   uint file_version;
   size_t info_length;
   char name_buff[FN_REFLEN], org_name[FN_REFLEN], index_name[FN_REFLEN],
@@ -759,19 +760,14 @@ MARIA_HA *maria_open(const char *name, int mode, uint open_flags,
 	  else if (pos->type == HA_KEYTYPE_BINARY)
 	    pos->charset= &my_charset_bin;
 	}
-	if (keyinfo->flag & HA_SPATIAL)
+	if (keyinfo->key_alg == HA_KEY_ALG_RTREE)
 	{
-#ifdef HAVE_SPATIAL
 	  uint sp_segs=SPDIMS*2;
 	  keyinfo->seg=pos-sp_segs;
 	  keyinfo->keysegs--;
           versioning= 0;
-#else
-	  my_errno=HA_ERR_UNSUPPORTED;
-	  goto err;
-#endif
 	}
-        else if (keyinfo->flag & HA_FULLTEXT)
+        else if (keyinfo->key_alg == HA_KEY_ALG_FULLTEXT)
 	{
           versioning= 0;
           DBUG_ASSERT(fulltext_keys);
@@ -795,6 +791,7 @@ MARIA_HA *maria_open(const char *name, int mode, uint open_flags,
             memcpy(&share->ft2_keyinfo, keyinfo, sizeof(MARIA_KEYDEF));
             share->ft2_keyinfo.keysegs=1;
             share->ft2_keyinfo.flag=0;
+            share->ft2_keyinfo.key_alg=HA_KEY_ALG_BTREE;
             share->ft2_keyinfo.keylength=
             share->ft2_keyinfo.minlength=
             share->ft2_keyinfo.maxlength=HA_FT_WLEN+share->base.rec_reflength;
@@ -984,15 +981,18 @@ MARIA_HA *maria_open(const char *name, int mode, uint open_flags,
       share->options|= HA_OPTION_READ_ONLY_DATA;
     share->is_log_table= FALSE;
 
+    share->write_flag=MYF(MY_NABP | MY_WAIT_IF_FULL);
     if (open_flags & HA_OPEN_TMP_TABLE || share->options & HA_OPTION_TMP_TABLE)
     {
-      common_flag|= MY_THREAD_SPECIFIC;
       share->options|= HA_OPTION_TMP_TABLE;
       share->temporary= share->delay_key_write= 1;
+      share->malloc_flag=
+        (open_flags & HA_OPEN_GLOBAL_TMP_TABLE) ? 0 : MY_THREAD_SPECIFIC;
       share->write_flag=MYF(MY_NABP);
       share->w_locks++;			/* We don't have to update status */
       share->tot_locks++;
     }
+    share->tracked= MY_TEST(open_flags & HA_OPEN_SIZE_TRACKING);
 
     _ma_set_index_pagecache_callbacks(&share->kfile, share);
     share->this_process=(ulong) getpid();
@@ -1397,19 +1397,15 @@ static void setup_key_functions(register MARIA_KEYDEF *keyinfo)
 {
   if (keyinfo->key_alg == HA_KEY_ALG_RTREE)
   {
-#ifdef HAVE_RTREE_KEYS
     keyinfo->ck_insert = maria_rtree_insert;
     keyinfo->ck_delete = maria_rtree_delete;
-#else
-    DBUG_ASSERT(0); /* maria_open should check it never happens */
-#endif
   }
   else
   {
     keyinfo->ck_insert = _ma_ck_write;
     keyinfo->ck_delete = _ma_ck_delete;
   }
-  if (keyinfo->flag & HA_SPATIAL)
+  if (keyinfo->key_alg == HA_KEY_ALG_RTREE)
     keyinfo->make_key= _ma_sp_make_key;
   else
     keyinfo->make_key= _ma_make_key;
@@ -1464,11 +1460,15 @@ static void setup_key_functions(register MARIA_KEYDEF *keyinfo)
   /* set keyinfo->write_comp_flag */
   if (keyinfo->flag & HA_SORT_ALLOWS_SAME)
     keyinfo->write_comp_flag=SEARCH_BIGGER; /* Put after same key */
-  else if (keyinfo->flag & ( HA_NOSAME | HA_FULLTEXT))
+  else if (keyinfo->flag & HA_NOSAME)
   {
     keyinfo->write_comp_flag= SEARCH_FIND | SEARCH_UPDATE; /* No duplicates */
     if (keyinfo->flag & HA_NULL_ARE_EQUAL)
       keyinfo->write_comp_flag|= SEARCH_NULL_ARE_EQUAL;
+  }
+  else if (keyinfo->key_alg == HA_KEY_ALG_FULLTEXT)
+  {
+    keyinfo->write_comp_flag= SEARCH_FIND | SEARCH_UPDATE;
   }
   else
     keyinfo->write_comp_flag= SEARCH_SAME; /* Keys in rec-pos order */
@@ -1555,6 +1555,9 @@ uint _ma_state_info_write(MARIA_SHARE *share, uint pWrite)
      @retval 1      Error
 */
 
+/* Stack size 26376 from clang */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
+
 uint _ma_state_info_write_sub(File file, MARIA_STATE_INFO *state, uint pWrite)
 {
   uchar  buff[MARIA_STATE_INFO_SIZE + MARIA_STATE_EXTRA_SIZE];
@@ -1629,6 +1632,7 @@ uint _ma_state_info_write_sub(File file, MARIA_STATE_INFO *state, uint pWrite)
              MYF(MY_NABP));
   DBUG_RETURN(res != 0);
 }
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 
 static uchar *_ma_state_info_read(uchar *ptr, MARIA_STATE_INFO *state, myf flag)
@@ -2046,9 +2050,8 @@ void _ma_set_index_pagecache_callbacks(PAGECACHE_FILE *file,
 
 int _ma_open_datafile(MARIA_HA *info, MARIA_SHARE *share)
 {
-  myf flags= (share->mode & O_NOFOLLOW) ? MY_NOSYMLINKS | MY_WME : MY_WME;
-  if (share->temporary)
-    flags|= MY_THREAD_SPECIFIC;
+  myf flags= ((share->mode & O_NOFOLLOW) ? MY_NOSYMLINKS | MY_WME : MY_WME) |
+    share->malloc_flag;
   DEBUG_SYNC_C("mi_open_datafile");
   info->dfile.file= share->bitmap.file.file=
     mysql_file_open(key_file_dfile, share->data_file_name.str,

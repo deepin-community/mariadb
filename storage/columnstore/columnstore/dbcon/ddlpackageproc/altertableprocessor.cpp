@@ -22,12 +22,12 @@
 
 #include <unistd.h>
 #include <typeinfo>
+#include <regex>
 #include <string>
 #include <vector>
 using namespace std;
 
 #include <boost/shared_ptr.hpp>
-#include <boost/regex.hpp>
 #include <boost/algorithm/string/case_conv.hpp>
 
 #include "altertableprocessor.h"
@@ -45,8 +45,11 @@ using namespace ddlpackage;
 #include "messagelog.h"
 using namespace logging;
 
+#include "mariadb_my_sys.h"
+
 #include "we_messages.h"
 #include "we_ddlcommandclient.h"
+#include "we_ddlcommon.h"
 using namespace WriteEngine;
 
 #include "oamcache.h"
@@ -87,6 +90,14 @@ struct extentInfo
 
 namespace
 {
+
+bool checkTextTypesLengthAreEqual(const CalpontSystemCatalog::ColType& colType, const ColumnType& newType)
+{
+  auto newTypeCharset = get_charset(newType.fCharsetNum, MYF(MY_WME));
+  auto bytesInChar = newTypeCharset ? newTypeCharset->mbmaxlen : colType.getCharset()->mbmaxlen;
+  return colType.colWidth == newType.fLength * bytesInChar;
+}
+
 bool typesAreSame(const CalpontSystemCatalog::ColType& colType, const ColumnType& newType)
 {
   switch (colType.colDataType)
@@ -116,7 +127,7 @@ bool typesAreSame(const CalpontSystemCatalog::ColType& colType, const ColumnType
       break;
 
     case (CalpontSystemCatalog::CHAR):
-      if (newType.fType == DDL_CHAR && colType.colWidth == newType.fLength)
+      if (newType.fType == DDL_CHAR && checkTextTypesLengthAreEqual(colType, newType))
         return true;
 
       break;
@@ -251,7 +262,7 @@ bool typesAreSame(const CalpontSystemCatalog::ColType& colType, const ColumnType
       break;
 
     case (CalpontSystemCatalog::VARCHAR):
-      if (newType.fType == DDL_VARCHAR && colType.colWidth == newType.fLength)
+      if (newType.fType == DDL_VARCHAR && checkTextTypesLengthAreEqual(colType, newType))
         return true;
 
       break;
@@ -299,8 +310,8 @@ bool comptypesAreCompat(int oldCtype, int newCtype)
 
 namespace ddlpackageprocessor
 {
-AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
-    ddlpackage::AlterTableStatement& alterTableStmt)
+AlterTableProcessor::DDLResult AlterTableProcessor::processPackageInternal(
+    ddlpackage::SqlStatement* sqlTableStmt)
 {
   SUMMARY_INFO("AlterTableProcessor::processPackage");
 
@@ -311,6 +322,20 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
   result.result = NO_ERROR;
   std::string err;
   uint64_t tableLockId = 0;
+
+  auto* alterTableStmt = dynamic_cast<AlterTableStatement*>(sqlTableStmt);
+  if (!alterTableStmt)
+  {
+    logging::Message::Args args;
+    logging::Message message(9);
+    args.add("AlterTableStatement wrong cast");
+    message.format(args);
+    result.result = ALTER_ERROR;
+    result.message = message;
+    fSessionManager.rolledback(txnID);
+    return result;
+  }
+
   DETAIL_INFO(alterTableStmt);
   int rc = 0;
   rc = fDbrm->isReadWrite();
@@ -328,8 +353,8 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
   }
 
   //@Bug 4538. Log the sql statement before grabbing tablelock
-  string stmt = alterTableStmt.fSql + "|" + (alterTableStmt.fTableName)->fSchema + "|";
-  SQLLogger logger(stmt, fDDLLoggingId, alterTableStmt.fSessionID, txnID.id);
+  string stmt = alterTableStmt->fSql + "|" + (alterTableStmt->fTableName)->fSchema + "|";
+  SQLLogger logger(stmt, fDDLLoggingId, alterTableStmt->fSessionID, txnID.id);
 
   VERBOSE_INFO("Getting current txnID");
   OamCache* oamcache = OamCache::makeOamCache();
@@ -356,7 +381,7 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
   {
     logging::Message::Args args;
     logging::Message message(9);
-    args.add("Unknown error occured while getting unique number.");
+    args.add("Unknown error occurred while getting unique number.");
     message.format(args);
     result.result = ALTER_ERROR;
     result.message = message;
@@ -370,18 +395,18 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
   {
     // check table lock
     boost::shared_ptr<CalpontSystemCatalog> systemCatalogPtr =
-        CalpontSystemCatalog::makeCalpontSystemCatalog(alterTableStmt.fSessionID);
+        CalpontSystemCatalog::makeCalpontSystemCatalog(alterTableStmt->fSessionID);
     systemCatalogPtr->identity(CalpontSystemCatalog::EC);
-    systemCatalogPtr->sessionID(alterTableStmt.fSessionID);
+    systemCatalogPtr->sessionID(alterTableStmt->fSessionID);
     CalpontSystemCatalog::TableName tableName;
-    tableName.schema = (alterTableStmt.fTableName)->fSchema;
-    tableName.table = (alterTableStmt.fTableName)->fName;
+    tableName.schema = (alterTableStmt->fTableName)->fSchema;
+    tableName.table = (alterTableStmt->fTableName)->fName;
     execplan::CalpontSystemCatalog::ROPair roPair;
     roPair = systemCatalogPtr->tableRID(tableName);
 
     uint32_t processID = ::getpid();
     int32_t txnid = txnID.id;
-    int32_t sessionId = alterTableStmt.fSessionID;
+    int32_t sessionId = alterTableStmt->fSessionID;
     std::string processName("DDLProc");
     int i = 0;
 
@@ -416,9 +441,6 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
 
       for (; i < numTries; i++)
       {
-#ifdef _MSC_VER
-        Sleep(rm_ts.tv_sec * 1000);
-#else
         struct timespec abs_ts;
 
         do
@@ -427,13 +449,11 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
           abs_ts.tv_nsec = rm_ts.tv_nsec;
         } while (nanosleep(&abs_ts, &rm_ts) < 0);
 
-#endif
-
         try
         {
           processID = ::getpid();
           txnid = txnID.id;
-          sessionId = alterTableStmt.fSessionID;
+          sessionId = alterTableStmt->fSessionID;
           ;
           processName = "DDLProc";
           tableLockId = fDbrm->getTableLock(pms, roPair.objnum, &processName, &processID, &sessionId, &txnid,
@@ -460,7 +480,7 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
       }
     }
 
-    ddlpackage::AlterTableActionList actionList = alterTableStmt.fActions;
+    ddlpackage::AlterTableActionList actionList = alterTableStmt->fActions;
     AlterTableActionList::const_iterator action_iterator = actionList.begin();
 
     while (action_iterator != actionList.end())
@@ -485,7 +505,7 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
           columnDefPtr = addColumns.fColumns[0];
         }
 
-        addColumn(alterTableStmt.fSessionID, txnID.id, result, columnDefPtr, *(alterTableStmt.fTableName),
+        addColumn(alterTableStmt->fSessionID, txnID.id, result, columnDefPtr, *(alterTableStmt->fTableName),
                   uniqueId);
 
         if (result.result != NO_ERROR)
@@ -497,9 +517,9 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
       else if (s.find(AlterActionString[6]) != string::npos)
       {
         // Drop Column Default
-        dropColumnDefault(alterTableStmt.fSessionID, txnID.id, result,
+        dropColumnDefault(alterTableStmt->fSessionID, txnID.id, result,
                           *(dynamic_cast<AtaDropColumnDefault*>(*action_iterator)),
-                          *(alterTableStmt.fTableName), uniqueId);
+                          *(alterTableStmt->fTableName), uniqueId);
 
         if (result.result != NO_ERROR)
         {
@@ -510,15 +530,16 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
       else if (s.find(AlterActionString[3]) != string::npos)
       {
         // Drop Columns
-        dropColumns(alterTableStmt.fSessionID, txnID.id, result,
-                    *(dynamic_cast<AtaDropColumns*>(*action_iterator)), *(alterTableStmt.fTableName),
+        dropColumns(alterTableStmt->fSessionID, txnID.id, result,
+                    *(dynamic_cast<AtaDropColumns*>(*action_iterator)), *(alterTableStmt->fTableName),
                     uniqueId);
       }
       else if (s.find(AlterActionString[2]) != string::npos)
       {
         // Drop a column
-        dropColumn(alterTableStmt.fSessionID, txnID.id, result,
-                   *(dynamic_cast<AtaDropColumn*>(*action_iterator)), *(alterTableStmt.fTableName), uniqueId);
+        dropColumn(alterTableStmt->fSessionID, txnID.id, result,
+                   *(dynamic_cast<AtaDropColumn*>(*action_iterator)), *(alterTableStmt->fTableName),
+                   uniqueId);
       }
 
 #if 0
@@ -533,9 +554,9 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
       else if (s.find(AlterActionString[5]) != string::npos)
       {
         // Set Column Default
-        setColumnDefault(alterTableStmt.fSessionID, txnID.id, result,
+        setColumnDefault(alterTableStmt->fSessionID, txnID.id, result,
                          *(dynamic_cast<AtaSetColumnDefault*>(*action_iterator)),
-                         *(alterTableStmt.fTableName), uniqueId);
+                         *(alterTableStmt->fTableName), uniqueId);
       }
 
 #if 0
@@ -551,23 +572,23 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
       else if (s.find(AlterActionString[8]) != string::npos)
       {
         // Rename Table
-        renameTable(alterTableStmt.fSessionID, txnID.id, result,
-                    *(dynamic_cast<AtaRenameTable*>(*action_iterator)), *(alterTableStmt.fTableName),
+        renameTable(alterTableStmt->fSessionID, txnID.id, result,
+                    *(dynamic_cast<AtaRenameTable*>(*action_iterator)), *(alterTableStmt->fTableName),
                     uniqueId);
       }
 
       else if (s.find(AlterActionString[10]) != string::npos)
       {
         // Rename a Column
-        renameColumn(alterTableStmt.fSessionID, txnID.id, result,
-                     *(dynamic_cast<AtaRenameColumn*>(*action_iterator)), *(alterTableStmt.fTableName),
+        renameColumn(alterTableStmt->fSessionID, txnID.id, result,
+                     *(dynamic_cast<AtaRenameColumn*>(*action_iterator)), *(alterTableStmt->fTableName),
                      uniqueId);
       }
       else if (s.find(AlterActionString[11]) != string::npos)
       {
         // Table Comment
-        tableComment(alterTableStmt.fSessionID, txnID.id, result,
-                     *(dynamic_cast<AtaTableComment*>(*action_iterator)), *(alterTableStmt.fTableName),
+        tableComment(alterTableStmt->fSessionID, txnID.id, result,
+                     *(dynamic_cast<AtaTableComment*>(*action_iterator)), *(alterTableStmt->fTableName),
                      uniqueId);
       }
       else
@@ -579,7 +600,7 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
     }
 
     // Log the DDL statement.
-    logging::logDDL(alterTableStmt.fSessionID, txnID.id, alterTableStmt.fSql, alterTableStmt.fOwner);
+    logging::logDDL(alterTableStmt->fSessionID, txnID.id, alterTableStmt->fSql, alterTableStmt->fOwner);
 
     DETAIL_INFO("Commiting transaction");
     commitTransaction(uniqueId, txnID);
@@ -587,11 +608,43 @@ AlterTableProcessor::DDLResult AlterTableProcessor::processPackage(
   }
   catch (std::exception& ex)
   {
-    rollBackAlter(ex.what(), txnID, alterTableStmt.fSessionID, result, uniqueId);
+    if (checkPPLostConnection(ex.what()))
+    {
+      if (tableLockId)
+      {
+        try
+        {
+          (void)fDbrm->releaseTableLock(tableLockId);
+        }
+        catch (std::exception&)
+        {
+          if (result.result == NO_ERROR)
+          {
+            logging::Message::Args args;
+            logging::Message message(1);
+            args.add("Table lock is not released due to ");
+            args.add(IDBErrorInfo::instance()->errorMsg(ERR_HARD_FAILURE));
+            args.add("");
+            args.add("");
+            message.format(args);
+            result.result = ALTER_ERROR;
+            result.message = message;
+            return result;
+          }
+        }
+      }
+      result.result = PP_LOST_CONNECTION;
+      fWEClient->removeQueue(uniqueId);
+      return result;
+    }
+    else
+    {
+      rollBackAlter(ex.what(), txnID, alterTableStmt->fSessionID, result, uniqueId);
+    }
   }
   catch (...)
   {
-    rollBackAlter("encountered unknown exception. ", txnID, alterTableStmt.fSessionID, result, uniqueId);
+    rollBackAlter("encountered unknown exception. ", txnID, alterTableStmt->fSessionID, result, uniqueId);
   }
 
   // release table lock
@@ -690,10 +743,12 @@ void AlterTableProcessor::addColumn(uint32_t sessionID, execplan::CalpontSystemC
     throw std::runtime_error(err);
   }
 
-  if ((columnDefPtr->fType->fType == CalpontSystemCatalog::CHAR && columnDefPtr->fType->fLength > 8) ||
-      (columnDefPtr->fType->fType == CalpontSystemCatalog::VARCHAR && columnDefPtr->fType->fLength > 7) ||
-      (columnDefPtr->fType->fType == CalpontSystemCatalog::VARBINARY && columnDefPtr->fType->fLength > 7) ||
-      (columnDefPtr->fType->fType == CalpontSystemCatalog::BLOB))
+  int dataType = WriteEngine::convertDataType(columnDefPtr->fType->fType);
+
+  if ((dataType == CalpontSystemCatalog::CHAR && columnDefPtr->fType->fLength > 8) ||
+      (dataType == CalpontSystemCatalog::VARCHAR && columnDefPtr->fType->fLength > 7) ||
+      (dataType == CalpontSystemCatalog::VARBINARY && columnDefPtr->fType->fLength > 7) ||
+      (dataType == CalpontSystemCatalog::TEXT) || (dataType == CalpontSystemCatalog::BLOB))
   {
     isDict = true;
   }
@@ -943,7 +998,7 @@ void AlterTableProcessor::addColumn(uint32_t sessionID, execplan::CalpontSystemC
     createWriteDropLogFile(ropair.objnum, uniqueId, oidList);
 
     //@Bug 1358,1427 Always use the first column in the table, not the first one in columnlist to prevent
-    //random result
+    // random result
     //@Bug 4182. Use widest column as reference column
 
     // Find the widest column
@@ -1904,7 +1959,7 @@ void AlterTableProcessor::renameTable(uint32_t sessionID, execplan::CalpontSyste
   boost::shared_ptr<CalpontSystemCatalog> systemCatalogPtr =
       CalpontSystemCatalog::makeCalpontSystemCatalog(sessionID);
   execplan::CalpontSystemCatalog::TableName tableName;
-  tableName.schema = fTableName.fSchema;
+  tableName.schema = ataRenameTable.fQualifiedName->fSchema;
   tableName.table = ataRenameTable.fQualifiedName->fName;
   execplan::CalpontSystemCatalog::ROPair roPair;
   roPair.objnum = 0;
@@ -1929,6 +1984,7 @@ void AlterTableProcessor::renameTable(uint32_t sessionID, execplan::CalpontSyste
   bytestream << fTableName.fSchema;
   bytestream << fTableName.fName;
   bytestream << ataRenameTable.fQualifiedName->fName;
+  bytestream << ataRenameTable.fQualifiedName->fSchema;
 
   std::string errorMsg;
   uint16_t dbRoot;
@@ -2002,6 +2058,7 @@ void AlterTableProcessor::renameTable(uint32_t sessionID, execplan::CalpontSyste
   bytestream << fTableName.fSchema;
   bytestream << fTableName.fName;
   bytestream << ataRenameTable.fQualifiedName->fName;
+  bytestream << ataRenameTable.fQualifiedName->fSchema;
   sysOid = 1021;
   // Find out where syscolumn is
   rc = fDbrm->getSysCatDBRoot(sysOid, dbRoot);
@@ -2083,14 +2140,14 @@ void AlterTableProcessor::tableComment(uint32_t sessionID, execplan::CalpontSyst
       CalpontSystemCatalog::makeCalpontSystemCatalog(sessionID);
 
   boost::algorithm::to_upper(ataTableComment.fTableComment);
-  boost::regex compat("[[:space:]]*AUTOINCREMENT[[:space:]]*=[[:space:]]*", boost::regex_constants::extended);
-  boost::match_results<std::string::const_iterator> what;
+  std::regex compat("[[:space:]]*AUTOINCREMENT[[:space:]]*=[[:space:]]*", std::regex_constants::extended);
+  std::match_results<std::string::const_iterator> what;
   std::string::const_iterator start, end;
   start = ataTableComment.fTableComment.begin();
   end = ataTableComment.fTableComment.end();
-  boost::match_flag_type flags = boost::match_default;
+  std::regex_constants::match_flag_type flags = std::regex_constants::match_default;
 
-  if (boost::regex_search(start, end, what, compat, flags) && what[0].matched)
+  if (std::regex_search(start, end, what, compat, flags) && what[0].matched)
   {
     std::string params(&(*(what[0].second)));
     char* ep = NULL;
@@ -2539,7 +2596,6 @@ void AlterTableProcessor::renameColumn(uint32_t sessionID, execplan::CalpontSyst
 }
 
 }  // namespace ddlpackageprocessor
-// vim:ts=4 sw=4:
 
 #ifdef __clang__
 #pragma clang diagnostic pop

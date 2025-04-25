@@ -25,10 +25,6 @@
 #include <cstdlib>
 #include <string>
 #include <cmath>
-#if defined(_MSC_VER) && !defined(isfinite)
-#include <float.h>
-#define isfinite _finite
-#endif
 using namespace std;
 
 #include "functor_real.h"
@@ -121,4 +117,3 @@ long double Func_pow::getLongDoubleVal(Row& row, FunctionParm& parm, bool& isNul
 }
 
 }  // namespace funcexp
-// vim:ts=4 sw=4:

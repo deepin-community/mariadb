@@ -23,11 +23,12 @@
 #ifndef PFS_INSTR_CLASS_H
 #define PFS_INSTR_CLASS_H
 
+#include <atomic>
+
 #include "my_global.h"
 #include "mysql_com.h"                          /* NAME_LEN */
 #include "lf.h"
 #include "pfs_global.h"
-#include "pfs_atomic.h"
 #include "sql_array.h"
 
 /**
@@ -265,6 +266,46 @@ struct PFS_table_share_key
   char m_hash_key[PFS_TABLESHARE_HASHKEY_SIZE];
   /** Length in bytes of @c m_hash_key. */
   uint m_key_length;
+
+  size_t available_length() const
+  {
+    return sizeof(m_hash_key) - m_key_length;
+  }
+
+  char *end()
+  {
+    return m_hash_key + m_key_length;
+  }
+
+  void set(bool temporary,
+           const char *schema_name, size_t schema_name_length,
+           const char *table_name, size_t table_name_length);
+
+private:
+  // Append and 0-terminate a string with an optional lower-case conversion
+  void append_opt_casedn_z(CHARSET_INFO *cs,
+                           const char *str, size_t length,
+                           bool casedn)
+  {
+    DBUG_ASSERT(length <= sizeof(m_hash_key)); // Expect valid db/tbl names
+    size_t dst_length= available_length();
+    if (dst_length > 0)
+    {
+      dst_length--;
+      DBUG_ASSERT(dst_length >= length);
+      if (casedn)
+      {
+        m_key_length+= (uint) cs->casedn(str, length, end(), dst_length);
+      }
+      else
+      {
+        set_if_smaller(length, dst_length); // Safety for release builds
+        memcpy(end(), str, length);
+        m_key_length+= (uint) length;
+      }
+      m_hash_key[m_key_length++]= '\0';
+    }
+  }
 };
 
 /** Table index or 'key' */
@@ -329,22 +370,22 @@ public:
 
   inline void init_refcount(void)
   {
-    PFS_atomic::store_32(& m_refcount, 1);
+    m_refcount.store(1);
   }
 
   inline int get_refcount(void)
   {
-    return PFS_atomic::load_32(& m_refcount);
+    return m_refcount.load();
   }
 
   inline void inc_refcount(void)
   {
-    PFS_atomic::add_32(& m_refcount, 1);
+    m_refcount.fetch_add(1);
   }
 
   inline void dec_refcount(void)
   {
-    PFS_atomic::add_32(& m_refcount, -1);
+    m_refcount.fetch_sub(1);
   }
 
   void refresh_setup_object_flags(PFS_thread *thread);
@@ -387,7 +428,7 @@ public:
 
 private:
   /** Number of opened table handles. */
-  int m_refcount;
+  std::atomic<int> m_refcount;
   /** Table locks statistics. */
   PFS_table_share_lock *m_race_lock_stat;
   /** Table indexes' stats. */

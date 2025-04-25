@@ -16,20 +16,15 @@
    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
    MA 02110-1301, USA. */
 
-#ifndef TJOINER_H_
-#define TJOINER_H_
+#pragma once
 
 #include <iostream>
 #include <vector>
 #include <boost/shared_ptr.hpp>
 #include <boost/scoped_ptr.hpp>
-#include <boost/shared_array.hpp>
+
 #include <boost/scoped_array.hpp>
-#ifdef _MSC_VER
 #include <unordered_map>
-#else
-#include <tr1/unordered_map>
-#endif
 
 #include "rowgroup.h"
 #include "joiner.h"
@@ -273,12 +268,12 @@ class TupleJoiner
   /* ctor to use for numeric join */
   TupleJoiner(const rowgroup::RowGroup& smallInput, const rowgroup::RowGroup& largeInput,
               uint32_t smallJoinColumn, uint32_t largeJoinColumn, joblist::JoinType jt,
-              threadpool::ThreadPool* jsThreadPool);
+              threadpool::ThreadPool* jsThreadPool, const uint64_t numCores);
 
   /* ctor to use for string & compound join */
   TupleJoiner(const rowgroup::RowGroup& smallInput, const rowgroup::RowGroup& largeInput,
               const std::vector<uint32_t>& smallJoinColumns, const std::vector<uint32_t>& largeJoinColumns,
-              joblist::JoinType jt, threadpool::ThreadPool* jsThreadPool);
+              joblist::JoinType jt, threadpool::ThreadPool* jsThreadPool, const uint64_t numCores);
 
   ~TupleJoiner();
 
@@ -326,8 +321,8 @@ class TupleJoiner
   void umJoinConvert(size_t begin, size_t end);
 
   void setThreadCount(uint32_t cnt);
-  void setPMJoinResults(boost::shared_array<std::vector<uint32_t> >, uint32_t threadID);
-  boost::shared_array<std::vector<uint32_t> > getPMJoinArrays(uint32_t threadID);
+  void setPMJoinResults(std::shared_ptr<std::vector<uint32_t>[]>, uint32_t threadID);
+  std::shared_ptr<std::vector<uint32_t>[]> getPMJoinArrays(uint32_t threadID);
   std::vector<rowgroup::Row::Pointer>* getSmallSide()
   {
     return &rows;
@@ -461,7 +456,7 @@ class TupleJoiner
   }
   // Disk-based join support
   void clearData();
-  boost::shared_ptr<TupleJoiner> copyForDiskJoin();
+  std::shared_ptr<TupleJoiner> copyForDiskJoin();
   bool isFinished()
   {
     return finished;
@@ -469,19 +464,18 @@ class TupleJoiner
   void setConvertToDiskJoin();
 
  private:
-  typedef std::tr1::unordered_multimap<int64_t, uint8_t*, hasher, std::equal_to<int64_t>,
-                                       utils::STLPoolAllocator<std::pair<const int64_t, uint8_t*> > >
+  typedef std::unordered_multimap<int64_t, uint8_t*, hasher, std::equal_to<int64_t>,
+                                  utils::STLPoolAllocator<std::pair<const int64_t, uint8_t*> > >
       hash_t;
-  typedef std::tr1::unordered_multimap<
-      int64_t, rowgroup::Row::Pointer, hasher, std::equal_to<int64_t>,
-      utils::STLPoolAllocator<std::pair<const int64_t, rowgroup::Row::Pointer> > >
+  typedef std::unordered_multimap<int64_t, rowgroup::Row::Pointer, hasher, std::equal_to<int64_t>,
+                                  utils::STLPoolAllocator<std::pair<const int64_t, rowgroup::Row::Pointer> > >
       sthash_t;
-  typedef std::tr1::unordered_multimap<
+  typedef std::unordered_multimap<
       TypelessData, rowgroup::Row::Pointer, hasher, std::equal_to<TypelessData>,
       utils::STLPoolAllocator<std::pair<const TypelessData, rowgroup::Row::Pointer> > >
       typelesshash_t;
   // MCOL-1822 Add support for Long Double AVG/SUM small side
-  typedef std::tr1::unordered_multimap<
+  typedef std::unordered_multimap<
       long double, rowgroup::Row::Pointer, hasher, LongDoubleEq,
       utils::STLPoolAllocator<std::pair<const long double, rowgroup::Row::Pointer> > >
       ldhash_t;
@@ -507,10 +501,10 @@ class TupleJoiner
   the logical block being processed.  There are X threads at once, so
   up to X logical blocks being processed.  For each of those there's a vector
   of matches.  Each match is an index into 'rows'. */
-  boost::shared_array<boost::shared_array<std::vector<uint32_t> > > pmJoinResults;
+  std::shared_ptr<std::shared_ptr<std::vector<uint32_t>[]>[]> pmJoinResults;
   rowgroup::RowGroup smallRG, largeRG;
   boost::scoped_array<rowgroup::Row> smallRow;
-  // boost::shared_array<uint8_t> smallNullMemory;
+
   rowgroup::Row smallNullRow;
 
   enum JoinAlg
@@ -522,7 +516,7 @@ class TupleJoiner
   };
   JoinAlg joinAlg;
   joblist::JoinType joinType;
-  boost::shared_array<boost::shared_ptr<utils::PoolAllocator> > _pool;  // pools for the table and nodes
+  std::shared_ptr<boost::shared_ptr<utils::PoolAllocator>[]> _pool;  // pools for the table and nodes
   uint32_t threadCount;
   std::string tableName;
 
@@ -571,5 +565,3 @@ class TupleJoiner
 };
 
 }  // namespace joiner
-
-#endif

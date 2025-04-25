@@ -991,7 +991,7 @@ static int test_connect_attrs(MYSQL *my)
   mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "foo2", "bar2");
 
   FAIL_IF(!my_test_connect(mysql, hostname, username, password, schema,
-                         port, socketname, 0), mysql_error(my));
+                         port, socketname, 0, 1), mysql_error(my));
 
   if (!(mysql->server_capabilities & CLIENT_CONNECT_ATTRS))
   {
@@ -1041,7 +1041,7 @@ static int test_conc117(MYSQL *unused __attribute__((unused)))
   MYSQL *my= mysql_init(NULL);
   SKIP_MAXSCALE;
   FAIL_IF(!my_test_connect(my, hostname, username, password, schema,
-                         port, socketname, 0), mysql_error(my));
+                         port, socketname, 0, 1), mysql_error(my));
   
   mysql_kill(my, mysql_thread_id(my));
 
@@ -1060,7 +1060,7 @@ static int test_read_timeout(MYSQL *unused __attribute__((unused)))
   SKIP_MAXSCALE;
   mysql_options(my, MYSQL_OPT_READ_TIMEOUT, &timeout);
   FAIL_IF(!my_test_connect(my, hostname, username, password, schema,
-                         port, socketname, 0), mysql_error(my));
+                         port, socketname, 0, 1), mysql_error(my));
  
   rc= mysql_query(my, "SELECT SLEEP(50)");
 
@@ -1136,7 +1136,7 @@ static int test_remote2(MYSQL *my)
   mysql_options(mysql, MYSQL_READ_DEFAULT_FILE, "http://localhost/test.cnf");
   mysql_options(mysql, MYSQL_READ_DEFAULT_GROUP, "test");
   my_test_connect(mysql, hostname, username, password, schema,
-                         0, socketname, 0), mysql_error(my);
+                         0, socketname, 0, 1), mysql_error(my);
   diag("port: %d", mysql->port);
   mysql_close(mysql);
   return OK;
@@ -1177,7 +1177,7 @@ static int test_mdev12965(MYSQL *unused __attribute__((unused)))
 
   mysql_options(mysql, MYSQL_READ_DEFAULT_GROUP, "");
   my_test_connect(mysql, hostname, username, password,
-                  schema, port, socketname, 0);
+                  schema, port, socketname, 0, 1);
 
   remove(cnf_file1);
 
@@ -1461,7 +1461,7 @@ static int test_conc395(MYSQL *unused __attribute__((unused)))
 
   mysql_options(mysql, MYSQL_READ_DEFAULT_GROUP, "");
   my_test_connect(mysql, hostname, username, password,
-                  schema, port, socketname, 0);
+                  schema, port, socketname, 0, 1);
 
   remove(cnf_file1);
 
@@ -1501,7 +1501,7 @@ static int test_sslenforce(MYSQL *unused __attribute__((unused)))
 
   mysql_options(mysql, MYSQL_READ_DEFAULT_GROUP, "");
   my_test_connect(mysql, hostname, username, password,
-                  schema, port, socketname, 0);
+                  schema, port, socketname, 0, 1);
 
   remove(cnf_file1);
 
@@ -1531,6 +1531,46 @@ static int test_conc458(MYSQL *my __attribute__((unused)))
   MYSQL *mysql= mysql_init(NULL);
   FAIL_IF(mysql_get_timeout_value(mysql) != 0, "expected timeout 0");
   mysql_close(mysql);
+  return OK;
+}
+
+static int test_conc163(MYSQL *mysql)
+{
+  int rc;
+  MYSQL_STMT *stmt;
+
+  rc= mysql_query(mysql, "SET @a:=1");
+  check_mysql_rc(rc, mysql);
+
+  FAIL_IF(mysql_info(mysql) != NULL, "mysql_info: expected NULL");
+
+  rc= mysql_query(mysql, "DROP TABLE IF EXISTS t1");
+  check_mysql_rc(rc, mysql);
+
+  rc= mysql_query(mysql, "CREATE TABLE t1 AS SELECT 1");
+  check_mysql_rc(rc, mysql);
+
+  FAIL_IF(mysql_info(mysql) == NULL, "mysql_info: expected != NULL");
+
+  rc= mysql_query(mysql, "DROP TABLE t1");
+  check_mysql_rc(rc, mysql);
+
+  stmt= mysql_stmt_init(mysql);
+  rc= mariadb_stmt_execute_direct(stmt, SL("SET @a:=1"));
+  check_stmt_rc(rc, stmt);
+  FAIL_IF(mysql_info(mysql) != NULL, "mysql_info: expected NULL");
+
+  rc= mysql_query(mysql, "DROP TABLE IF EXISTS t1");
+  check_mysql_rc(rc, mysql);
+  rc= mariadb_stmt_execute_direct(stmt, SL("CREATE TABLE t1 AS SELECT 1"));
+  check_stmt_rc(rc, stmt);
+  FAIL_IF(mysql_info(mysql) == NULL, "mysql_info: expected != NULL");
+
+  mysql_stmt_close(stmt);
+
+  rc= mysql_query(mysql, "DROP TABLE t1");
+  check_mysql_rc(rc, mysql);
+
   return OK;
 }
 
@@ -1628,9 +1668,69 @@ static int test_ext_field_attr(MYSQL *mysql)
   return OK;
 }
 
+static int test_disable_tls1_0(MYSQL *my __attribute__((unused)))
+{
+  MYSQL *mysql= mysql_init(NULL);
+  const char *disabled_version= "TLSv1.0";
+  MYSQL_RES *result;
+  MYSQL_ROW row;
+  int rc;
+
+#ifdef HAVE_SCHANNEL
+  diag("Test doesn't work with new Schannel TLSv1.3 implementation");
+  return SKIP;
+#endif
+
+  mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+  mysql_optionsv(mysql, MARIADB_OPT_TLS_VERSION, disabled_version);
+  mysql_optionsv(mysql, MARIADB_OPT_SSL_FP, fingerprint);
+
+  FAIL_IF(!mysql_real_connect(mysql, hostname, username, password, schema,
+                         port, socketname, 0), mysql_error(mysql));
+
+  rc= mysql_query(mysql, "SHOW STATUS LIKE 'ssl_version'");
+  check_mysql_rc(rc, mysql);
+
+  result = mysql_store_result(mysql);
+  row= mysql_fetch_row(result);
+
+  FAIL_IF(!strcmp(row[1], "TLSv1.0"), "TLS 1.0 should be disabled!");
+
+  mysql_free_result(result);
+
+  mysql_close(mysql);
+  return OK;
+}
+
+static int test_null_handles(MYSQL *mysql __attribute__((unused)))
+{
+  mysql_close(NULL);
+  mysql_stmt_close(NULL);
+  return OK;
+}
+
+
+static int test_comp_level(MYSQL *my __attribute__((unused)))
+{
+  unsigned char clevel= 5;
+  unsigned char clevel1= 0;
+  MYSQL *mysql= mysql_init(NULL);
+
+  mysql_optionsv(mysql, MYSQL_OPT_ZSTD_COMPRESSION_LEVEL, &clevel);
+  mysql_get_optionv(mysql, MYSQL_OPT_ZSTD_COMPRESSION_LEVEL, &clevel1);
+
+  FAIL_IF(clevel != clevel1, "Different compression levels");
+  mysql_close(mysql);
+
+  return OK;
+}
+
 struct my_tests_st my_tests[] = {
+  {"test_disable_tls1_0", test_disable_tls1_0, TEST_CONNECTION_DEFAULT, 0, NULL, NULL},
+  {"test_comp_level", test_comp_level, TEST_CONNECTION_NONE, 0, NULL, NULL},
   {"test_ext_field_attr", test_ext_field_attr, TEST_CONNECTION_DEFAULT, 0, NULL, NULL},
   {"test_conc533", test_conc533, TEST_CONNECTION_NEW, 0, NULL, NULL},
+  {"test_conc163", test_conc163, TEST_CONNECTION_DEFAULT, 0, NULL, NULL},
   {"test_conc458", test_conc458, TEST_CONNECTION_NONE, 0, NULL, NULL},
 #if !__has_feature(memory_sanitizer)
   {"test_conc457", test_conc457, TEST_CONNECTION_DEFAULT, 0, NULL, NULL},
@@ -1671,7 +1771,8 @@ struct my_tests_st my_tests[] = {
   {"test_ldi_path", test_ldi_path, TEST_CONNECTION_NEW, 0, NULL, NULL},
 #ifdef _WIN32
   {"test_conc44", test_conc44, TEST_CONNECTION_NEW, 0, NULL, NULL},
-#endif 
+#endif
+  {"test_null_handles", test_null_handles, TEST_CONNECTION_NONE, 0, NULL, NULL},
   {NULL, NULL, 0, 0, NULL, 0}
 };
 

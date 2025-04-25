@@ -34,12 +34,12 @@
 #include "sql_base.h" /* close_thread_tables */
 #include "debug_sync.h"
 
-static void init_service_thd(THD* thd, char* thread_stack)
+static void init_service_thd(THD* thd, void* thread_stack)
 {
   thd->thread_stack= thread_stack;
   thd->real_id= pthread_self();
   thd->prior_thr_create_utime= thd->start_utime= microsecond_interval_timer();
-  thd->set_command(COM_SLEEP);
+  thd->mark_connection_idle();
   thd->reset_for_next_command(true);
   server_threads.insert(thd); // as wsrep_innobase_kill_one_trx() uses find_thread_by_id()
 }
@@ -166,9 +166,16 @@ void Wsrep_server_service::bootstrap()
   wsrep_set_SE_checkpoint(wsrep::gtid::undefined(), wsrep_gtid_server.undefined());
 }
 
+static std::atomic<bool> suppress_logging{false};
+void wsrep_suppress_error_logging() { suppress_logging= true; }
+
 void Wsrep_server_service::log_message(enum wsrep::log::level level,
-                                       const char* message)
+                                       const char *message)
 {
+  if (suppress_logging.load(std::memory_order_relaxed))
+  {
+    return;
+  }
   switch (level)
   {
   case wsrep::log::debug:
@@ -239,29 +246,9 @@ void Wsrep_server_service::log_view(
                     view.state_id().seqno().get() >= prev_view.state_id().seqno().get());
       }
 
-      if (trans_begin(applier->m_thd, MYSQL_START_TRANS_OPT_READ_WRITE))
+      if (wsrep_schema->store_view(applier->m_thd, view))
       {
-        WSREP_WARN("Failed to start transaction for store view");
-      }
-      else
-      {
-        if (wsrep_schema->store_view(applier->m_thd, view))
-        {
-          WSREP_WARN("Failed to store view");
-          trans_rollback_stmt(applier->m_thd);
-          if (!trans_rollback(applier->m_thd))
-          {
-            close_thread_tables(applier->m_thd);
-          }
-        }
-        else
-        {
-          if (trans_commit(applier->m_thd))
-          {
-            WSREP_WARN("Failed to commit transaction for store view");
-          }
-        }
-        applier->m_thd->release_transactional_locks();
+        WSREP_WARN("Failed to store view");
       }
 
       /*
@@ -345,7 +332,6 @@ void Wsrep_server_service::log_state_change(
   switch (current_state)
   {
   case Wsrep_server_state::s_synced:
-    wsrep_ready= TRUE;
     WSREP_INFO("Synchronized with group, ready for connections");
     wsrep_ready_set(true);
     /* fall through */

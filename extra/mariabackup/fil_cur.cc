@@ -186,6 +186,7 @@ xb_fil_cur_open(
 	}
 #else
 	err = fstat(cursor->file.m_file, &cursor->statinfo);
+	MSAN_STAT_WORKAROUND(&cursor->statinfo);
 #endif
 	if (max_file_size < (ulonglong)cursor->statinfo.st_size) {
 		cursor->statinfo.st_size = (ulonglong)max_file_size;
@@ -197,12 +198,6 @@ xb_fil_cur_open(
 		xb_fil_cur_close(cursor);
 
 		return(XB_FIL_CUR_SKIP);
-	}
-
-	if (srv_file_flush_method == SRV_O_DIRECT
-	    || srv_file_flush_method == SRV_O_DIRECT_NO_FSYNC) {
-
-		os_file_set_nocache(cursor->file, node->name, "OPEN");
 	}
 
 	posix_fadvise(cursor->file, 0, 0, POSIX_FADV_SEQUENTIAL);
@@ -237,11 +232,13 @@ xb_fil_cur_open(
 				      / cursor->page_size);
 
 	cursor->read_filter = read_filter;
-	cursor->read_filter->init(&cursor->read_filter_ctxt, cursor,
-				  node->space->id);
+	cursor->read_filter->init(&cursor->read_filter_ctxt, cursor);
 
 	return(XB_FIL_CUR_SUCCESS);
 }
+
+/* Stack usage 131224 with clang */
+PRAGMA_DISABLE_CHECK_STACK_FRAME
 
 static bool page_is_corrupted(const byte *page, ulint page_no,
 			      const xb_fil_cur_t *cursor,
@@ -287,7 +284,7 @@ static bool page_is_corrupted(const byte *page, ulint page_no,
 	}
 
 	if (space->full_crc32()) {
-		return buf_page_is_corrupted(true, page, space->flags);
+		return buf_page_is_corrupted(false, page, space->flags);
 	}
 
 	/* Validate encrypted pages. The first page is never encrypted.
@@ -320,7 +317,7 @@ static bool page_is_corrupted(const byte *page, ulint page_no,
 		}
 
 		if (page_type != FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED) {
-			return buf_page_is_corrupted(true, tmp_page,
+			return buf_page_is_corrupted(false, tmp_page,
 						     space->flags);
 		}
 	}
@@ -340,12 +337,13 @@ static bool page_is_corrupted(const byte *page, ulint page_no,
 			    && cursor->zip_size)
 			|| page_type == FIL_PAGE_PAGE_COMPRESSED
 			|| page_type == FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED
-			|| buf_page_is_corrupted(true, tmp_page,
+			|| buf_page_is_corrupted(false, tmp_page,
 						 space->flags));
 	}
 
-	return buf_page_is_corrupted(true, page, space->flags);
+	return buf_page_is_corrupted(false, page, space->flags);
 }
+PRAGMA_REENABLE_CHECK_STACK_FRAME
 
 /** Reads and verifies the next block of pages from the source
 file. Positions the cursor after the last read non-corrupted page.
@@ -508,10 +506,6 @@ xb_fil_cur_close(
 /*=============*/
 	xb_fil_cur_t *cursor)	/*!< in/out: source file cursor */
 {
-	if (cursor->read_filter) {
-		cursor->read_filter->deinit(&cursor->read_filter_ctxt);
-	}
-
 	aligned_free(cursor->buf);
 	cursor->buf = NULL;
 

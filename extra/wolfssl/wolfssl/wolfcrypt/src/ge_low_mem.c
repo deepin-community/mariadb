@@ -1,6 +1,6 @@
 /* ge_low_mem.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -442,28 +442,6 @@ void ge_scalarmult_base(ge_p3 *R,const unsigned char *nonce)
 
 
 /* pack the point h into array s */
-void ge_p3_tobytes(unsigned char *s,const ge_p3 *h)
-{
-    byte x[F25519_SIZE];
-    byte y[F25519_SIZE];
-    byte z1[F25519_SIZE];
-    byte parity;
-
-    fe_inv__distinct(z1, h->Z);
-    fe_mul__distinct(x, h->X, z1);
-    fe_mul__distinct(y, h->Y, z1);
-
-    fe_normalize(x);
-    fe_normalize(y);
-
-    parity = (x[0] & 1) << 7;
-    lm_copy(s, y);
-    fe_normalize(s);
-    s[31] |= parity;
-}
-
-
-/* pack the point h into array s */
 void ge_tobytes(unsigned char *s,const ge_p2 *h)
 {
     byte x[F25519_SIZE];
@@ -534,6 +512,33 @@ int ge_frombytes_negate_vartime(ge_p3 *p,const unsigned char *s)
     return ret;
 }
 
+#ifdef WOLFSSL_CHECK_VER_FAULTS
+/* return 0 if equal and -1 if not equal */
+static int ge_equal(ge a, ge b)
+{
+    if (XMEMCMP(a, b, sizeof(ge)) == 0) {
+        return 0;
+    }
+    else {
+        return -1;
+    }
+}
+
+/* returns 0 if a == b */
+static int ge_p3_equal(ge_p3* a, ge_p3* b)
+{
+    int ret = 0;
+
+    ret |= ge_equal(a->X, b->X);
+    ret |= ge_equal(a->Y, b->Y);
+    ret |= ge_equal(a->Z, b->Z);
+    ret |= ge_equal(a->T, b->T);
+
+    return ret;
+}
+#endif
+
+
 
 int ge_double_scalarmult_vartime(ge_p2* R, const unsigned char *h,
                                  const ge_p3 *inA,const unsigned char *sig)
@@ -548,9 +553,19 @@ int ge_double_scalarmult_vartime(ge_p2* R, const unsigned char *h,
 
     /* find H(R,A,M) * -A */
     ed25519_smult(&A, &A, h);
+#ifdef WOLFSSL_CHECK_VER_FAULTS
+    if (ge_p3_equal(&A, (ge_p3*)inA) == 0) {
+        ret = BAD_STATE_E;
+    }
+#endif
 
     /* SB + -H(R,A,M)A */
     ed25519_add(&A, &p, &A);
+#ifdef WOLFSSL_CHECK_VER_FAULTS
+    if (ge_p3_equal(&A, &p) == 0) {
+        ret = BAD_STATE_E;
+    }
+#endif
 
     lm_copy(R->X, A.X);
     lm_copy(R->Y, A.Y);

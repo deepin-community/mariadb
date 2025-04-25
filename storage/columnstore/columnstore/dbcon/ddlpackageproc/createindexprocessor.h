@@ -21,8 +21,7 @@
  *
  ***********************************************************************/
 /** @file */
-#ifndef CREATEINDEXPROCESSOR_H
-#define CREATEINDEXPROCESSOR_H
+#pragma once
 
 #include "ddlpackageprocessor.h"
 #include "ddlpkg.h"
@@ -40,7 +39,7 @@ class CreateIndexProcessor : public DDLPackageProcessor
    *
    * @param createIndexStmt the create index statement
    */
-  DDLResult processPackage(ddlpackage::CreateIndexStatement& createIndexStmt);
+  DDLResult processPackageInternal(ddlpackage::SqlStatement* createIndexStmt);
 
  protected:
   DDLResult rollBackCreateIndex(const std::string& error, BRM::TxnID& txnID, int sessionId);
@@ -51,4 +50,3 @@ class CreateIndexProcessor : public DDLPackageProcessor
 };
 
 }  // namespace ddlpackageprocessor
-#endif  // CREATEINDEXPROCESSOR_H

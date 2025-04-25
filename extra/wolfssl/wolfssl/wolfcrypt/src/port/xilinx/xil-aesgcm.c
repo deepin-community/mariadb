@@ -1,6 +1,6 @@
 /* xil-aesgcm.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -87,9 +87,9 @@ static WC_INLINE int aligned_xmalloc(byte** buf, byte** aligned, void* heap, wor
 
 static WC_INLINE void aligned_xfree(void* buf, void* heap)
 {
-	if (buf == NULL)
-		return;
-	XFREE(buf, heap, DYNAMIC_TYPE_TMP_BUFFER);
+        if (buf == NULL)
+                return;
+        XFREE(buf, heap, DYNAMIC_TYPE_TMP_BUFFER);
 }
 
 static WC_INLINE int check_keysize(word32 len)
@@ -135,7 +135,9 @@ int wc_AesGcmSetKey_ex(Aes* aes, const byte* key, word32 len, word32 kup)
     aes->xKeySize =
             len == AES_128_KEY_SIZE ? XSECURE_AES_KEY_SIZE_128 :
                                       XSECURE_AES_KEY_SIZE_256;
-    XMEMCPY(aes->keyInit, key, len);
+    if (key != NULL) {
+        XMEMCPY(aes->keyInit, key, len);
+    }
 
     return 0;
 }
@@ -151,7 +153,7 @@ static WC_INLINE int setup(Aes* aes,
     byte *aad_buf = NULL;
     int err;
 
-    WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)aes->keyInit,
+    WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)aes->keyInit,
                                         sizeof(aes->keyInit));
 
     if (XSecure_AesWriteKey(&(aes->xSec.cinst), aes->kup, aes->xKeySize,
@@ -164,7 +166,7 @@ static WC_INLINE int setup(Aes* aes,
         XMEMCPY(iv_, iv, AEAD_NONCE_SZ);
         piv = iv_;
     }
-    WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)piv, AEAD_NONCE_SZ);
+    WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)piv, AEAD_NONCE_SZ);
 
     if (init(&(aes->xSec.cinst), aes->kup, aes->xKeySize, XIL_CAST_U64(piv))) {
         WOLFSSL_XIL_MSG("Failed to init");
@@ -195,7 +197,7 @@ static WC_INLINE int setup(Aes* aes,
         XMEMCPY((void* )aad, authIn, authInSz);
     }
 
-    WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)aad, authInSz);
+    WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)aad, authInSz);
 
     if (XSecure_AesUpdateAad(&(aes->xSec.cinst), XIL_CAST_U64(authIn),
                              authInSz)) {
@@ -217,11 +219,11 @@ static WC_INLINE int handle_aad(       Aes* aes,
                                       byte* authTag,
                                 const byte* authIn, word32 authInSz) {
     int ret;
-    byte scratch[AES_BLOCK_SIZE];
-    byte initalCounter[AES_BLOCK_SIZE] = { 0 };
+    byte scratch[WC_AES_BLOCK_SIZE];
+    byte initalCounter[WC_AES_BLOCK_SIZE] = { 0 };
     XMEMCPY(initalCounter, iv, AEAD_NONCE_SZ);
-    initalCounter[AES_BLOCK_SIZE - 1] = 1;
-    GHASH(aes, authIn, authInSz, data, sz, authTag, AES_GCM_AUTH_SZ);
+    initalCounter[WC_AES_BLOCK_SIZE - 1] = 1;
+    GHASH(&aes->gcm, authIn, authInSz, data, sz, authTag, AES_GCM_AUTH_SZ);
     ret = wc_AesEncryptDirect(aes, scratch, initalCounter);
     if (ret == 0)
         xorbuf(authTag, scratch, AES_GCM_AUTH_SZ);
@@ -277,7 +279,7 @@ int wc_AesGcmEncrypt(       Aes* aes, byte* out,
 
     if (NEEDS_ALIGNMENT(out, XIL_AESGCM_ALIGN)) {
         if (in != in_aligned) {
-            /* In case `in` has been copied already, re-use that buffer
+            /* In case `in` has been copied already, reuse that buffer
              * and also write to it instead of allocating another one.
              */
             out_aligned = in_aligned;
@@ -296,9 +298,9 @@ int wc_AesGcmEncrypt(       Aes* aes, byte* out,
         out_aligned = out;
     }
 
-    WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)in_aligned, sz);
-    WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)out_aligned, sz);
-    WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)tag, sizeof(tag));
+    WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)in_aligned, sz);
+    WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)out_aligned, sz);
+    WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)tag, sizeof(tag));
 
     if (XSecure_AesEncryptUpdate(&(aes->xSec.cinst), XIL_CAST_U64(in_aligned),
                                  XIL_CAST_U64(out_aligned), sz, TRUE)) {
@@ -313,8 +315,8 @@ int wc_AesGcmEncrypt(       Aes* aes, byte* out,
         ret = WC_HW_E;
         ForceZero(authTag, authTagSz);
     } else {
-        WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)out_aligned, sz);
-        WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)tag, sizeof(tag));
+        WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)out_aligned, sz);
+        WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)tag, sizeof(tag));
 
         if (aes->aadStyle == SW_AAD) {
             ret = handle_aad(aes, out_aligned, sz, iv, authTag, authIn,
@@ -392,7 +394,7 @@ int  wc_AesGcmDecrypt(       Aes* aes, byte* out,
 
     if (NEEDS_ALIGNMENT(out, XIL_AESGCM_ALIGN)) {
         if (in != in_aligned) {
-            /* In case `in` has been copied already, re-use that buffer
+            /* In case `in` has been copied already, reuse that buffer
              * and also write to it instead of allocating another one.
              */
             out_aligned = in_aligned;
@@ -411,8 +413,8 @@ int  wc_AesGcmDecrypt(       Aes* aes, byte* out,
         out_aligned = out;
     }
 
-    WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)in_aligned, sz);
-    WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)out_aligned, sz);
+    WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)in_aligned, sz);
+    WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)out_aligned, sz);
 
     if (aes->aadStyle == HW_ENGINE_AAD) {
         /* Use the originally provided tag */
@@ -441,14 +443,14 @@ int  wc_AesGcmDecrypt(       Aes* aes, byte* out,
         goto error_out;
     }
 
-    WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)tag, AES_GCM_AUTH_SZ);
+    WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)tag, AES_GCM_AUTH_SZ);
 
     if (XSecure_AesDecryptFinal(&(aes->xSec.cinst), XIL_CAST_U64(tag))) {
         WOLFSSL_XIL_MSG("DecryptFinal failed");
         ret = WC_HW_E;
     } else {
-        WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)out_aligned, sz);
-        WOLFSSL_XIL_DCACHE_INVALIDATE_RANGE((UINTPTR)buf, sizeof(buf));
+        WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)out_aligned, sz);
+        WOLFSSL_XIL_DCACHE_FLUSH_RANGE((UINTPTR)buf, sizeof(buf));
 
         if (aes->aadStyle == SW_AAD) {
             if (ConstantCompare(authTag, real_tag, authTagSz) != 0) {
@@ -478,7 +480,12 @@ int  wc_AesGcmSetKey_ex(Aes* aes, const byte* key, word32 len, word32 kup)
 {
     XCsuDma_Config* con;
 
-    if (aes == NULL || key == NULL) {
+    if (aes == NULL) {
+        return BAD_FUNC_ARG;
+    }
+
+    if (kup == XSECURE_CSU_AES_KEY_SRC_KUP && key == NULL) {
+        WOLFSSL_MSG("Expecting key buffer passed in if using KUP");
         return BAD_FUNC_ARG;
     }
 
@@ -501,7 +508,9 @@ int  wc_AesGcmSetKey_ex(Aes* aes, const byte* key, word32 len, word32 kup)
 
     aes->keylen = len;
     aes->kup    = kup;
-    XMEMCPY((byte*)(aes->keyInit), key, len);
+    if (key != NULL) {
+        XMEMCPY((byte*)(aes->keyInit), key, len);
+    }
 
     return 0;
 }
@@ -515,8 +524,8 @@ int  wc_AesGcmEncrypt(Aes* aes, byte* out,
                                    const byte* authIn, word32 authInSz)
 {
     byte* tmp;
-    byte scratch[AES_BLOCK_SIZE];
-    byte initalCounter[AES_BLOCK_SIZE];
+    byte scratch[WC_AES_BLOCK_SIZE];
+    byte initalCounter[WC_AES_BLOCK_SIZE];
     int ret;
 
     if ((in == NULL && sz > 0) || iv == NULL || authTag == NULL ||
@@ -538,27 +547,35 @@ int  wc_AesGcmEncrypt(Aes* aes, byte* out,
             return BAD_FUNC_ARG;
         }
 
+    #ifndef NO_WOLFSSL_XILINX_TAG_MALLOC
         tmp = (byte*)XMALLOC(sz + AES_GCM_AUTH_SZ, aes->heap,
             DYNAMIC_TYPE_TMP_BUFFER);
         if (tmp == NULL) {
             return MEMORY_E;
         }
+    #else
+        /* if NO_WOLFSSL_XILINX_TAG_MALLOC is defined than it is assumed that
+         * out buffer is large enough to hold both the cipher out and tag */
+        tmp = out;
+    #endif
 
         XSecure_AesInitialize(&(aes->xilAes), &(aes->dma), aes->kup, (word32*)iv,
             aes->keyInit);
         XSecure_AesEncryptData(&(aes->xilAes), tmp, in, sz);
-        XMEMCPY(out, tmp, sz);
         XMEMCPY(authTag, tmp + sz, authTagSz);
+    #ifndef NO_WOLFSSL_XILINX_TAG_MALLOC
+        XMEMCPY(out, tmp, sz);
         XFREE(tmp, aes->heap, DYNAMIC_TYPE_TMP_BUFFER);
+    #endif
     }
 
     /* handle completing tag with any additional data */
     if (authIn != NULL) {
         /* @TODO avoid hashing out again since Xilinx call already does */
-        XMEMSET(initalCounter, 0, AES_BLOCK_SIZE);
+        XMEMSET(initalCounter, 0, WC_AES_BLOCK_SIZE);
         XMEMCPY(initalCounter, iv, ivSz);
-        initalCounter[AES_BLOCK_SIZE - 1] = 1;
-        GHASH(aes, authIn, authInSz, out, sz, authTag, authTagSz);
+        initalCounter[WC_AES_BLOCK_SIZE - 1] = 1;
+        GHASH(&aes->gcm, authIn, authInSz, out, sz, authTag, authTagSz);
         ret = wc_AesEncryptDirect(aes, scratch, initalCounter);
         if (ret < 0)
             return ret;
@@ -577,8 +594,8 @@ int  wc_AesGcmDecrypt(Aes* aes, byte* out,
 {
     byte* tag;
     byte buf[AES_GCM_AUTH_SZ];
-    byte scratch[AES_BLOCK_SIZE];
-    byte initalCounter[AES_BLOCK_SIZE];
+    byte scratch[WC_AES_BLOCK_SIZE];
+    byte initalCounter[WC_AES_BLOCK_SIZE];
     int ret;
 
     if (in == NULL || iv == NULL || authTag == NULL ||
@@ -593,11 +610,11 @@ int  wc_AesGcmDecrypt(Aes* aes, byte* out,
 
     /* account for additional data */
     if (authIn != NULL && authInSz > 0) {
-        XMEMSET(initalCounter, 0, AES_BLOCK_SIZE);
+        XMEMSET(initalCounter, 0, WC_AES_BLOCK_SIZE);
         XMEMCPY(initalCounter, iv, ivSz);
-        initalCounter[AES_BLOCK_SIZE - 1] = 1;
+        initalCounter[WC_AES_BLOCK_SIZE - 1] = 1;
         tag = buf;
-        GHASH(aes, NULL, 0, in, sz, tag, AES_GCM_AUTH_SZ);
+        GHASH(&aes->gcm, NULL, 0, in, sz, tag, AES_GCM_AUTH_SZ);
         ret = wc_AesEncryptDirect(aes, scratch, initalCounter);
         if (ret < 0)
             return ret;
@@ -610,16 +627,22 @@ int  wc_AesGcmDecrypt(Aes* aes, byte* out,
     /* calls to hardened crypto */
     XSecure_AesInitialize(&(aes->xilAes), &(aes->dma), aes->kup,
                 (word32*)iv, aes->keyInit);
-    XSecure_AesDecryptData(&(aes->xilAes), out, in, sz, tag);
+    ret = XSecure_AesDecryptData(&(aes->xilAes), out, in, sz, tag);
 
     /* account for additional data */
     if (authIn != NULL && authInSz > 0) {
-        GHASH(aes, authIn, authInSz, in, sz, tag, AES_GCM_AUTH_SZ);
+        GHASH(&aes->gcm, authIn, authInSz, in, sz, tag, AES_GCM_AUTH_SZ);
         ret = wc_AesEncryptDirect(aes, scratch, initalCounter);
         if (ret < 0)
             return ret;
         xorbuf(tag, scratch, AES_GCM_AUTH_SZ);
         if (ConstantCompare(authTag, tag, authTagSz) != 0) {
+            return AES_GCM_AUTH_E;
+        }
+    }
+    else {
+        /* if no aad then check the result of the initial tag passed in */
+        if (ret != XST_SUCCESS) {
             return AES_GCM_AUTH_E;
         }
     }

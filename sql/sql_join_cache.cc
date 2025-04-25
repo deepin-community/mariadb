@@ -23,10 +23,6 @@
   @{
 */
 
-#ifdef USE_PRAGMA_IMPLEMENTATION
-#pragma implementation				// gcc: Class implementation
-#endif
-
 #include "mariadb.h"
 #include "key.h"
 #include "sql_base.h"
@@ -919,7 +915,12 @@ int JOIN_CACHE::alloc_buffer()
   buff= NULL;
   buff_size= get_max_join_buffer_size(optimize_buff_size, min_buff_size);
 
-  for (tab= start_tab; tab!= join_tab; 
+  /*
+    Compute the total buffer usage for all join buffers up to
+    and including the current one.
+  */
+  for (tab= first_linear_tab(join, WITHOUT_BUSH_ROOTS, WITHOUT_CONST_TABLES);
+       tab != join_tab;
        tab= next_linear_tab(join, tab, WITHOUT_BUSH_ROOTS))
   {
     cache= tab->cache;
@@ -1590,6 +1591,7 @@ bool JOIN_CACHE::put_record()
 {
   bool is_full;
   uchar *link= 0;
+  DBUG_ASSERT(!for_explain_only);
   if (prev_cache)
     link= prev_cache->get_curr_rec_link();
   write_record_data(link, &is_full);
@@ -2170,12 +2172,12 @@ enum_nested_loop_state JOIN_CACHE::join_records(bool skip_last)
 
   if (!join_tab->first_unmatched)
   {
-    bool pfs_batch_update= join_tab->pfs_batch_update(join);
-    if (pfs_batch_update)
+    DBUG_ASSERT(join_tab->cached_pfs_batch_update == join_tab->pfs_batch_update());
+    if (join_tab->cached_pfs_batch_update)
       join_tab->table->file->start_psi_batch_mode();
     /* Find all records from join_tab that match records from join buffer */
     rc= join_matching_records(skip_last);   
-    if (pfs_batch_update)
+    if (join_tab->cached_pfs_batch_update)
       join_tab->table->file->end_psi_batch_mode();
     if (rc != NESTED_LOOP_OK && rc != NESTED_LOOP_NO_MORE_ROWS)
       goto finish;
@@ -2345,7 +2347,8 @@ enum_nested_loop_state JOIN_CACHE::join_matching_records(bool skip_last)
   if ((rc= join_tab_execution_startup(join_tab)) < 0)
     goto finish2;
 
-  if (join_tab->build_range_rowid_filter_if_needed())
+  if (join_tab->need_to_build_rowid_filter && 
+      join_tab->build_range_rowid_filter())
   {
     rc= NESTED_LOOP_ERROR;
     goto finish2;
@@ -2712,6 +2715,7 @@ bool JOIN_CACHE::save_explain_data(EXPLAIN_BKA_TYPE *explain)
   explain->incremental= MY_TEST(prev_cache);
 
   explain->join_buffer_size= get_join_buffer_size();
+  explain->is_bka= false;
 
   switch (get_join_alg()) {
   case BNL_JOIN_ALG:
@@ -2722,9 +2726,11 @@ bool JOIN_CACHE::save_explain_data(EXPLAIN_BKA_TYPE *explain)
     break;
   case BKA_JOIN_ALG:
     explain->join_alg= "BKA";
+    explain->is_bka= true;
     break;
   case BKAH_JOIN_ALG:
     explain->join_alg= "BKAH";
+    explain->is_bka= true;
     break;
   default:
     DBUG_ASSERT(0);
@@ -2829,7 +2835,7 @@ int JOIN_CACHE_HASHED::init(bool for_explain)
   if (for_explain)
     DBUG_RETURN(0);
 
-  if (!(key_buff= (uchar*) join->thd->alloc(key_length)))
+  if (!(key_buff= join->thd->alloc<uchar>(key_length)))
     DBUG_RETURN(1);
 
   /* Take into account a reference to the next record in the key chain */
@@ -4563,7 +4569,7 @@ bool JOIN_CACHE_BKA::skip_index_tuple(range_id_t range_info)
 {
   DBUG_ENTER("JOIN_CACHE_BKA::skip_index_tuple");
   get_record_by_pos((uchar*)range_info);
-  DBUG_RETURN(!join_tab->cache_idx_cond->val_int());
+  DBUG_RETURN(!join_tab->cache_idx_cond->val_bool());
 }
 
 
@@ -4827,7 +4833,7 @@ bool JOIN_CACHE_BKAH::skip_index_tuple(range_id_t range_info)
     next_rec_ref_ptr= get_next_rec_ref(next_rec_ref_ptr);
     uchar *rec_ptr= next_rec_ref_ptr + rec_fields_offset;
     get_record_by_pos(rec_ptr);
-    if (join_tab->cache_idx_cond->val_int())
+    if (join_tab->cache_idx_cond->val_bool())
       DBUG_RETURN(FALSE);
   } while(next_rec_ref_ptr != last_rec_ref_ptr);
   DBUG_RETURN(TRUE);

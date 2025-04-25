@@ -36,7 +36,6 @@ static longlong getopt_ll(char *arg, const struct my_option *optp, int *err);
 static ulonglong getopt_ull(char *, const struct my_option *, int *);
 static double getopt_double(char *arg, const struct my_option *optp, int *err);
 static void init_variables(const struct my_option *, init_func_p);
-static void init_one_value(const struct my_option *, void *, longlong);
 static void fini_one_value(const struct my_option *, void *, longlong);
 static int setval(const struct my_option *, void *, char *, my_bool, const char *);
 static char *check_struct_option(char *cur_arg, char *key_name);
@@ -87,6 +86,7 @@ my_bool my_handle_options_init_variables = 1;
 
 my_getopt_value my_getopt_get_addr= 0;
 
+ATTRIBUTE_FORMAT(printf, 2, 3)
 static void default_reporter(enum loglevel level, const char *format, ...)
 {
   va_list args;
@@ -109,6 +109,13 @@ union ull_dbl
   ulonglong ull;
   double dbl;
 };
+
+
+static inline int cmp_opt_name(const char *a, const char *b)
+{
+  return my_strcasecmp_latin1(a, b);
+}
+
 
 /**
   Returns an ulonglong value containing a raw
@@ -171,6 +178,26 @@ static void validate_value(const char *key, const char *value,
 #else
 #define validate_value(key, value, filename) (void)filename
 #endif
+
+#define SET_HO_ERROR_AND_CONTINUE(e) { ho_error= (e); (*argc)--; continue; }
+
+void warn_deprecated(const struct my_option *optp)
+{
+  char buf1[NAME_CHAR_LEN + 3];
+  strxmov(buf1, "--", optp->name, NullS);
+  convert_underscore_to_dash(buf1, strlen(buf1));
+  if (IS_DEPRECATED_NO_REPLACEMENT(optp->deprecation_substitute))
+    my_getopt_error_reporter(WARNING_LEVEL, "%s is deprecated and will be "
+      "removed in a future release", buf1);
+  else
+  {
+    char buf2[NAME_CHAR_LEN + 3];
+    strxmov(buf2, "--", optp->deprecation_substitute, NullS);
+    convert_underscore_to_dash(buf2, strlen(buf2));
+    my_getopt_error_reporter(WARNING_LEVEL, "%s is deprecated and will be "
+      "removed in a future release. Please use %s instead.", buf1, buf2);
+  }
+}
 
 /**
   Handle command line options.
@@ -241,7 +268,7 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
   const char *UNINIT_VAR(prev_found);
   const struct my_option *optp;
   void *value;
-  int error, i;
+  int ho_error= 0, error, i;
   my_bool is_cmdline_arg= 1;
   DBUG_ENTER("handle_options");
 
@@ -251,11 +278,11 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
   (*argc)--; /* Skip the program name */
   (*argv)++; /*      --- || ----      */
   if (my_handle_options_init_variables)
-    init_variables(longopts, init_one_value);
+    init_variables(longopts, my_getopt_init_one_value);
 
   is_cmdline_arg= !is_file_marker(**argv);
 
-  for (pos= *argv, pos_end=pos+ *argc; pos != pos_end ; pos++)
+  for (pos= *argv, pos_end=pos+ *argc; pos < pos_end ; pos++)
   {
     char **first= pos;
     char *cur_arg= *pos;
@@ -344,7 +371,7 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
                                                my_progname, special_opt_prefix[i],
                                                opt_str, special_opt_prefix[i],
                                                prev_found);
-		    DBUG_RETURN(EXIT_AMBIGUOUS_OPTION);
+		    SET_HO_ERROR_AND_CONTINUE(EXIT_AMBIGUOUS_OPTION)
 		  }
 		  switch (i) {
 		  case OPT_SKIP:
@@ -389,7 +416,7 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
                                          "%s: unknown variable '%s'",
                                          my_progname, cur_arg);
 	      if (!option_is_loose)
-		DBUG_RETURN(EXIT_UNKNOWN_VARIABLE);
+		SET_HO_ERROR_AND_CONTINUE(EXIT_UNKNOWN_VARIABLE)
 	    }
 	    else
 	    {
@@ -399,7 +426,7 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
                                          "%s: unknown option '--%s'", 
                                          my_progname, cur_arg);
 	      if (!option_is_loose)
-		DBUG_RETURN(EXIT_UNKNOWN_OPTION);
+		SET_HO_ERROR_AND_CONTINUE(EXIT_UNKNOWN_OPTION)
 	    }
 	    if (option_is_loose)
 	    {
@@ -416,7 +443,7 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
               my_getopt_error_reporter(ERROR_LEVEL,
                                        "%s: variable prefix '%s' is not unique",
                                        my_progname, opt_str);
-	    DBUG_RETURN(EXIT_VAR_PREFIX_NOT_UNIQUE);
+	    SET_HO_ERROR_AND_CONTINUE(EXIT_VAR_PREFIX_NOT_UNIQUE)
 	  }
 	  else
 	  {
@@ -425,7 +452,7 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
                                        "%s: ambiguous option '--%s' (%s, %s)",
                                        my_progname, opt_str, prev_found, 
                                        optp->name);
-	    DBUG_RETURN(EXIT_AMBIGUOUS_OPTION);
+	    SET_HO_ERROR_AND_CONTINUE(EXIT_AMBIGUOUS_OPTION)
 	  }
 	}
 	if ((optp->var_type & GET_TYPE_MASK) == GET_DISABLED)
@@ -439,14 +466,14 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
 	    (*argc)--;
 	    continue;
 	  }
-	  DBUG_RETURN(EXIT_OPTION_DISABLED);
+	  SET_HO_ERROR_AND_CONTINUE(EXIT_OPTION_DISABLED)
 	}
         error= 0;
 	value= optp->var_type & GET_ASK_ADDR
           ? (*my_getopt_get_addr)(key_name, (uint)strlen(key_name), optp, &error)
           : optp->value;
         if (error)
-          DBUG_RETURN(error);
+          SET_HO_ERROR_AND_CONTINUE(error)
 
 	if (optp->arg_type == NO_ARG)
 	{
@@ -461,7 +488,7 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
               my_getopt_error_reporter(ERROR_LEVEL,
                                        "%s: option '--%s' cannot take an argument",
                                        my_progname, optp->name);
-	    DBUG_RETURN(EXIT_NO_ARGUMENT_ALLOWED);
+	    SET_HO_ERROR_AND_CONTINUE(EXIT_NO_ARGUMENT_ALLOWED)
 	  }
 	  if ((optp->var_type & GET_TYPE_MASK) == GET_BOOL)
 	  {
@@ -472,12 +499,12 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
 	    */
 	    (*argc)--;
 	    if (!optend || *optend == '1' ||
-		!my_strcasecmp(&my_charset_latin1, optend, "true") ||
-		!my_strcasecmp(&my_charset_latin1, optend, "on"))
+		!cmp_opt_name(optend, "true") ||
+		!cmp_opt_name(optend, "on"))
 	      *((my_bool*) value)= (my_bool) 1;
 	    else if (*optend == '0' ||
-		     !my_strcasecmp(&my_charset_latin1, optend, "false") ||
-                     !my_strcasecmp(&my_charset_latin1, optend, "off"))
+		     !cmp_opt_name(optend, "false") ||
+                     !cmp_opt_name(optend, "off"))
 	      *((my_bool*) value)= (my_bool) 0;
 	    else
 	    {
@@ -490,7 +517,9 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
             if (get_one_option(optp, *((my_bool*) value) ?
                                enabled_my_option : disabled_my_option,
                                filename))
-              DBUG_RETURN(EXIT_ARGUMENT_INVALID);
+              SET_HO_ERROR_AND_CONTINUE(EXIT_ARGUMENT_INVALID)
+            if (optp->deprecation_substitute)
+              warn_deprecated(optp);
 	    continue;
 	  }
 	  argument= optend;
@@ -504,7 +533,7 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
                                      "option '--%s' cannot take an argument",
                                      my_progname, optp->name);
 
-	    DBUG_RETURN(EXIT_NO_ARGUMENT_ALLOWED);
+	    SET_HO_ERROR_AND_CONTINUE(EXIT_NO_ARGUMENT_ALLOWED)
 	  }
 	  if (!(optp->var_type & GET_AUTO))
 	  {
@@ -514,7 +543,7 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
 				     "unsupported by option '--%s'",
                                      my_progname, optp->name);
 	    if (!option_is_loose)
-	      DBUG_RETURN(EXIT_ARGUMENT_INVALID);
+	      SET_HO_ERROR_AND_CONTINUE(EXIT_ARGUMENT_INVALID)
 	    continue;
 	  }
 	  else
@@ -533,7 +562,7 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
               my_getopt_error_reporter(ERROR_LEVEL,
                                        "%s: option '--%s' requires an argument",
                                        my_progname, optp->name);
-	    DBUG_RETURN(EXIT_ARGUMENT_REQUIRED);
+	    SET_HO_ERROR_AND_CONTINUE(EXIT_ARGUMENT_REQUIRED)
 	  }
 	  argument= *pos;
 	  (*argc)--;
@@ -558,14 +587,16 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
 		  fprintf(stderr,
 			  "%s: ERROR: Option '-%c' used, but is disabled\n",
 			  my_progname, optp->id);
-		DBUG_RETURN(EXIT_OPTION_DISABLED);
+		SET_HO_ERROR_AND_CONTINUE(EXIT_OPTION_DISABLED)
 	      }
 	      if ((optp->var_type & GET_TYPE_MASK) == GET_BOOL &&
 		  optp->arg_type == NO_ARG)
 	      {
 		*((my_bool*) optp->value)= (my_bool) 1;
                 if (get_one_option(optp, argument, filename))
-                  DBUG_RETURN(EXIT_UNSPECIFIED_ERROR);
+                  SET_HO_ERROR_AND_CONTINUE(EXIT_UNSPECIFIED_ERROR)
+                if (optp->deprecation_substitute)
+                  warn_deprecated(optp);
 		continue;
 	      }
 	      else if (optp->arg_type == REQUIRED_ARG ||
@@ -585,7 +616,9 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
                     if (optp->var_type == GET_BOOL)
                       *((my_bool*) optp->value)= (my_bool) 1;
                     if (get_one_option(optp, argument, filename))
-                      DBUG_RETURN(EXIT_UNSPECIFIED_ERROR);
+                      SET_HO_ERROR_AND_CONTINUE(EXIT_UNSPECIFIED_ERROR)
+                    if (optp->deprecation_substitute)
+                      warn_deprecated(optp);
                     continue;
                   }
 		  /* Check if there are more arguments after this one */
@@ -595,7 +628,7 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
                       my_getopt_error_reporter(ERROR_LEVEL,
                                                "%s: option '-%c' requires an argument",
                                                my_progname, optp->id);
-                    DBUG_RETURN(EXIT_ARGUMENT_REQUIRED);
+                    SET_HO_ERROR_AND_CONTINUE(EXIT_ARGUMENT_REQUIRED)
 		  }
 		  argument= *++pos;
 		  (*argc)--;
@@ -603,10 +636,12 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
 		}
 	      }
 	      if ((error= setval(optp, optp->value, argument,
-                             set_maximum_value,filename)))
-		DBUG_RETURN(error);
+                                 set_maximum_value,filename)))
+		SET_HO_ERROR_AND_CONTINUE(error)
               if (get_one_option(optp, argument, filename))
-                DBUG_RETURN(EXIT_UNSPECIFIED_ERROR);
+                SET_HO_ERROR_AND_CONTINUE(EXIT_UNSPECIFIED_ERROR)
+              if (optp->deprecation_substitute)
+                warn_deprecated(optp);
 	      break;
 	    }
 	  }
@@ -640,7 +675,7 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
                 my_getopt_error_reporter(ERROR_LEVEL,
                                          "%s: unknown option '-%c'",
                                          my_progname, *optend);
-              DBUG_RETURN(EXIT_UNKNOWN_OPTION);
+              SET_HO_ERROR_AND_CONTINUE(EXIT_UNKNOWN_OPTION)
             }
 	  }
 	}
@@ -651,15 +686,19 @@ int handle_options(int *argc, char ***argv, const struct my_option *longopts,
       if ((!option_is_autoset) &&
         ((error= setval(optp, value, argument, set_maximum_value,filename))) &&
           !option_is_loose)
-	DBUG_RETURN(error);
+	SET_HO_ERROR_AND_CONTINUE(error)
       if (get_one_option(optp, argument, filename))
-        DBUG_RETURN(EXIT_UNSPECIFIED_ERROR);
+        SET_HO_ERROR_AND_CONTINUE(EXIT_UNSPECIFIED_ERROR)
+      if (optp->deprecation_substitute)
+        warn_deprecated(optp);
 
       (*argc)--; /* option handled (long), decrease argument count */
     }
     else /* non-option found */
       (*argv)[argvpos++]= cur_arg;
   }
+  if (ho_error)
+    DBUG_RETURN(ho_error);
   /*
     Destroy the first, already handled option, so that programs that look
     for arguments in 'argv', without checking 'argc', know when to stop.
@@ -728,13 +767,13 @@ static my_bool get_bool_argument(const struct my_option *opts,
 {
   DBUG_ENTER("get_bool_argument");
 
-  if (!my_strcasecmp(&my_charset_latin1, argument, "true") ||
-      !my_strcasecmp(&my_charset_latin1, argument, "on") ||
-      !my_strcasecmp(&my_charset_latin1, argument, "1"))
+  if (!cmp_opt_name(argument, "true") ||
+      !cmp_opt_name(argument, "on") ||
+      !cmp_opt_name(argument, "1"))
     DBUG_RETURN(1);
-  else if (!my_strcasecmp(&my_charset_latin1, argument, "false") ||
-      !my_strcasecmp(&my_charset_latin1, argument, "off") ||
-      !my_strcasecmp(&my_charset_latin1, argument, "0"))
+  else if (!cmp_opt_name(argument, "false") ||
+      !cmp_opt_name(argument, "off") ||
+      !cmp_opt_name(argument, "0"))
     DBUG_RETURN(0);
   my_getopt_error_reporter(WARNING_LEVEL,
       "option '%s': boolean value '%s' wasn't recognized. Set to OFF.",
@@ -838,7 +877,7 @@ static int setval(const struct my_option *opts, void *value, char *argument,
       if (err)
       {
         /* Check if option 'all' is used (to set all bits) */
-        if (!my_strcasecmp(&my_charset_latin1, argument, "all"))
+        if (!cmp_opt_name(argument, "all"))
           *(ulonglong*) value= ((1ULL << opts->typelib->count) - 1);
         else
         {
@@ -899,11 +938,13 @@ static int setval(const struct my_option *opts, void *value, char *argument,
     }
     if (err)
     {
-      res= EXIT_UNKNOWN_SUFFIX;
+      res= err;
       goto ret;
     };
   }
+
   validate_value(opts->name, argument, option_file);
+
   DBUG_RETURN(0);
 
 ret:
@@ -1034,7 +1075,7 @@ static inline ulonglong eval_num_suffix(char *suffix, int *error)
   case 'E':
     return 1ULL << 60;
   default:
-    *error= 1;
+    *error= EXIT_UNKNOWN_SUFFIX;
     return 0ULL;
   }
 }
@@ -1060,15 +1101,18 @@ static longlong eval_num_suffix_ll(char *argument,
   if (errno == ERANGE)
   {
     my_getopt_error_reporter(ERROR_LEVEL,
-                             "Incorrect integer value: '%s'", argument);
-    *error= 1;
+                             "Integer value out of range for int64:"
+                             " '%s' for %s",
+                             argument, option_name);
+    *error= EXIT_ARGUMENT_INVALID;
     DBUG_RETURN(0);
   }
   num*= eval_num_suffix(endchar, error);
   if (*error)
-    fprintf(stderr,
-	    "Unknown suffix '%c' used for variable '%s' (value '%s')\n",
-	    *endchar, option_name, argument);
+    my_getopt_error_reporter(ERROR_LEVEL,
+                             "Unknown suffix '%c' used for variable '%s' (value '%s'). "
+                             "Legal suffix characters are: K, M, G, T, P, E",
+                             *endchar, option_name, argument);
   DBUG_RETURN(num);
 }
 
@@ -1091,7 +1135,7 @@ static ulonglong eval_num_suffix_ull(char *argument,
     my_getopt_error_reporter(ERROR_LEVEL,
                              "Incorrect unsigned value: '%s' for %s",
                              argument, option_name);
-    *error= 1;
+    *error= EXIT_ARGUMENT_INVALID;
     DBUG_RETURN(0);
   }
   *error= 0;
@@ -1100,15 +1144,18 @@ static ulonglong eval_num_suffix_ull(char *argument,
   if (errno == ERANGE)
   {
     my_getopt_error_reporter(ERROR_LEVEL,
-                             "Incorrect integer value: '%s' for %s",
+                             "Integer value out of range for uint64:"
+                             " '%s' for %s",
                              argument, option_name);
-    *error= 1;
+    *error= EXIT_ARGUMENT_INVALID;
     DBUG_RETURN(0);
   }
   num*= eval_num_suffix(endchar, error);
   if (*error)
     my_getopt_error_reporter(ERROR_LEVEL,
-                             "Unknown suffix '%c' used for variable '%s' (value '%s')",
+                             "Unknown suffix '%c' used for variable '%s'"
+                             " (value '%s')."
+                             " Legal suffix characters are: K, M, G, T, P, E",
                              *endchar, option_name, argument);
   DBUG_RETURN(num);
 }
@@ -1128,6 +1175,8 @@ static ulonglong eval_num_suffix_ull(char *argument,
 static longlong getopt_ll(char *arg, const struct my_option *optp, int *err)
 {
   longlong num=eval_num_suffix_ll(arg, err, (char*) optp->name);
+  if (*err)
+    return(0);
   return getopt_ll_limit_value(num, optp, NULL);
 }
 
@@ -1205,6 +1254,8 @@ longlong getopt_ll_limit_value(longlong num, const struct my_option *optp,
 static ulonglong getopt_ull(char *arg, const struct my_option *optp, int *err)
 {
   ulonglong num= eval_num_suffix_ull(arg, err, (char*) optp->name);
+  if (*err)
+    return(0);
   return getopt_ull_limit_value(num, optp, NULL);
 }
 
@@ -1330,13 +1381,13 @@ static double getopt_double(char *arg, const struct my_option *optp, int *err)
   Init one value to it's default values
 
   SYNOPSIS
-    init_one_value()
+    my_getopt_init_one_value()
     option              Option to initialize
     value               Pointer to variable
 */
 
-static void init_one_value(const struct my_option *option, void *variable,
-			   longlong value)
+void my_getopt_init_one_value(const struct my_option *option, void *variable,
+                              longlong value)
 {
   DBUG_ENTER("init_one_value");
   switch ((option->var_type & GET_TYPE_MASK)) {
@@ -1419,7 +1470,7 @@ static void init_one_value(const struct my_option *option, void *variable,
   Init one value to it's default values
 
   SYNOPSIS
-    init_one_value()
+    fini_one_value()
     option		Option to initialize
     value		Pointer to variable
 */
@@ -1636,6 +1687,23 @@ void my_print_help(const struct my_option *options)
           col= print_comment(optp->typelib->type_names[i], col, name_space, comment_space);
         }
       }
+      if ((optp->var_type & GET_TYPE_MASK) == GET_SET)
+        col= print_comment(", or ALL to set all combinations", col, name_space, comment_space);
+      if (optp->deprecation_substitute != NULL)
+      {
+        col= print_comment(". Deprecated, will be removed in a future release.",
+                           col, name_space, comment_space);
+        if (!IS_DEPRECATED_NO_REPLACEMENT(optp->deprecation_substitute))
+        {
+          char buf1[NAME_CHAR_LEN + 3];
+          DBUG_ASSERT(strlen(optp->deprecation_substitute) < NAME_CHAR_LEN);
+          strxmov(buf1, "--", optp->deprecation_substitute, NullS);
+          convert_underscore_to_dash(buf1, strlen(buf1));
+          col= print_comment(" Please use ", col, name_space, comment_space);
+          col= print_comment(buf1, col, name_space, comment_space);
+          col= print_comment(" instead.", col, name_space, comment_space);
+        }
+      }
     }
     putchar('\n');
     if ((optp->var_type & GET_TYPE_MASK) == GET_BOOL ||
@@ -1648,8 +1716,6 @@ void my_print_help(const struct my_option *options)
         printf(" to disable.)\n");
       }
     }
-    else if ((optp->var_type & GET_TYPE_MASK) == GET_SET)
-      printf("  Use 'ALL' to set all combinations.\n");
   }
   DBUG_VOID_RETURN;
 }
@@ -1753,7 +1819,7 @@ void my_print_variables(const struct my_option *options)
 	printf("%s\n", buff);
 	break;
       case GET_DOUBLE:
-	printf("%g\n", *(double*) value);
+	printf("%.10g\n", *(double*) value);
 	break;
       case GET_NO_ARG:
 	printf("(No default value)\n");

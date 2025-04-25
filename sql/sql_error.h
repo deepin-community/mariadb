@@ -167,7 +167,7 @@ protected:
   /** Severity (error, warning, note) of this condition. */
   enum_warning_level m_level;
 
-  void assign_defaults(const Sql_state_errno *value);
+  void assign_defaults(THD *thd, const Sql_state_errno *value);
 
 public:
   /**
@@ -875,6 +875,14 @@ public:
     len= err_conv(err_buffer, (uint) sizeof(err_buffer), str, (uint) len, cs);
     return {err_buffer, len};
   }
+  LEX_CSTRING set_strq(const char *str, size_t len, CHARSET_INFO *cs) const
+  {
+    DBUG_ASSERT(len < UINT_MAX32);
+    len= err_conv(err_buffer+1, (uint) sizeof(err_buffer)-2, str, (uint) len, cs);
+    err_buffer[0]= err_buffer[len+1]= '\'';
+    err_buffer[len+2]= 0;
+    return {err_buffer, len+2};
+  }
   LEX_CSTRING set_mysql_time(const MYSQL_TIME *ltime) const
   {
     int length= my_TIME_to_str(ltime, err_buffer, AUTO_SEC_PART_DIGITS);
@@ -898,6 +906,7 @@ public:
 
 class ErrConvString : public ErrConv
 {
+protected:
   const char *str;
   size_t len;
   CHARSET_INFO *cs;
@@ -911,6 +920,16 @@ public:
   LEX_CSTRING lex_cstring() const override
   {
     return set_str(str, len, cs);
+  }
+};
+
+class ErrConvStringQ : public ErrConvString
+{
+public:
+  using ErrConvString::ErrConvString;
+  LEX_CSTRING lex_cstring() const override
+  {
+    return set_strq(str, len, cs);
   }
 };
 
@@ -1076,6 +1095,11 @@ public:
   {
     DBUG_ASSERT(m_status == DA_OK || m_status == DA_OK_BULK);
     return m_affected_rows;
+  }
+
+  void set_message(const char *msg)
+  {
+    strmake_buf(m_message, msg);
   }
 
   ulonglong last_insert_id() const
@@ -1308,7 +1332,8 @@ void push_warning(THD *thd, Sql_condition::enum_warning_level level,
                   uint code, const char *msg);
 
 void push_warning_printf(THD *thd, Sql_condition::enum_warning_level level,
-                         uint code, const char *format, ...);
+                         uint code, const char *format, ...)
+                         ATTRIBUTE_FORMAT(printf, 4, 5);
 
 bool mysqld_show_warnings(THD *thd, ulong levels_to_show);
 

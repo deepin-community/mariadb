@@ -1,6 +1,6 @@
 /* arm_startup.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -51,7 +51,7 @@ void memcpy32(uint32_t* src, uint32_t* dst_beg, uint32_t* dst_end)
 void meminit32(uint32_t* start, uint32_t* end)
 {
     while (start < end) {
-	    *start++ = 0;
+        *start++ = 0;
     }
 }
 

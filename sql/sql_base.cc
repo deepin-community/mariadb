@@ -1,5 +1,5 @@
 /* Copyright (c) 2000, 2016, Oracle and/or its affiliates.
-   Copyright (c) 2010, 2022, MariaDB
+   Copyright (c) 2010, 2024, MariaDB
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -47,6 +47,8 @@
 #include "sql_prepare.h"
 #include "sql_statistics.h"
 #include "sql_cte.h"
+#include "sql_update.h"  // class Sql_cmd_update
+#include "sql_delete.h"  // class Sql_cmd_delete
 #include <m_ctype.h>
 #include <my_dir.h>
 #include <hash.h>
@@ -54,6 +56,7 @@
 #include "sql_table.h"                          // build_table_filename
 #include "datadict.h"   // dd_frm_is_view()
 #include "rpl_rli.h"   // rpl_group_info
+#include "vector_mhnsw.h"
 #ifdef  _WIN32
 #include <io.h>
 #endif
@@ -74,7 +77,9 @@ No_such_table_error_handler::handle_condition(THD *,
   *cond_hdl= NULL;
   if (!first_error)
     first_error= sql_errno;
-  if (sql_errno == ER_NO_SUCH_TABLE || sql_errno == ER_NO_SUCH_TABLE_IN_ENGINE)
+  if (sql_errno == ER_NO_SUCH_TABLE
+      || sql_errno == ER_NO_SUCH_TABLE_IN_ENGINE
+      || sql_errno == ER_UNKNOWN_SEQUENCES)
   {
     m_handled_errors++;
     return TRUE;
@@ -114,7 +119,7 @@ public:
                         const char* sqlstate,
                         Sql_condition::enum_warning_level *level,
                         const char* msg,
-                        Sql_condition ** cond_hdl);
+                        Sql_condition ** cond_hdl) override;
 
   /**
     Returns TRUE if there were ER_NO_SUCH_/WRONG_MRG_TABLE and there
@@ -198,9 +203,9 @@ uint get_table_def_key(const TABLE_LIST *table_list, const char **key)
     is properly initialized, so table definition cache can be produced
     from key used by MDL subsystem.
   */
-  DBUG_ASSERT(!strcmp(table_list->get_db_name(),
+  DBUG_ASSERT(!strcmp(table_list->get_db_name().str,
                       table_list->mdl_request.key.db_name()));
-  DBUG_ASSERT(!strcmp(table_list->get_table_name(),
+  DBUG_ASSERT(!strcmp(table_list->get_table_name().str,
                       table_list->mdl_request.key.name()));
 
   *key= (const char*)table_list->mdl_request.key.ptr() + 1;
@@ -231,33 +236,41 @@ uint get_table_def_key(const TABLE_LIST *table_list, const char **key)
     #		Pointer to list of names of open tables.
 */
 
-struct list_open_tables_arg
+class list_open_tables_arg
 {
+public:
   THD *thd;
-  const char *db;
+  const Lex_ident_db db;
   const char *wild;
   TABLE_LIST table_list;
   OPEN_TABLE_LIST **start_list, *open_list;
+
+  list_open_tables_arg(THD *thd_arg, const LEX_CSTRING &db_arg,
+                       const char *wild_arg)
+   :thd(thd_arg), db(db_arg), wild(wild_arg),
+    start_list(&open_list), open_list(0)
+  {
+    bzero((char*) &table_list, sizeof(table_list));
+  }
 };
 
 
-static my_bool list_open_tables_callback(TDC_element *element,
-                                         list_open_tables_arg *arg)
+static my_bool list_open_tables_callback(void *el, void *a)
 {
-  const char *db= (char*) element->m_key;
-  size_t db_length= strlen(db);
-  const char *table_name= db + db_length + 1;
+  TDC_element *element= static_cast<TDC_element*>(el);
+  list_open_tables_arg *arg= static_cast<list_open_tables_arg*>(a);
+  const Lex_ident_db
+    db= Lex_ident_db(Lex_cstring_strlen((const char*) element->m_key));
+  const char *table_name= db.str + db.length + 1;
 
-  if (arg->db && my_strcasecmp(system_charset_info, arg->db, db))
+  if (arg->db.str && !arg->db.streq(db))
     return FALSE;
   if (arg->wild && wild_compare(table_name, arg->wild, 0))
     return FALSE;
 
   /* Check if user has SELECT privilege for any column in the table */
-  arg->table_list.db.str= db;
-  arg->table_list.db.length= db_length;
-  arg->table_list.table_name.str= table_name;
-  arg->table_list.table_name.length= strlen(table_name);
+  arg->table_list.db= db;
+  arg->table_list.table_name= Lex_cstring_strlen(table_name);
   arg->table_list.grant.privilege= NO_ACL;
 
   if (check_table_access(arg->thd, SELECT_ACL, &arg->table_list, TRUE, 1, TRUE))
@@ -269,7 +282,7 @@ static my_bool list_open_tables_callback(TDC_element *element,
 
   strmov((*arg->start_list)->table=
          strmov(((*arg->start_list)->db= (char*) ((*arg->start_list) + 1)),
-                db) + 1, table_name);
+                db.str) + 1, table_name);
   (*arg->start_list)->in_use= 0;
 
   mysql_mutex_lock(&element->LOCK_table_share);
@@ -286,20 +299,14 @@ static my_bool list_open_tables_callback(TDC_element *element,
 }
 
 
-OPEN_TABLE_LIST *list_open_tables(THD *thd, const char *db, const char *wild)
+OPEN_TABLE_LIST *list_open_tables(THD *thd,
+                                  const LEX_CSTRING &db,
+                                  const char *wild)
 {
-  list_open_tables_arg argument;
   DBUG_ENTER("list_open_tables");
+  list_open_tables_arg argument(thd, db, wild);
 
-  argument.thd= thd;
-  argument.db= db;
-  argument.wild= wild;
-  bzero((char*) &argument.table_list, sizeof(argument.table_list));
-  argument.start_list= &argument.open_list;
-  argument.open_list= 0;
-
-  if (tdc_iterate(thd, (my_hash_walk_action) list_open_tables_callback,
-                  &argument, true))
+  if (tdc_iterate(thd, list_open_tables_callback, &argument, true))
     DBUG_RETURN(0);
 
   DBUG_RETURN(argument.open_list);
@@ -458,9 +465,10 @@ struct tc_collect_arg
   flush_tables_type flush_type;
 };
 
-static my_bool tc_collect_used_shares(TDC_element *element,
-                                      tc_collect_arg *arg)
+static my_bool tc_collect_used_shares(void *el, void *a)
 {
+  TDC_element *element= static_cast<TDC_element*>(el);
+  tc_collect_arg *arg= static_cast<tc_collect_arg*>(a);
   my_bool result= FALSE;
 
   DYNAMIC_ARRAY *shares= &arg->shares;
@@ -512,7 +520,7 @@ public:
                         const char* sqlstate,
                         Sql_condition::enum_warning_level *level,
                         const char* msg,
-                        Sql_condition ** cond_hdl)
+                        Sql_condition ** cond_hdl) override
   {
     *cond_hdl= NULL;
     if (sql_errno == ER_OPEN_AS_READONLY || sql_errno == ER_LOCK_WAIT_TIMEOUT)
@@ -570,8 +578,7 @@ bool flush_tables(THD *thd, flush_tables_type flag)
   my_init_dynamic_array(PSI_INSTRUMENT_ME, &collect_arg.shares,
                         sizeof(TABLE_SHARE*), 100, 100, MYF(0));
   collect_arg.flush_type= flag;
-  if (tdc_iterate(thd, (my_hash_walk_action) tc_collect_used_shares,
-                  &collect_arg, true))
+  if (tdc_iterate(thd, tc_collect_used_shares, &collect_arg, true))
   {
     /* Release already collected shares */
     for (uint i= 0 ; i < collect_arg.shares.elements ; i++)
@@ -777,6 +784,22 @@ close_all_tables_for_name(THD *thd, TABLE_SHARE *share,
   }
 }
 
+static inline bool check_field_pointers(const TABLE *table)
+{
+  for (Field **pf= table->field; *pf; pf++)
+  {
+    Field *f= *pf;
+    if (f->ptr < table->record[0] || f->ptr > table->record[0]
+                                              + table->s->reclength)
+      return false;
+    if (f->null_ptr &&
+        (f->null_ptr < table->record[0] || f->null_ptr > table->record[0]
+                                                       + table->s->reclength))
+      return false;
+  }
+  return true;
+}
+
 
 int close_thread_tables_for_query(THD *thd)
 {
@@ -812,8 +835,10 @@ int close_thread_tables(THD *thd)
 {
   TABLE *table;
   int error= 0;
+  PSI_stage_info org_stage;
   DBUG_ENTER("close_thread_tables");
 
+  thd->backup_stage(&org_stage);
   THD_STAGE_INFO(thd, stage_closing_tables);
 
 #ifdef EXTRA_DEBUG
@@ -837,6 +862,8 @@ int close_thread_tables(THD *thd)
     /* Table might be in use by some outer statement. */
     DBUG_PRINT("tcache", ("table: '%s'  query_id: %lu",
                           table->s->table_name.str, (ulong) table->query_id));
+
+    DBUG_SLOW_ASSERT(check_field_pointers(table));
 
     if (thd->locked_tables_mode)
     {
@@ -925,11 +952,14 @@ int close_thread_tables(THD *thd)
 
       Note that even if we are in LTM_LOCK_TABLES mode and statement
       requires prelocking (e.g. when we are closing tables after
-      failing ot "open" all tables required for statement execution)
+      failing at "open" all tables required for statement execution)
       we will exit this function a few lines below.
     */
     if (! thd->lex->requires_prelocking())
-      DBUG_RETURN(0);
+    {
+      error= 0;
+      goto end;
+    }
 
     /*
       We are in the top-level statement of a prelocked statement,
@@ -940,7 +970,10 @@ int close_thread_tables(THD *thd)
       thd->locked_tables_mode= LTM_LOCK_TABLES;
 
     if (thd->locked_tables_mode == LTM_LOCK_TABLES)
-      DBUG_RETURN(0);
+    {
+      error= 0;
+      goto end;
+    }
 
     thd->leave_locked_tables_mode();
 
@@ -950,16 +983,13 @@ int close_thread_tables(THD *thd)
   if (thd->lock)
   {
     /*
-      For RBR we flush the pending event just before we unlock all the
-      tables.  This means that we are at the end of a topmost
-      statement, so we ensure that the STMT_END_F flag is set on the
-      pending event.  For statements that are *inside* stored
-      functions, the pending event will not be flushed: that will be
-      handled either before writing a query log event (inside
-      binlog_query()) or when preparing a pending event.
-     */
-    (void)thd->binlog_flush_pending_rows_event(TRUE);
-    error= mysql_unlock_tables(thd, thd->lock);
+      Ensure binlog caches has been flushed in binlog_query() or
+      binlog_commit().
+    */
+    DBUG_ASSERT((thd->state_flags & Open_tables_state::BACKUPS_AVAIL) ||
+                !thd->has_pending_row_events());
+    if (mysql_unlock_tables(thd, thd->lock))
+      error= 1;
     thd->lock=0;
   }
   /*
@@ -969,6 +999,8 @@ int close_thread_tables(THD *thd)
   while (thd->open_tables)
     (void) close_thread_table(thd, &thd->open_tables);
 
+end:
+  THD_STAGE_INFO(thd, org_stage);
   DBUG_RETURN(error);
 }
 
@@ -1002,9 +1034,7 @@ void close_thread_table(THD *thd, TABLE **table_ptr)
 
   file->update_global_table_stats();
   file->update_global_index_stats();
-  if (unlikely(thd->variables.log_slow_verbosity &
-               LOG_SLOW_VERBOSITY_ENGINE) &&
-      likely(file->handler_stats))
+  if (unlikely(file->handler_stats) && file->handler_stats->active)
   {
     Exec_time_tracker *tracker;
     if ((tracker= file->get_time_tracker()))
@@ -1012,7 +1042,7 @@ void close_thread_table(THD *thd, TABLE **table_ptr)
     thd->handler_stats.add(file->handler_stats);
   }
   /*
-    This look is needed to allow THD::notify_shared_lock() to
+    This lock is needed to allow THD::notify_shared_lock() to
     traverse the thd->open_tables list without having to worry that
     some of the tables are removed from under it
   */
@@ -1113,7 +1143,6 @@ TABLE_LIST* find_dup_table(THD *thd, TABLE_LIST *table, TABLE_LIST *table_list,
                            uint check_flag)
 {
   TABLE_LIST *res= 0;
-  LEX_CSTRING *d_name, *t_name, *t_alias;
   DBUG_ENTER("find_dup_table");
   DBUG_PRINT("enter", ("table alias: %s", table->alias.str));
 
@@ -1127,7 +1156,11 @@ TABLE_LIST* find_dup_table(THD *thd, TABLE_LIST *table, TABLE_LIST *table_list,
     (table->table equal to 0) and right names is in current TABLE_LIST
     object.
   */
-  if (table->table)
+  if (table->table &&
+      thd->lex->sql_command != SQLCOM_UPDATE &&
+      thd->lex->sql_command != SQLCOM_UPDATE_MULTI &&
+      thd->lex->sql_command != SQLCOM_DELETE &&
+      thd->lex->sql_command != SQLCOM_DELETE_MULTI)
   {
     /* All MyISAMMRG children are plain MyISAM tables. */
     DBUG_ASSERT(table->table->file->ht->db_type != DB_TYPE_MRG_MYISAM);
@@ -1139,12 +1172,12 @@ TABLE_LIST* find_dup_table(THD *thd, TABLE_LIST *table, TABLE_LIST *table_list,
     */
     DBUG_ASSERT(table);
   }
-  d_name= &table->db;
-  t_name= &table->table_name;
-  t_alias= &table->alias;
+  const Lex_ident_db d_name= table->db;
+  const Lex_ident_table t_name= table->table_name;
+  const Lex_ident_table t_alias= table->alias;
 
 retry:
-  DBUG_PRINT("info", ("real table: %s.%s", d_name->str, t_name->str));
+  DBUG_PRINT("info", ("real table: %s.%s", d_name.str, t_name.str));
   for (TABLE_LIST *tl= table_list; tl ; tl= tl->next_global, res= 0)
   {
     if (tl->select_lex && tl->select_lex->master_unit() &&
@@ -1160,7 +1193,7 @@ retry:
       Table is unique if it is present only once in the global list
       of tables and once in the list of table locks.
     */
-    if (! (res= find_table_in_global_list(tl, d_name, t_name)))
+    if (! (res= find_table_in_global_list(tl, &d_name, &t_name)))
       break;
     tl= res;                       // We can continue search after this table
 
@@ -1180,7 +1213,7 @@ retry:
     /* Skip if table alias does not match. */
     if (check_flag & CHECK_DUP_ALLOW_DIFFERENT_ALIAS)
     {
-      if (my_strcasecmp(table_alias_charset, t_alias->str, res->alias.str))
+      if (!t_alias.streq(res->alias))
         continue;
     }
 
@@ -1211,16 +1244,42 @@ retry:
       We come here for queries of type:
       INSERT INTO t1 (SELECT tmp.a FROM (select * FROM t1) as tmp);
 
-      Try to fix by materializing the derived table
+      Try to fix by materializing the derived table if one can't do without it.
     */
     TABLE_LIST *derived=  res->belong_to_derived;
     if (derived->is_merged_derived() && !derived->derived->is_excluded())
     {
-      DBUG_PRINT("info",
+      bool materialize= true;
+      if (thd->lex->sql_command == SQLCOM_UPDATE)
+      {
+        Sql_cmd_update *cmd= (Sql_cmd_update *) (thd->lex->m_sql_cmd);
+        if (cmd->is_multitable() || derived->derived->outer_select())
+          materialize= false;
+        else if (!cmd->processing_as_multitable_update_prohibited(thd))
+	{
+          cmd->set_as_multitable();
+          materialize= false;
+        }
+      }
+      else if (thd->lex->sql_command == SQLCOM_DELETE)
+     {
+        Sql_cmd_delete *cmd= (Sql_cmd_delete *) (thd->lex->m_sql_cmd);
+        if (cmd->is_multitable() || derived->derived->outer_select())
+          materialize= false;
+        else if (!cmd->processing_as_multitable_delete_prohibited(thd))
+	{
+          cmd->set_as_multitable();
+          materialize= false;
+        }
+      }
+      if (materialize)
+      {
+        DBUG_PRINT("info",
                  ("convert merged to materialization to resolve the conflict"));
-      derived->change_refs_to_fields();
-      derived->set_materialized_derived();
-      goto retry;
+        derived->change_refs_to_fields();
+        derived->set_materialized_derived();
+        goto retry;
+      }
     }
   }
   DBUG_RETURN(res);
@@ -1308,12 +1367,8 @@ void update_non_unique_table_error(TABLE_LIST *update,
   duplicate= duplicate->top_table();
   if (!update->view || !duplicate->view ||
       update->view == duplicate->view ||
-      update->view_name.length != duplicate->view_name.length ||
-      update->view_db.length != duplicate->view_db.length ||
-      lex_string_cmp(table_alias_charset,
-                     &update->view_name, &duplicate->view_name) != 0 ||
-      lex_string_cmp(table_alias_charset,
-                     &update->view_db, &duplicate->view_db) != 0)
+      !update->view_name.streq(duplicate->view_name) ||
+      !update->view_db.streq(duplicate->view_db))
   {
     /*
       it is not the same view repeated (but it can be parts of the same copy
@@ -1422,7 +1477,7 @@ void drop_open_table(THD *thd, TABLE *table, const LEX_CSTRING *db_name,
     table->s->tdc->flush(thd, true);
     close_thread_table(thd, &thd->open_tables);
     /* Remove the table from the storage engine and rm the .frm. */
-    quick_rm_table(thd, table_type, db_name, table_name, 0);
+    quick_rm_table(thd, table_type, db_name, table_name, QRMT_DEFAULT);
  }
   DBUG_VOID_RETURN;
 }
@@ -1441,14 +1496,14 @@ public:
     : m_ot_ctx(ot_ctx_arg), m_is_active(FALSE)
   {}
 
-  virtual ~MDL_deadlock_handler() = default;
+  ~MDL_deadlock_handler() override = default;
 
-  virtual bool handle_condition(THD *thd,
+  bool handle_condition(THD *thd,
                                 uint sql_errno,
                                 const char* sqlstate,
                                 Sql_condition::enum_warning_level *level,
                                 const char* msg,
-                                Sql_condition ** cond_hdl);
+                                Sql_condition ** cond_hdl) override;
 
 private:
   /** Open table context to be used for back-off request. */
@@ -1858,12 +1913,13 @@ bool open_table(THD *thd, TABLE_LIST *table_list, Open_table_context *ot_ctx)
   TABLE *table;
   const char *key;
   uint	key_length;
-  const char *alias= table_list->alias.str;
+  const LEX_CSTRING &alias= table_list->alias;
   uint flags= ot_ctx->get_flags();
   MDL_ticket *mdl_ticket;
   TABLE_SHARE *share;
   uint gts_flags;
   bool from_share= false;
+  bool is_write_lock_request= table_list->mdl_request.is_write_lock_request();
 #ifdef WITH_PARTITION_STORAGE_ENGINE
   int part_names_error=0;
 #endif
@@ -1893,7 +1949,7 @@ bool open_table(THD *thd, TABLE_LIST *table_list, Open_table_context *ot_ctx)
     Note that we allow write locks on log tables as otherwise logging
     to general/slow log would be disabled in read only transactions.
   */
-  if (table_list->mdl_request.is_write_lock_request() &&
+  if (is_write_lock_request &&
       thd->tx_read_only &&
       !(flags & (MYSQL_LOCK_LOG_TABLE | MYSQL_OPEN_HAS_MDL_LOCK)))
   {
@@ -1926,7 +1982,7 @@ bool open_table(THD *thd, TABLE_LIST *table_list, Open_table_context *ot_ctx)
       if (table->s->table_cache_key.length == key_length &&
 	  !memcmp(table->s->table_cache_key.str, key, key_length))
       {
-        if (!my_strcasecmp(system_charset_info, table->alias.c_ptr(), alias) &&
+        if (Lex_ident_table(table->alias.to_lex_cstring()).streq(alias) &&
             table->query_id != thd->query_id && /* skip tables already used */
             (thd->locked_tables_mode == LTM_LOCK_TABLES ||
              table->query_id == 0))
@@ -2000,7 +2056,7 @@ bool open_table(THD *thd, TABLE_LIST *table_list, Open_table_context *ot_ctx)
     if (thd->locked_tables_mode == LTM_PRELOCKED)
       my_error(ER_NO_SUCH_TABLE, MYF(0), table_list->db.str, table_list->alias.str);
     else
-      my_error(ER_TABLE_NOT_LOCKED, MYF(0), alias);
+      my_error(ER_TABLE_NOT_LOCKED, MYF(0), alias.str);
     DBUG_RETURN(TRUE);
   }
 
@@ -2270,12 +2326,13 @@ retry_share:
     */
     enum enum_mdl_type mdl_type= MDL_BACKUP_DML;
 
-    if (table->s->table_category != TABLE_CATEGORY_USER)
+    if (table->s->table_category != TABLE_CATEGORY_USER &&
+        table->s->table_category != TABLE_CATEGORY_MYSQL)
       mdl_type= MDL_BACKUP_SYS_DML;
     else if (table->s->online_backup)
       mdl_type= MDL_BACKUP_TRANS_DML;
 
-    if (table_list->mdl_request.is_write_lock_request() &&
+    if (is_write_lock_request &&
         ! (flags & (MYSQL_OPEN_IGNORE_GLOBAL_READ_LOCK |
                     MYSQL_OPEN_FORCE_SHARED_MDL |
                     MYSQL_OPEN_FORCE_SHARED_HIGH_PRIO_MDL |
@@ -2288,6 +2345,7 @@ retry_share:
       if (thd->has_read_only_protection())
       {
         MYSQL_UNBIND_TABLE(table->file);
+        table->vcol_cleanup_expr(thd);
         tc_release_table(table);
         DBUG_RETURN(TRUE);
       }
@@ -2307,6 +2365,7 @@ retry_share:
       if (result)
       {
         MYSQL_UNBIND_TABLE(table->file);
+        table->vcol_cleanup_expr(thd);
         tc_release_table(table);
         DBUG_RETURN(TRUE);
       }
@@ -2358,6 +2417,10 @@ retry_share:
     my_error(ER_NOT_SEQUENCE, MYF(0), table_list->db.str, table_list->alias.str);
     DBUG_RETURN(true);
   }
+  /* hlindexes don't support concurrent insert */
+  if (table->s->hlindexes() &&
+      table_list->lock_type == TL_WRITE_CONCURRENT_INSERT)
+    table_list->lock_type= TL_WRITE_DEFAULT;
 
   DBUG_ASSERT(thd->locked_tables_mode || table->file->row_logging == 0);
   DBUG_RETURN(false);
@@ -3192,7 +3255,7 @@ static bool open_table_entry_fini(THD *thd, TABLE_SHARE *share, TABLE *entry)
       String query(query_buf, sizeof(query_buf), system_charset_info);
 
       query.length(0);
-      query.append(STRING_WITH_LEN("DELETE FROM "));
+      query.append(STRING_WITH_LEN("TRUNCATE TABLE "));
       append_identifier(thd, &query, &share->db);
       query.append('.');
       append_identifier(thd, &query, &share->table_name);
@@ -3349,7 +3412,7 @@ request_backoff_action(enum_open_table_action action_arg,
   {
     DBUG_ASSERT(action_arg == OT_DISCOVER || action_arg == OT_REPAIR ||
                 action_arg == OT_ADD_HISTORY_PARTITION);
-    m_failed_table= (TABLE_LIST*) m_thd->alloc(sizeof(TABLE_LIST));
+    m_failed_table= m_thd->alloc<TABLE_LIST>(1);
     if (m_failed_table == NULL)
       return TRUE;
     m_failed_table->init_one_table(&table->db, &table->table_name, &table->alias, TL_WRITE);
@@ -3369,12 +3432,12 @@ request_backoff_action(enum_open_table_action action_arg,
 class MDL_deadlock_discovery_repair_handler : public Internal_error_handler
 {
 public:
-  virtual bool handle_condition(THD *thd,
+  bool handle_condition(THD *thd,
                                   uint sql_errno,
                                   const char* sqlstate,
                                   Sql_condition::enum_warning_level *level,
                                   const char* msg,
-                                  Sql_condition ** cond_hdl)
+                                  Sql_condition ** cond_hdl) override
   {
     if (sql_errno == ER_LOCK_DEADLOCK)
     {
@@ -3766,7 +3829,7 @@ open_and_process_routine(THD *thd, Query_tables_list *prelocking_ctx,
           DBUG_RETURN(TRUE);
 
         /* Ensures the routine is up-to-date and cached, if exists. */
-        if (rt->sp_cache_routine(thd, has_prelocking_list, &sp))
+        if (rt->sp_cache_routine(thd, &sp))
           DBUG_RETURN(TRUE);
 
         /* Remember the version of the routine in the parse tree. */
@@ -3807,7 +3870,7 @@ open_and_process_routine(THD *thd, Query_tables_list *prelocking_ctx,
           Validating routine version is unnecessary, since CALL
           does not affect the prepared statement prelocked list.
         */
-        if (rt->sp_cache_routine(thd, false, &sp))
+        if (rt->sp_cache_routine(thd, &sp))
           DBUG_RETURN(TRUE);
       }
     }
@@ -4250,7 +4313,7 @@ static bool upgrade_lock_if_not_exists(THD *thd,
     DEBUG_SYNC(thd,"create_table_before_check_if_exists");
     if (!create_info.or_replace() &&
         ha_table_exists(thd, &create_table->db, &create_table->table_name,
-                        NULL, NULL, &create_table->db_type))
+                        NULL, &create_table->db_type))
     {
       if (create_info.if_not_exists())
       {
@@ -4324,9 +4387,7 @@ lock_table_names(THD *thd, const DDL_options_st &options,
         table->mdl_request.type == MDL_SHARED_READ_ONLY ||
         table->open_type == OT_TEMPORARY_ONLY ||
         (table->open_type == OT_TEMPORARY_OR_BASE && is_temporary_table(table)))
-    {
       continue;
-    }
 
     /* Write lock on normal tables is not allowed in a read only transaction. */
     if (thd->tx_read_only)
@@ -4640,7 +4701,8 @@ restart:
             have failed to open since closing tables can trigger removal of
             elements from the table list (if MERGE tables are involved),
           */
-          close_tables_for_reopen(thd, start, ot_ctx.start_of_statement_svp());
+          close_tables_for_reopen(thd, start, ot_ctx.start_of_statement_svp(),
+                                  ot_ctx.remove_implicitly_used_deps());
 
           /*
             Here we rely on the fact that 'tables' still points to the valid
@@ -4708,10 +4770,10 @@ restart:
           /* F.ex. deadlock happened */
           if (ot_ctx.can_recover_from_failed_open())
           {
-            DBUG_ASSERT(ot_ctx.get_action() !=
-                        Open_table_context::OT_ADD_HISTORY_PARTITION);
+            DBUG_ASSERT(ot_ctx.remove_implicitly_used_deps());
             close_tables_for_reopen(thd, start,
-                                    ot_ctx.start_of_statement_svp());
+                                    ot_ctx.start_of_statement_svp(),
+                                    ot_ctx.remove_implicitly_used_deps());
             if (ot_ctx.recover_from_failed_open())
               goto error;
 
@@ -4751,14 +4813,13 @@ restart:
   {
     TABLE *tbl= tables->table;
 
+    /* Schema tables may not have a TABLE object here. */
     if (!tbl)
       continue;
 
-    /* Schema tables may not have a TABLE object here. */
     if (tbl->file->ha_table_flags() & HA_CAN_MULTISTEP_MERGE)
     {
       /* MERGE tables need to access parent and child TABLE_LISTs. */
-      DBUG_ASSERT(tbl->pos_in_table_list == tables);
       if (tbl->file->extra(HA_EXTRA_ATTACH_CHILDREN))
       {
         error= TRUE;
@@ -4782,6 +4843,7 @@ restart:
         tbl->reginfo.lock_type= tables->lock_type;
       tbl->reginfo.skip_locked= tables->skip_locked;
     }
+
 #ifdef WITH_WSREP
     /*
        At this point we have SE associated with table so we can check wsrep_mode
@@ -4956,7 +5018,7 @@ add_internal_tables(THD *thd, Query_tables_list *prelocking_ctx,
       continue;
     }
 
-    TABLE_LIST *tl= (TABLE_LIST *) thd->alloc(sizeof(TABLE_LIST));
+    TABLE_LIST *tl= thd->alloc<TABLE_LIST>(1);
     if (!tl)
       DBUG_RETURN(TRUE);
     tl->init_one_table_for_prelocking(&tables->db,
@@ -5001,6 +5063,9 @@ prepare_fk_prelocking_list(THD *thd, Query_tables_list *prelocking_ctx,
   Query_arena *arena, backup;
   TABLE *table= table_list->table;
 
+  if (!table->file->referenced_by_foreign_key())
+    DBUG_RETURN(FALSE);
+
   arena= thd->activate_stmt_arena_if_needed(&backup);
 
   table->file->get_parent_foreign_key_list(thd, &fk_list);
@@ -5025,18 +5090,13 @@ prepare_fk_prelocking_list(THD *thd, Query_tables_list *prelocking_ctx,
       lock_type= TL_READ;
 
     if (table_already_fk_prelocked(prelocking_ctx->query_tables,
-          fk->foreign_db, fk->foreign_table,
-          lock_type))
+          fk->foreign_db, fk->foreign_table, lock_type))
       continue;
 
-    TABLE_LIST *tl= (TABLE_LIST *) thd->alloc(sizeof(TABLE_LIST));
-    tl->init_one_table_for_prelocking(fk->foreign_db,
-        fk->foreign_table,
-        NULL, lock_type,
-        TABLE_LIST::PRELOCK_FK,
-        table_list->belong_to_view, op,
-        &prelocking_ctx->query_tables_last,
-        table_list->for_insert_data);
+    TABLE_LIST *tl= thd->alloc<TABLE_LIST>(1);
+    tl->init_one_table_for_prelocking(fk->foreign_db, fk->foreign_table,
+        NULL, lock_type, TABLE_LIST::PRELOCK_FK, table_list->belong_to_view,
+        op, &prelocking_ctx->query_tables_last, table_list->for_insert_data);
   }
   if (arena)
     thd->restore_active_arena(arena, &backup);
@@ -5086,16 +5146,12 @@ bool DML_prelocking_strategy::handle_table(THD *thd,
         return TRUE;
     }
 
-    if (table->file->referenced_by_foreign_key())
-    {
-      if (prepare_fk_prelocking_list(thd, prelocking_ctx, table_list,
-                                     need_prelocking,
-                                     table_list->trg_event_map))
-        return TRUE;
-    }
+    if (prepare_fk_prelocking_list(thd, prelocking_ctx, table_list,
+                                   need_prelocking,
+                                   table_list->trg_event_map))
+      return TRUE;
   }
-  else if (table_list->slave_fk_event_map &&
-           table->file->referenced_by_foreign_key())
+  else if (table_list->slave_fk_event_map)
   {
     if (prepare_fk_prelocking_list(thd, prelocking_ctx, table_list,
                                    need_prelocking,
@@ -5723,6 +5779,28 @@ bool open_tables_only_view_structure(THD *thd, TABLE_LIST *table_list,
 }
 
 
+bool open_tables_for_query(THD *thd, TABLE_LIST *tables,
+                           uint *table_count, uint flags,
+                           DML_prelocking_strategy *prelocking_strategy)
+{
+  MDL_savepoint mdl_savepoint = thd->mdl_context.mdl_savepoint();
+
+  DBUG_ASSERT(tables == thd->lex->query_tables);
+
+  if (open_tables(thd, &tables, table_count,
+                  thd->stmt_arena->is_stmt_prepare() ? MYSQL_OPEN_FORCE_SHARED_MDL : 0,
+                  prelocking_strategy))
+  {
+    close_thread_tables(thd);
+    /* Don't keep locks for a failed statement. */
+    thd->mdl_context.rollback_to_savepoint(mdl_savepoint);
+    return true;
+  }
+
+  return false;
+}
+
+
 /*
   Mark all real tables in the list as free for reuse.
 
@@ -5819,7 +5897,7 @@ bool lock_tables(THD *thd, TABLE_LIST *tables, uint count, uint flags)
     TABLE **start,**ptr;
     bool found_first_not_own= 0;
 
-    if (!(ptr=start=(TABLE**) thd->alloc(sizeof(TABLE*)*count)))
+    if (!(ptr= start= thd->alloc<TABLE*>(count)))
       DBUG_RETURN(TRUE);
 
     /*
@@ -5839,13 +5917,23 @@ bool lock_tables(THD *thd, TABLE_LIST *tables, uint count, uint flags)
       }
     }
 
-    DEBUG_SYNC(thd, "before_lock_tables_takes_lock");
+#ifdef ENABLED_DEBUG_SYNC
+    if (!tables ||
+        !(strcmp(tables->db.str, "mysql") == 0 &&
+          strcmp(tables->table_name.str, "proc") == 0))
+      DEBUG_SYNC(thd, "before_lock_tables_takes_lock");
+#endif
 
     if (! (thd->lock= mysql_lock_tables(thd, start, (uint) (ptr - start),
                                         flags)))
       DBUG_RETURN(TRUE);
 
-    DEBUG_SYNC(thd, "after_lock_tables_takes_lock");
+#ifdef ENABLED_DEBUG_SYNC
+    if (!tables ||
+        !(strcmp(tables->db.str, "mysql") == 0 &&
+          strcmp(tables->table_name.str, "proc") == 0))
+      DEBUG_SYNC(thd, "after_lock_tables_takes_lock");
+#endif
 
     if (thd->lex->requires_prelocking() &&
         thd->lex->sql_command != SQLCOM_LOCK_TABLES &&
@@ -5992,27 +6080,34 @@ bool restart_trans_for_tables(THD *thd, TABLE_LIST *table)
                          trying to reopen tables. NULL if no metadata locks
                          were held and thus all metadata locks should be
                          released.
+  @param[in] remove_implicit_deps  True in case routines and tables implicitly
+                                   used by a statement should be removed.
 */
 
 void close_tables_for_reopen(THD *thd, TABLE_LIST **tables,
-                             const MDL_savepoint &start_of_statement_svp)
+                             const MDL_savepoint &start_of_statement_svp,
+                             bool remove_implicit_deps)
 {
   TABLE_LIST *first_not_own_table= thd->lex->first_not_own_table();
   TABLE_LIST *tmp;
 
-  /*
-    If table list consists only from tables from prelocking set, table list
-    for new attempt should be empty, so we have to update list's root pointer.
-  */
-  if (first_not_own_table == *tables)
-    *tables= 0;
-  thd->lex->chop_off_not_own_tables();
-  /* Reset MDL tickets for procedures/functions */
-  for (Sroutine_hash_entry *rt=
-         (Sroutine_hash_entry*)thd->lex->sroutines_list.first;
-       rt; rt= rt->next)
-    rt->mdl_request.ticket= NULL;
-  sp_remove_not_own_routines(thd->lex);
+  if (remove_implicit_deps)
+  {
+    /*
+      If table list consists only from tables from prelocking set, table list
+      for new attempt should be empty, so we have to update list's root pointer.
+    */
+    if (first_not_own_table == *tables)
+      *tables= 0;
+    thd->lex->chop_off_not_own_tables();
+
+    /* Reset MDL tickets for procedures/functions */
+    for (Sroutine_hash_entry *rt=
+        (Sroutine_hash_entry*)thd->lex->sroutines_list.first;
+        rt; rt= rt->next)
+      rt->mdl_request.ticket= NULL;
+    sp_remove_not_own_routines(thd->lex);
+  }
   for (tmp= *tables; tmp; tmp= tmp->next_global)
   {
     tmp->table= 0;
@@ -6105,21 +6200,21 @@ static void update_field_dependencies(THD *thd, Field *field, TABLE *table)
 
 static Field *
 find_field_in_view(THD *thd, TABLE_LIST *table_list,
-                   const char *name, size_t length,
+                   const Lex_ident_column &name,
                    const char *item_name, Item **ref,
                    bool register_tree_change)
 {
   DBUG_ENTER("find_field_in_view");
   DBUG_PRINT("enter",
              ("view: '%s', field name: '%s', item name: '%s', ref %p",
-              table_list->alias.str, name, item_name, ref));
+              table_list->alias.str, name.str, item_name, ref));
   Field_iterator_view field_it;
   field_it.set(table_list);
   Query_arena *arena= 0, backup;  
 
   for (; !field_it.end_of_fields(); field_it.next())
   {
-    if (!my_strcasecmp(system_charset_info, field_it.name()->str, name))
+    if (name.streq(field_it.name()))
     {
       // in PS use own arena or data will be freed after prepare
       if (register_tree_change &&
@@ -6185,7 +6280,9 @@ find_field_in_view(THD *thd, TABLE_LIST *table_list,
 */
 
 static Field *
-find_field_in_natural_join(THD *thd, TABLE_LIST *table_ref, const char *name, size_t length, Item **ref, bool register_tree_change,
+find_field_in_natural_join(THD *thd, TABLE_LIST *table_ref,
+                           const Lex_ident_column &name,
+                           Item **ref, bool register_tree_change,
                            TABLE_LIST **actual_table)
 {
   List_iterator_fast<Natural_join_column>
@@ -6194,19 +6291,18 @@ find_field_in_natural_join(THD *thd, TABLE_LIST *table_ref, const char *name, si
   Field *UNINIT_VAR(found_field);
   Query_arena *UNINIT_VAR(arena), backup;
   DBUG_ENTER("find_field_in_natural_join");
-  DBUG_PRINT("enter", ("field name: '%s', ref %p",
-		       name, ref));
+  DBUG_PRINT("enter", ("field name: '%s', ref %p", name.str, ref));
   DBUG_ASSERT(table_ref->is_natural_join && table_ref->join_columns);
   DBUG_ASSERT(*actual_table == NULL);
 
   for (nj_col= NULL, curr_nj_col= field_it++; curr_nj_col; 
        curr_nj_col= field_it++)
   {
-    if (!my_strcasecmp(system_charset_info, curr_nj_col->name()->str, name))
+    if (name.streq(curr_nj_col->name()))
     {
       if (nj_col)
       {
-        my_error(ER_NON_UNIQ_ERROR, MYF(0), name, thd->where);
+        my_error(ER_NON_UNIQ_ERROR, MYF(0), name.str, thd_where(thd));
         DBUG_RETURN(NULL);
       }
       nj_col= curr_nj_col;
@@ -6306,27 +6402,25 @@ find_field_in_natural_join(THD *thd, TABLE_LIST *table_ref, const char *name, si
 */
 
 Field *
-find_field_in_table(THD *thd, TABLE *table, const char *name, size_t length,
+find_field_in_table(THD *thd, TABLE *table, const Lex_ident_column &name,
                     bool allow_rowid, field_index_t *cached_field_index_ptr)
 {
   Field *field;
   field_index_t cached_field_index= *cached_field_index_ptr;
   DBUG_ENTER("find_field_in_table");
   DBUG_PRINT("enter", ("table: '%s', field name: '%s'", table->alias.c_ptr(),
-                       name));
+                       name.str));
 
   /* We assume here that table->field < NO_CACHED_FIELD_INDEX = UINT_MAX */
   if (cached_field_index < table->s->fields &&
-      !my_strcasecmp(system_charset_info,
-                     table->field[cached_field_index]->field_name.str, name))
+      table->field[cached_field_index]->field_name.streq(name))
   {
     field= table->field[cached_field_index];
     DEBUG_SYNC(thd, "table_field_cached");
   }
   else
   {
-    LEX_CSTRING fname= {name, length};
-    field= table->find_field_by_name(&fname);
+    field= table->find_field_by_name(&name);
   }
 
   if (field)
@@ -6347,7 +6441,7 @@ find_field_in_table(THD *thd, TABLE *table, const char *name, size_t length,
   else
   {
     if (!allow_rowid ||
-        my_strcasecmp(system_charset_info, name, "_rowid") ||
+        !name.streq("_rowid"_LEX_CSTRING) ||
         table->s->rowid_field_offset == 0)
       DBUG_RETURN((Field*) 0);
     field= table->field[table->s->rowid_field_offset-1];
@@ -6406,8 +6500,9 @@ find_field_in_table(THD *thd, TABLE *table, const char *name, size_t length,
 */
 
 Field *
-find_field_in_table_ref(THD *thd, TABLE_LIST *table_list, const char *name,
-                        size_t length, const char *item_name,
+find_field_in_table_ref(THD *thd, TABLE_LIST *table_list,
+                        const Lex_ident_column &name,
+                        const char *item_name,
                         const char *db_name, const char *table_name,
                         ignored_tables_list_t ignored_tables, Item **ref,
                         bool check_privileges, bool allow_rowid,
@@ -6417,11 +6512,11 @@ find_field_in_table_ref(THD *thd, TABLE_LIST *table_list, const char *name,
   Field *fld;
   DBUG_ENTER("find_field_in_table_ref");
   DBUG_ASSERT(table_list->alias.str);
-  DBUG_ASSERT(name);
+  DBUG_ASSERT(name.str);
   DBUG_ASSERT(item_name);
   DBUG_PRINT("enter",
              ("table: '%s'  field name: '%s'  item name: '%s'  ref %p",
-              table_list->alias.str, name, item_name, ref));
+              table_list->alias.str, name.str, item_name, ref));
 
   /*
     Check that the table and database that qualify the current field name
@@ -6453,11 +6548,12 @@ find_field_in_table_ref(THD *thd, TABLE_LIST *table_list, const char *name,
         to search.
       */
       table_name && table_name[0] &&
-      (my_strcasecmp(table_alias_charset, table_list->alias.str, table_name) ||
+      (!table_list->alias.streq(Lex_cstring_strlen(table_name)) ||
        (db_name && (!table_list->db.str || !table_list->db.str[0])) ||
        (db_name && table_list->db.str && table_list->db.str[0] &&
         (table_list->schema_table ?
-         my_strcasecmp(system_charset_info, db_name, table_list->db.str) :
+         !Lex_ident_i_s_table(Lex_cstring_strlen(db_name)).
+           streq(table_list->db) :
          strcmp(db_name, table_list->db.str)))))
     DBUG_RETURN(0);
 
@@ -6473,7 +6569,7 @@ find_field_in_table_ref(THD *thd, TABLE_LIST *table_list, const char *name,
   if (table_list->field_translation)
   {
     /* 'table_list' is a view or an information schema table. */
-    if ((fld= find_field_in_view(thd, table_list, name, length, item_name, ref,
+    if ((fld= find_field_in_view(thd, table_list, name, item_name, ref,
                                  register_tree_change)))
       *actual_table= table_list;
   }
@@ -6481,7 +6577,7 @@ find_field_in_table_ref(THD *thd, TABLE_LIST *table_list, const char *name,
   {
     /* 'table_list' is a stored table. */
     DBUG_ASSERT(table_list->table);
-    if ((fld= find_field_in_table(thd, table_list->table, name, length,
+    if ((fld= find_field_in_table(thd, table_list->table, name,
                                   allow_rowid, cached_field_index_ptr)))
       *actual_table= table_list;
   }
@@ -6507,7 +6603,7 @@ find_field_in_table_ref(THD *thd, TABLE_LIST *table_list, const char *name,
         if (table->table && ignored_list_includes_table(ignored_tables, table))
           continue;
 
-        if ((fld= find_field_in_table_ref(thd, table, name, length, item_name,
+        if ((fld= find_field_in_table_ref(thd, table, name, item_name,
                                           db_name, table_name, ignored_tables,
                                           ref, check_privileges, allow_rowid,
                                           cached_field_index_ptr,
@@ -6522,7 +6618,7 @@ find_field_in_table_ref(THD *thd, TABLE_LIST *table_list, const char *name,
       natural join, thus if the field is not qualified, we will search
       directly the top-most NATURAL/USING join.
     */
-    fld= find_field_in_natural_join(thd, table_list, name, length, ref,
+    fld= find_field_in_natural_join(thd, table_list, name, ref,
                                     register_tree_change, actual_table);
   }
 
@@ -6532,7 +6628,7 @@ find_field_in_table_ref(THD *thd, TABLE_LIST *table_list, const char *name,
     /* Check if there are sufficient access rights to the found field. */
     if (check_privileges &&
         !table_list->is_derived() &&
-        check_column_grant_in_table_ref(thd, *actual_table, name, length, fld))
+        check_column_grant_in_table_ref(thd, *actual_table, name, fld))
       fld= WRONG_GRANT;
     else
 #endif
@@ -6591,13 +6687,13 @@ find_field_in_table_ref(THD *thd, TABLE_LIST *table_list, const char *name,
     #                   pointer to field
 */
 
-Field *find_field_in_table_sef(TABLE *table, const char *name)
+Field *find_field_in_table_sef(TABLE *table, const Lex_ident_column &name)
 {
   Field **field_ptr;
   if (table->s->name_hash.records)
   {
-    field_ptr= (Field**)my_hash_search(&table->s->name_hash,(uchar*) name,
-                                       strlen(name));
+    field_ptr= (Field**)my_hash_search(&table->s->name_hash,(uchar*) name.str,
+                                       name.length);
     if (field_ptr)
     {
       /*
@@ -6612,8 +6708,7 @@ Field *find_field_in_table_sef(TABLE *table, const char *name)
     if (!(field_ptr= table->field))
       return (Field *)0;
     for (; *field_ptr; ++field_ptr)
-      if (!my_strcasecmp(system_charset_info, (*field_ptr)->field_name.str,
-                         name))
+      if ((*field_ptr)->field_name.streq(name))
         break;
   }
   if (field_ptr)
@@ -6667,11 +6762,10 @@ find_field_in_tables(THD *thd, Item_ident *item,
                      bool check_privileges, bool register_tree_change)
 {
   Field *found=0;
-  const char *db= item->db_name.str;
+  LEX_CSTRING db= item->db_name;
   const char *table_name= item->table_name.str;
-  const char *name= item->field_name.str;
-  size_t length= item->field_name.length;
-  char name_buff[SAFE_NAME_LEN+1];
+  const Lex_ident_column &name= item->field_name;
+  IdentBuffer<SAFE_NAME_LEN> db_name_buff;
   TABLE_LIST *cur_table= first_table;
   TABLE_LIST *actual_table;
   bool allow_rowid;
@@ -6679,7 +6773,7 @@ find_field_in_tables(THD *thd, Item_ident *item,
   if (!table_name || !table_name[0])
   {
     table_name= 0;                              // For easier test
-    db= 0;
+    db= Lex_cstring();
   }
 
   allow_rowid= table_name || (cur_table && !cur_table->next_local);
@@ -6707,17 +6801,17 @@ find_field_in_tables(THD *thd, Item_ident *item,
          (!table_ref->is_multitable() && table_ref->merged_for_insert)))
     {
 
-      found= find_field_in_table(thd, table_ref->table, name, length,
+      found= find_field_in_table(thd, table_ref->table, name,
                                  TRUE, &(item->cached_field_index));
 #ifndef NO_EMBEDDED_ACCESS_CHECKS
       /* Check if there are sufficient access rights to the found field. */
       if (found && check_privileges && !is_temporary_table(table_ref) &&
-          check_column_grant_in_table_ref(thd, table_ref, name, length, found))
+          check_column_grant_in_table_ref(thd, table_ref, name, found))
         found= WRONG_GRANT;
 #endif
     }
     else
-      found= find_field_in_table_ref(thd, table_ref, name, length,
+      found= find_field_in_table_ref(thd, table_ref, name,
                                      item->name.str, NULL, NULL,
                                      ignored_tables, ref, check_privileges,
                                      TRUE, &(item->cached_field_index),
@@ -6769,16 +6863,14 @@ find_field_in_tables(THD *thd, Item_ident *item,
   else
     item->can_be_depended= TRUE;
 
-  if (db && lower_case_table_names)
+  if (db.str && lower_case_table_names)
   {
     /*
       convert database to lower case for comparison.
       We can't do this in Item_field as this would change the
       'name' of the item which may be used in the select list
     */
-    strmake_buf(name_buff, db);
-    my_casedn_str(files_charset_info, name_buff);
-    db= name_buff;
+    db= db_name_buff.copy_casedn(db).to_lex_cstring();
   }
 
   if (last_table)
@@ -6798,8 +6890,9 @@ find_field_in_tables(THD *thd, Item_ident *item,
         ignored_list_includes_table(ignored_tables, cur_table))
       continue;
 
-    Field *cur_field= find_field_in_table_ref(thd, cur_table, name, length,
-                                              item->name.str, db, table_name,
+    Field *cur_field= find_field_in_table_ref(thd, cur_table, name,
+                                              item->name.str,
+                                              db.str, table_name,
                                               ignored_tables, ref,
                                               (thd->lex->sql_command ==
                                                SQLCOM_SHOW_FIELDS)
@@ -6816,8 +6909,8 @@ find_field_in_tables(THD *thd, Item_ident *item,
           return (Field*) 0;
 
         thd->clear_error();
-        cur_field= find_field_in_table_ref(thd, cur_table, name, length,
-                                           item->name.str, db, table_name,
+        cur_field= find_field_in_table_ref(thd, cur_table, name,
+                                           item->name.str, db.str, table_name,
                                            ignored_tables, ref, false,
                                            allow_rowid,
                                            current_cache,
@@ -6851,12 +6944,12 @@ find_field_in_tables(THD *thd, Item_ident *item,
         item->cached_field_index= NO_CACHED_FIELD_INDEX;
       }
 
-      DBUG_ASSERT(thd->where);
+      DBUG_ASSERT(thd->where != THD_WHERE::NOWHERE);
       /*
         If we found a fully qualified field we return it directly as it can't
         have duplicates.
        */
-      if (db)
+      if (db.str)
         return cur_field;
       
       if (unlikely(found))
@@ -6864,7 +6957,7 @@ find_field_in_tables(THD *thd, Item_ident *item,
         if (report_error == REPORT_ALL_ERRORS ||
             report_error == IGNORE_EXCEPT_NON_UNIQUE)
           my_error(ER_NON_UNIQ_ERROR, MYF(0),
-                   table_name ? item->full_name() : name, thd->where);
+                   table_name ? item->full_name() : name.str, thd_where(thd));
         return (Field*) 0;
       }
       found= cur_field;
@@ -6887,18 +6980,18 @@ find_field_in_tables(THD *thd, Item_ident *item,
        report_error == REPORT_EXCEPT_NON_UNIQUE))
   {
     char buff[SAFE_NAME_LEN*2 + 2];
-    if (db && db[0])
+    if (db.str && db.str[0])
     {
-      strxnmov(buff,sizeof(buff)-1,db,".",table_name,NullS);
+      strxnmov(buff, sizeof(buff) - 1, db.str, ".", table_name, NullS);
       table_name=buff;
     }
-    my_error(ER_UNKNOWN_TABLE, MYF(0), table_name, thd->where);
+    my_error(ER_UNKNOWN_TABLE, MYF(0), table_name, thd_where(thd));
   }
   else
   {
     if (report_error == REPORT_ALL_ERRORS ||
         report_error == REPORT_EXCEPT_NON_UNIQUE)
-      my_error(ER_BAD_FIELD_ERROR, MYF(0), item->full_name(), thd->where);
+      my_error(ER_BAD_FIELD_ERROR, MYF(0), item->full_name(), thd_where(thd));
     else
       found= not_found_field;
   }
@@ -6953,9 +7046,9 @@ find_item_in_list(Item *find, List<Item> &items, uint *counter,
   List_iterator<Item> li(items);
   uint n_items= limit == 0 ? items.elements : limit;
   Item **found=0, **found_unaliased= 0, *item;
-  const char *db_name=0;
-  const LEX_CSTRING *field_name= 0;
-  const char *table_name=0;
+  Lex_ident_db db_name;
+  Lex_ident_column field_name;
+  Lex_ident_table table_name;
   bool found_unaliased_non_uniq= 0;
   /*
     true if the item that we search for is a valid name reference
@@ -6970,15 +7063,15 @@ find_item_in_list(Item *find, List<Item> &items, uint *counter,
                    find->type() == Item::REF_ITEM);
   if (is_ref_by_name)
   {
-    field_name= &((Item_ident*) find)->field_name;
-    table_name= ((Item_ident*) find)->table_name.str;
-    db_name=    ((Item_ident*) find)->db_name.str;
+    field_name= ((Item_ident*) find)->field_name;
+    table_name= ((Item_ident*) find)->table_name;
+    db_name=    ((Item_ident*) find)->db_name;
   }
 
   for (uint i= 0; i < n_items; i++)
   {
     item= li++;
-    if (field_name && field_name->str &&
+    if (field_name.str &&
         (item->real_item()->type() == Item::FIELD_ITEM ||
          ((item->type() == Item::REF_ITEM) &&
           (((Item_ref *)item)->ref_type() == Item_ref::VIEW_REF))))
@@ -6994,7 +7087,7 @@ find_item_in_list(Item *find, List<Item> &items, uint *counter,
       if (unlikely(!item_field->name.str))
         continue;
 
-      if (table_name)
+      if (table_name.str)
       {
         /*
           If table name is specified we should find field 'field_name' in
@@ -7013,12 +7106,11 @@ find_item_in_list(Item *find, List<Item> &items, uint *counter,
 	  item is not fix_field()'ed yet.
         */
         if (item_field->field_name.str && item_field->table_name.str &&
-	    !lex_string_cmp(system_charset_info, &item_field->field_name,
-                            field_name) &&
-            !my_strcasecmp(table_alias_charset, item_field->table_name.str,
-                           table_name) &&
-            (!db_name || (item_field->db_name.str &&
-                          !strcmp(item_field->db_name.str, db_name))))
+            item_field->field_name.streq(field_name) &&
+            item_field->table_name.streq(table_name) &&
+            (!db_name.str ||
+             (item_field->db_name.str &&
+              item_field->db_name.streq(db_name))))
         {
           if (found_unaliased)
           {
@@ -7031,23 +7123,20 @@ find_item_in_list(Item *find, List<Item> &items, uint *counter,
             */
             if (report_error != IGNORE_ERRORS)
               my_error(ER_NON_UNIQ_ERROR, MYF(0),
-                       find->full_name(), current_thd->where);
+                       find->full_name(), thd_where(current_thd));
             return (Item**) 0;
           }
           found_unaliased= li.ref();
           unaliased_counter= i;
           *resolution= RESOLVED_IGNORING_ALIAS;
-          if (db_name)
+          if (db_name.str)
             break;                              // Perfect match
         }
       }
       else
       {
-        bool fname_cmp= lex_string_cmp(system_charset_info,
-                                       &item_field->field_name,
-                                       field_name);
-        if (!lex_string_cmp(system_charset_info,
-                            &item_field->name, field_name))
+        bool fname_cmp= !item_field->field_name.streq(field_name);
+        if (item_field->name.streq(field_name))
         {
           /*
             If table name was not given we should scan through aliases
@@ -7062,7 +7151,7 @@ find_item_in_list(Item *find, List<Item> &items, uint *counter,
               continue;                           // Same field twice
             if (report_error != IGNORE_ERRORS)
               my_error(ER_NON_UNIQ_ERROR, MYF(0),
-                       find->full_name(), current_thd->where);
+                       find->full_name(), thd_where(current_thd));
             return (Item**) 0;
           }
           found= li.ref();
@@ -7089,11 +7178,10 @@ find_item_in_list(Item *find, List<Item> &items, uint *counter,
         }
       }
     }
-    else if (!table_name)
+    else if (!table_name.str)
     { 
       if (is_ref_by_name && find->name.str && item->name.str &&
-          find->name.length == item->name.length &&
-	  !lex_string_cmp(system_charset_info, &item->name, &find->name))
+          item->name.streq(find->name))
       {
         found= li.ref();
         *counter= i;
@@ -7117,7 +7205,7 @@ find_item_in_list(Item *find, List<Item> &items, uint *counter,
   {
     if (report_error != IGNORE_ERRORS)
       my_error(ER_NON_UNIQ_ERROR, MYF(0),
-               find->full_name(), current_thd->where);
+               find->full_name(), thd_where(current_thd));
     return (Item **) 0;
   }
   if (found_unaliased)
@@ -7134,7 +7222,7 @@ find_item_in_list(Item *find, List<Item> &items, uint *counter,
   {
     if (report_error == REPORT_ALL_ERRORS)
       my_error(ER_BAD_FIELD_ERROR, MYF(0),
-               find->full_name(), current_thd->where);
+               find->full_name(), thd_where(current_thd));
     return (Item **) 0;
   }
   else
@@ -7160,16 +7248,13 @@ find_item_in_list(Item *find, List<Item> &items, uint *counter,
 */
 
 static bool
-test_if_string_in_list(const char *find, List<String> *str_list)
+test_if_string_in_list(const Lex_ident_column &find, List<String> *str_list)
 {
   List_iterator<String> str_list_it(*str_list);
   String *curr_str;
-  size_t find_length= strlen(find);
   while ((curr_str= str_list_it++))
   {
-    if (find_length != curr_str->length())
-      continue;
-    if (!my_strcasecmp(system_charset_info, find, curr_str->ptr()))
+    if (find.streq(curr_str->to_lex_cstring()))
       return TRUE;
   }
   return FALSE;
@@ -7202,6 +7287,7 @@ set_new_item_local_context(THD *thd, Item_ident *item, TABLE_LIST *table_ref)
   if (!(context= new (thd->mem_root) Name_resolution_context))
     return TRUE;
   context->init();
+  context->select_lex= table_ref->select_lex;
   context->first_name_resolution_table=
     context->last_name_resolution_table= table_ref;
   item->context= context;
@@ -7272,7 +7358,7 @@ mark_common_columns(THD *thd, TABLE_LIST *table_ref_1, TABLE_LIST *table_ref_2,
   for (it_1.set(table_ref_1); !it_1.end_of_fields(); it_1.next())
   {
     bool found= FALSE;
-    const LEX_CSTRING *field_name_1;
+    Lex_ident_column field_name_1;
     Field *field_2= 0;
 
     /* true if field_name_1 is a member of using_fields */
@@ -7288,10 +7374,10 @@ mark_common_columns(THD *thd, TABLE_LIST *table_ref_1, TABLE_LIST *table_ref_2,
 
     field_name_1= nj_col_1->name();
     is_using_column_1= using_fields && 
-      test_if_string_in_list(field_name_1->str, using_fields);
+      test_if_string_in_list(field_name_1, using_fields);
     DBUG_PRINT ("info", ("field_name_1=%s.%s", 
-                         nj_col_1->safe_table_name(),
-                         field_name_1->str));
+                         nj_col_1->safe_table_name().str,
+                         field_name_1.str));
 
     if (field_1_invisible && !is_using_column_1)
       continue;
@@ -7307,7 +7393,7 @@ mark_common_columns(THD *thd, TABLE_LIST *table_ref_1, TABLE_LIST *table_ref_2,
     for (it_2.set(table_ref_2); !it_2.end_of_fields(); it_2.next())
     {
       Natural_join_column *cur_nj_col_2;
-      const LEX_CSTRING *cur_field_name_2;
+      Lex_ident_column cur_field_name_2;
       if (!(cur_nj_col_2= it_2.get_or_create_column_ref(thd, leaf_2)))
         goto err;
 
@@ -7319,8 +7405,8 @@ mark_common_columns(THD *thd, TABLE_LIST *table_ref_1, TABLE_LIST *table_ref_2,
 
       cur_field_name_2= cur_nj_col_2->name();
       DBUG_PRINT ("info", ("cur_field_name_2=%s.%s", 
-                           cur_nj_col_2->safe_table_name(),
-                           cur_field_name_2->str));
+                           cur_nj_col_2->safe_table_name().str,
+                           cur_field_name_2.str));
 
       /*
         Compare the two columns and check for duplicate common fields.
@@ -7333,13 +7419,12 @@ mark_common_columns(THD *thd, TABLE_LIST *table_ref_1, TABLE_LIST *table_ref_2,
         here. These columns must be checked only on unqualified reference 
         by name (e.g. in SELECT list).
       */
-      if (!lex_string_cmp(system_charset_info, field_name_1,
-                          cur_field_name_2))
+      if (field_name_1.streq(cur_field_name_2))
       {
         DBUG_PRINT ("info", ("match c1.is_common=%d", nj_col_1->is_common));
         if (cur_nj_col_2->is_common || found)
         {
-          my_error(ER_NON_UNIQ_ERROR, MYF(0), field_name_1->str, thd->where);
+          my_error(ER_NON_UNIQ_ERROR, MYF(0), field_name_1.str, thd_where(thd));
           goto err;
         }
         if ((!using_fields && !field_2_invisible) || is_using_column_1)
@@ -7425,10 +7510,10 @@ mark_common_columns(THD *thd, TABLE_LIST *table_ref_1, TABLE_LIST *table_ref_2,
 
       nj_col_1->is_common= nj_col_2->is_common= TRUE;
       DBUG_PRINT ("info", ("%s.%s and %s.%s are common", 
-                           nj_col_1->safe_table_name(),
-                           nj_col_1->name()->str,
-                           nj_col_2->safe_table_name(),
-                           nj_col_2->name()->str));
+                           nj_col_1->safe_table_name().str,
+                           nj_col_1->name().str,
+                           nj_col_2->safe_table_name().str,
+                           nj_col_2->name().str));
 
       if (field_1)
         update_field_dependencies(thd, field_1, field_1->table);
@@ -7542,7 +7627,6 @@ store_natural_using_join_columns(THD *thd, TABLE_LIST *natural_using_join,
     List_iterator_fast<String> using_fields_it(*using_fields);
     while ((using_field_name= using_fields_it++))
     {
-      const char *using_field_name_ptr= using_field_name->c_ptr();
       List_iterator_fast<Natural_join_column>
         it(*join_columns);
       Natural_join_column *common_field;
@@ -7552,12 +7636,12 @@ store_natural_using_join_columns(THD *thd, TABLE_LIST *natural_using_join,
         /* If reached the end of fields, and none was found, report error. */
         if (!(common_field= it++))
         {
-          my_error(ER_BAD_FIELD_ERROR, MYF(0), using_field_name_ptr,
-                   current_thd->where);
+          my_error(ER_BAD_FIELD_ERROR, MYF(0),
+                   ErrConvString(using_field_name).ptr(),
+                   thd_where(current_thd));
           goto err;
         }
-        if (!my_strcasecmp(system_charset_info,
-                           common_field->name()->str, using_field_name_ptr))
+        if (common_field->name().streq(using_field_name->to_lex_cstring()))
           break;                                // Found match
       }
     }
@@ -7807,7 +7891,7 @@ static bool setup_natural_join_row_types(THD *thd,
                                          Name_resolution_context *context)
 {
   DBUG_ENTER("setup_natural_join_row_types");
-  thd->where= "from clause";
+  thd->where= THD_WHERE::FROM_CLAUSE;
   if (from_clause->elements == 0)
     DBUG_RETURN(false); /* We come here in the case of UNIONs. */
 
@@ -7888,6 +7972,9 @@ int setup_wild(THD *thd, TABLE_LIST *tables, List<Item> &fields,
   if (!(*with_wild))
      DBUG_RETURN(0);
 
+  if (!fields.elements)
+    DBUG_RETURN(0);
+
   /*
     Don't use arena if we are not in prepared statements or stored procedures
     For PS/SP we have to use arena to remember the changes
@@ -7916,8 +8003,8 @@ int setup_wild(THD *thd, TABLE_LIST *tables, List<Item> &fields,
                                 MY_INT64_NUM_DECIMAL_DIGITS));
       }
       else if (insert_fields(thd, ((Item_field*) item)->context,
-                             ((Item_field*) item)->db_name.str,
-                             ((Item_field*) item)->table_name.str, &it,
+                             ((Item_field*) item)->db_name,
+                             ((Item_field*) item)->table_name, &it,
                              any_privileges, &select_lex->hidden_bit_fields, returning_field))
       {
 	if (arena)
@@ -7952,7 +8039,7 @@ int setup_wild(THD *thd, TABLE_LIST *tables, List<Item> &fields,
 bool setup_fields(THD *thd, Ref_ptr_array ref_pointer_array,
                   List<Item> &fields, enum_column_usage column_usage,
                   List<Item> *sum_func_list, List<Item> *pre_fix,
-                  bool allow_sum_func)
+                  bool allow_sum_func, THD_WHERE where)
 {
   Item *item;
   LEX * const lex= thd->lex;
@@ -7978,7 +8065,7 @@ bool setup_fields(THD *thd, Ref_ptr_array ref_pointer_array,
               lex->current_select->nest_level);
   if (allow_sum_func)
     lex->allow_sum_func.set_bit(lex->current_select->nest_level);
-  thd->where= THD::DEFAULT_WHERE;
+  thd->where= where;
   save_is_item_list_lookup= lex->current_select->is_item_list_lookup;
   lex->current_select->is_item_list_lookup= 0;
 
@@ -8020,7 +8107,7 @@ bool setup_fields(THD *thd, Ref_ptr_array ref_pointer_array,
   while ((item= it++))
   {
     if (make_pre_fix)
-      pre_fix->push_back(item, thd->stmt_arena->mem_root);
+      pre_fix->push_back(item, thd->active_stmt_arena_to_use()->mem_root);
 
     if (item->fix_fields_if_needed_for_scalar(thd, it.ref()))
     {
@@ -8058,40 +8145,7 @@ bool setup_fields(THD *thd, Ref_ptr_array ref_pointer_array,
   lex->allow_sum_func= save_allow_sum_func;
   thd->column_usage= saved_column_usage;
   DBUG_PRINT("info", ("thd->column_usage: %d", thd->column_usage));
-  DBUG_RETURN(MY_TEST(thd->is_error()));
-}
-
-/*
-  make list of leaves for a single TABLE_LIST
-
-  SYNOPSIS
-    make_leaves_for_single_table()
-    thd             Thread handler
-    leaves          List of leaf tables to be filled
-    table           TABLE_LIST object to process
-    full_table_list Whether to include tables from mergeable derived table/view
-*/
-void make_leaves_for_single_table(THD *thd, List<TABLE_LIST> &leaves,
-                              TABLE_LIST *table, bool& full_table_list,
-                              TABLE_LIST *boundary)
-{
-  if (table == boundary)
-    full_table_list= !full_table_list;
-  if (full_table_list && table->is_merged_derived())
-  {
-    SELECT_LEX *select_lex= table->get_single_select();
-    /*
-      It's safe to use select_lex->leaf_tables because all derived
-      tables/views were already prepared and has their leaf_tables
-      set properly.
-    */
-    make_leaves_list(thd, leaves, select_lex->get_table_list(),
-                     full_table_list, boundary);
-  }
-  else
-  {
-    leaves.push_back(table, thd->mem_root);
-  }
+  DBUG_RETURN(thd->is_error());
 }
 
 
@@ -8111,7 +8165,7 @@ int setup_returning_fields(THD* thd, TABLE_LIST* table_list)
   return setup_wild(thd, table_list, thd->lex->returning()->item_list, NULL,
                     thd->lex->returning(), true)
       || setup_fields(thd, Ref_ptr_array(), thd->lex->returning()->item_list,
-                      MARK_COLUMNS_READ, NULL, NULL, false);
+                      MARK_COLUMNS_READ, NULL, NULL, 0, THD_WHERE::RETURNING);
 }
 
 
@@ -8120,78 +8174,39 @@ int setup_returning_fields(THD* thd, TABLE_LIST* table_list)
 
   SYNOPSIS
     make_leaves_list()
-    leaves          List of leaf tables to be filled
-    tables          Table list
-    full_table_list Whether to include tables from mergeable derived table/view.
-                    We need them for checks for INSERT/UPDATE statements only.
+    list    pointer to pointer on list first element
+    tables  table list
+    full_table_list whether to include tables from mergeable derived table/view.
+                    we need them for checks for INSERT/UPDATE statements only.
+
+  RETURN pointer on pointer to next_leaf of last element
 */
 
-void make_leaves_list(THD *thd, List<TABLE_LIST> &leaves, TABLE_LIST *tables,
+void make_leaves_list(THD *thd, List<TABLE_LIST> &list, TABLE_LIST *tables,
                       bool full_table_list, TABLE_LIST *boundary)
  
 {
   for (TABLE_LIST *table= tables; table; table= table->next_local)
   {
-    make_leaves_for_single_table(thd, leaves, table, full_table_list,
-                                 boundary);
+    if (table == boundary)
+      full_table_list= !full_table_list;
+    if (full_table_list && table->is_merged_derived())
+    {
+      SELECT_LEX *select_lex= table->get_single_select();
+      /*
+        It's safe to use select_lex->leaf_tables because all derived
+        tables/views were already prepared and has their leaf_tables
+        set properly.
+      */
+      make_leaves_list(thd, list, select_lex->get_table_list(),
+      full_table_list, boundary);
+    }
+    else
+    {
+      list.push_back(table, thd->mem_root);
+    }
   }
 }
-
-
-/*
-  Setup the map and other attributes for a single TABLE_LIST object
-
-  SYNOPSIS
-    setup_table_attributes()
-    thd                 Thread handler
-    table_list          TABLE_LIST object to process
-    first_select_table  First table participating in SELECT for INSERT..SELECT
-                        statements, NULL for other cases
-    tablenr             Serial number of the table in the SQL statement
-
-  RETURN
-    false               Success
-    true                Failure
-*/
-bool setup_table_attributes(THD *thd, TABLE_LIST *table_list,
-                            TABLE_LIST *first_select_table,
-                            uint &tablenr)
-{
-  TABLE *table= table_list->table;
-  if (table)
-    table->pos_in_table_list= table_list;
-  if (first_select_table && table_list->top_table() == first_select_table)
-  {
-    /* new counting for SELECT of INSERT ... SELECT command */
-    first_select_table= 0;
-    thd->lex->first_select_lex()->insert_tables= tablenr;
-    tablenr= 0;
-  }
-  if (table_list->jtbm_subselect)
-  {
-    table_list->jtbm_table_no= tablenr;
-  }
-  else if (table)
-  {
-    table->pos_in_table_list= table_list;
-    setup_table_map(table, table_list, tablenr);
-
-    if (table_list->process_index_hints(table))
-      return true;
-  }
-  tablenr++;
-  /*
-    We test the max tables here as we setup_table_map() should not be called
-    with tablenr >= 64
-  */
-  if (tablenr > MAX_TABLES)
-  {
-    my_error(ER_TOO_MANY_TABLES, MYF(0), static_cast<int>(MAX_TABLES));
-    return true;
-  }
-  return false;
-}
-
 
 /*
   prepare tables
@@ -8249,14 +8264,7 @@ bool setup_tables(THD *thd, Name_resolution_context *context,
     leaves.empty();
     if (select_lex->prep_leaf_list_state != SELECT_LEX::SAVED)
     {
-      /*
-        For INSERT ... SELECT statements we must not include the first table
-        (where the data is being inserted into) in the list of leaves
-      */
-      TABLE_LIST *tables_for_leaves=
-          select_insert ? first_select_table : tables;
-      make_leaves_list(thd, leaves, tables_for_leaves, full_table_list,
-                       first_select_table);
+      make_leaves_list(thd, leaves, tables, full_table_list, first_select_table);
       select_lex->prep_leaf_list_state= SELECT_LEX::READY;
       select_lex->leaf_tables_exec.empty();
     }
@@ -8266,39 +8274,56 @@ bool setup_tables(THD *thd, Name_resolution_context *context,
       while ((table_list= ti++))
         leaves.push_back(table_list, thd->mem_root);
     }
-      
-    List_iterator<TABLE_LIST> ti(leaves);
+
+    bool is_insert_tables_num_set= false;
     while ((table_list= ti++))
     {
-      if (setup_table_attributes(thd, table_list, first_select_table, tablenr))
-        DBUG_RETURN(1);
-    }
-
-    if (select_insert)
-    {
-      /*
-        The table/view in which the data is inserted must not be included into
-        the leaf_tables list. But we need this table/view to setup attributes
-        for it. So build a temporary list of leaves and setup attributes for
-        the tables included
-      */
-      List<TABLE_LIST> leaves;
-      TABLE_LIST *table= tables;
-
-      make_leaves_for_single_table(thd, leaves, table, full_table_list,
-                                   first_select_table);
-
-      List_iterator<TABLE_LIST> ti(leaves);
-      while ((table_list= ti++))
+      TABLE *table= table_list->table;
+      if (table && !table->pos_in_table_list)
+        table->pos_in_table_list= table_list;
+      if (select_insert && !is_insert_tables_num_set &&
+          table_list->top_table() == first_select_table)
       {
-        if (setup_table_attributes(thd, table_list, first_select_table,
-                                   tablenr))
+        /* new counting for SELECT of INSERT ... SELECT command */
+        thd->lex->first_select_lex()->insert_tables= tablenr;
+        is_insert_tables_num_set= true;
+        tablenr= 0;
+      }
+      if(table_list->jtbm_subselect)
+      {
+        table_list->jtbm_table_no= tablenr;
+      }
+      else if (table)
+      {
+        setup_table_map(table, table_list, tablenr);
+
+        if (table_list->process_index_hints(table))
           DBUG_RETURN(1);
       }
+      tablenr++;
+      /*
+        Test MAX_TABLES overflow here inside the loop as setup_table_map()
+        called in each iteration is sensitive for this
+      */
+      if (tablenr > MAX_TABLES)
+      {
+        my_error(ER_TOO_MANY_TABLES, MYF(0), static_cast<int>(MAX_TABLES));
+        DBUG_RETURN(1);
+      }
+    }
+    if (select_insert && !is_insert_tables_num_set)
+    {
+      /*
+        This happens for statements like `INSERT INTO t1 SELECT 1`,
+        when there are no tables in the SELECT part.
+        In this case all leaf tables belong to the INSERT part
+      */
+      thd->lex->first_select_lex()->insert_tables= tablenr;
     }
   }
   else
   { 
+    DBUG_ASSERT(select_lex->leaf_tables_saved);
     List_iterator_fast <TABLE_LIST> ti(select_lex->leaf_tables_exec);
     select_lex->leaf_tables.empty();
     while ((table_list= ti++))
@@ -8472,26 +8497,28 @@ bool get_key_map_from_key_list(key_map *map, TABLE *table,
 */
 
 bool
-insert_fields(THD *thd, Name_resolution_context *context, const char *db_name,
-	      const char *table_name, List_iterator<Item> *it,
-              bool any_privileges, uint *hidden_bit_fields, bool returning_field)
+insert_fields(THD *thd, Name_resolution_context *context,
+              const Lex_ident_db &db_name_arg,
+              const Lex_ident_table &table_name,
+              List_iterator<Item> *it,
+              bool any_privileges, uint *hidden_bit_fields,
+              bool returning_field)
 {
   Field_iterator_table_ref field_iterator;
   bool found;
-  char name_buff[SAFE_NAME_LEN+1];
+  Lex_ident_db db_name= db_name_arg;
+  IdentBuffer<SAFE_NAME_LEN> db_name_buff;
   DBUG_ENTER("insert_fields");
   DBUG_PRINT("arena", ("stmt arena: %p",thd->stmt_arena));
 
-  if (db_name && lower_case_table_names)
+  if (db_name.str && lower_case_table_names)
   {
     /*
       convert database to lower case for comparison
       We can't do this in Item_field as this would change the
       'name' of the item which may be used in the select list
     */
-    strmake_buf(name_buff, db_name);
-    my_casedn_str(files_charset_info, name_buff);
-    db_name= name_buff;
+    db_name= Lex_ident_db(db_name_buff.copy_casedn(db_name).to_lex_cstring());
   }
 
   found= FALSE;
@@ -8503,7 +8530,7 @@ insert_fields(THD *thd, Name_resolution_context *context, const char *db_name,
   */
   TABLE_LIST *first= context->first_name_resolution_table;
   TABLE_LIST *TABLE_LIST::* next= &TABLE_LIST::next_name_resolution_table;
-  if (table_name && !returning_field)
+  if (table_name.str && !returning_field)
   {
     first= context->table_list;
     next= &TABLE_LIST::next_local;
@@ -8515,9 +8542,8 @@ insert_fields(THD *thd, Name_resolution_context *context, const char *db_name,
 
     DBUG_ASSERT(tables->is_leaf_for_name_resolution());
 
-    if ((table_name && my_strcasecmp(table_alias_charset, table_name,
-                                     tables->alias.str)) ||
-        (db_name && strcmp(tables->db.str, db_name)))
+    if ((table_name.str && !table_name.streq(tables->alias)) ||
+        (db_name.str && strcmp(tables->db.str, db_name.str)))
       continue;
 
 #ifndef NO_EMBEDDED_ACCESS_CHECKS
@@ -8564,6 +8590,10 @@ insert_fields(THD *thd, Name_resolution_context *context, const char *db_name,
     */
     field_iterator.set(tables);
 
+    List_iterator_fast<Lex_ident_sys> ni;
+    if (tables->column_names)
+      ni.init(*tables->column_names);
+
     for (; !field_iterator.end_of_fields(); field_iterator.next())
     {
       /*
@@ -8578,6 +8608,9 @@ insert_fields(THD *thd, Name_resolution_context *context, const char *db_name,
 
       if (!(item= field_iterator.create_item(thd)))
         DBUG_RETURN(TRUE);
+
+      if (tables->column_names)
+        lex_string_set(&item->name, (ni++)->str);
 
       /* cache the table for the Item_fields inserted by expanding stars */
       if (item->type() == Item::FIELD_ITEM && tables->cacheable_table)
@@ -8609,14 +8642,14 @@ insert_fields(THD *thd, Name_resolution_context *context, const char *db_name,
                     tables->is_natural_join);
         DBUG_ASSERT(item->type() == Item::FIELD_ITEM);
         Item_field *fld= (Item_field*) item;
-        const char *field_db_name= field_iterator.get_db_name();
-        const char *field_table_name= field_iterator.get_table_name();
+        const char *field_db_name= field_iterator.get_db_name().str;
+        const char *field_table_name= field_iterator.get_table_name().str;
 
         if (!tables->schema_table && 
             !(fld->have_privileges=
               (get_column_grant(thd, field_iterator.grant(),
                                 field_db_name,
-                                field_table_name, fld->field_name.str) &
+                                field_table_name, fld->field_name) &
                VIEW_ANY_ACL)))
         {
           my_error(ER_TABLEACCESS_DENIED_ERROR, MYF(0), "ANY",
@@ -8676,15 +8709,15 @@ insert_fields(THD *thd, Name_resolution_context *context, const char *db_name,
     qualified '*', and all columns were coalesced, we have to give a more
     meaningful message than ER_BAD_TABLE_ERROR.
   */
-  if (!table_name)
+  if (!table_name.str)
     my_error(ER_NO_TABLES_USED, MYF(0));
-  else if (!db_name && !thd->db.str)
+  else if (!db_name.str && !thd->db.str)
     my_error(ER_NO_DB_ERROR, MYF(0));
   else
   {
     char name[FN_REFLEN];
     my_snprintf(name, sizeof(name), "%s.%s",
-                db_name ? db_name : thd->get_db(), table_name);
+                db_name.str ? db_name.str : thd->get_db(), table_name.str);
     my_error(ER_BAD_TABLE_ERROR, MYF(0), name);
   }
 
@@ -8736,7 +8769,7 @@ bool setup_on_expr(THD *thd, TABLE_LIST *table, bool is_update)
       embedded= embedding;
       if (embedded->on_expr)
       {
-        thd->where="on clause";
+        thd->where= THD_WHERE::ON_CLAUSE;
         embedded->on_expr->mark_as_condition_AND_part(embedded);
         if (embedded->on_expr->fix_fields_if_needed_for_bool(thd,
                                                            &embedded->on_expr))
@@ -8837,7 +8870,7 @@ int setup_conds(THD *thd, TABLE_LIST *tables, List<TABLE_LIST> &leaves,
 
   if (*conds)
   {
-    thd->where="where clause";
+    thd->where= THD_WHERE::WHERE_CLAUSE;
     DBUG_EXECUTE("where",
                  print_where(*conds,
                              "WHERE in setup_conds",
@@ -8902,12 +8935,32 @@ static bool vers_update_or_validate_fields(TABLE *table)
          TIME_NO_ZERO_DATE, time_round_mode_t(time_round_mode_t::FRAC_NONE))))
     return 0;
 
-  StringBuffer<MAX_DATETIME_FULL_WIDTH+1> val;
-  row_start->val_str(&val);
-  my_error(ER_WRONG_VALUE, MYF(0), row_start->field_name.str, val.c_ptr());
+  StringBuffer<MAX_DATETIME_FULL_WIDTH+1> val_start, val_end;
+  row_start->val_str(&val_start);
+  row_end->val_str(&val_end);
+  my_error(ER_WRONG_VERSIONING_RANGE, MYF(0),
+           row_start->field_name.str, val_start.c_ptr(),
+           row_end->field_name.str, val_end.c_ptr());
   return 1;
 }
 
+
+static void unwind_stored_field_offsets(const List<Item> &fields, Field *end)
+{
+  for (Item &item_field: fields)
+  {
+    Field *f= item_field.field_for_view_update()->field;
+    if (f == end)
+      break;
+
+    if (f->stored_in_db())
+    {
+      TABLE *table= f->table;
+      f->move_field_offset((my_ptrdiff_t) (table->record[0] -
+                                           table->record[1]));
+    }
+  }
+}
 
 /******************************************************************************
 ** Fill a record with data (for INSERT or UPDATE)
@@ -8964,7 +9017,7 @@ fill_record(THD *thd, TABLE *table_arg, List<Item> &fields, List<Item> &values,
     if (!(field= fld->field_for_view_update()))
     {
       my_error(ER_NONUPDATEABLE_COLUMN, MYF(0), fld->name.str);
-      goto err;
+      goto err_unwind_fields;
     }
     value=v++;
     DBUG_ASSERT(value);
@@ -8996,7 +9049,7 @@ fill_record(THD *thd, TABLE *table_arg, List<Item> &fields, List<Item> &values,
         if (value->save_in_field(rfield, 0) < 0 && !ignore_errors)
         {
           my_message(ER_UNKNOWN_ERROR, ER_THD(thd, ER_UNKNOWN_ERROR), MYF(0));
-          goto err;
+          goto err_unwind_fields;
         }
         rfield->set_has_explicit_value();
       }
@@ -9012,20 +9065,7 @@ fill_record(THD *thd, TABLE *table_arg, List<Item> &fields, List<Item> &values,
   }
 
   if (update && thd->variables.sql_mode & MODE_SIMULTANEOUS_ASSIGNMENT)
-  {
-    // restore fields pointers on record[0]
-    f.rewind();
-    while ((fld= f++))
-    {
-      rfield= fld->field_for_view_update()->field;
-      if (rfield->stored_in_db())
-      {
-        table= rfield->table;
-        rfield->move_field_offset((my_ptrdiff_t) (table->record[0] -
-                                                  table->record[1]));
-      }
-    }
-  }
+    unwind_stored_field_offsets(fields, NULL);
 
   if (update)
     table_arg->evaluate_update_default_function();
@@ -9044,6 +9084,9 @@ fill_record(THD *thd, TABLE *table_arg, List<Item> &fields, List<Item> &values,
   thd->abort_on_warning= save_abort_on_warning;
   thd->no_errors=        save_no_errors;
   DBUG_RETURN(thd->is_error());
+err_unwind_fields:
+  if (update && thd->variables.sql_mode & MODE_SIMULTANEOUS_ASSIGNMENT)
+    unwind_stored_field_offsets(fields, rfield);
 err:
   DBUG_PRINT("error",("got error"));
   thd->abort_on_warning= save_abort_on_warning;
@@ -9072,7 +9115,6 @@ void switch_to_nullable_trigger_fields(List<Item> &items, TABLE *table)
 
     while ((item= it++))
       item->walk(&Item::switch_to_nullable_fields_processor, 1, field);
-    table->triggers->reset_extra_null_bitmap();
   }
 }
 
@@ -9126,8 +9168,14 @@ static bool not_null_fields_have_null_values(TABLE *table)
         swap_variables(uint32, of->flags, ff->flags);
         if (ff->is_real_null())
         {
+          uint err= ER_BAD_NULL_ERROR;
+          if (ff->flags & NO_DEFAULT_VALUE_FLAG && !ff->has_explicit_value())
+          {
+            err= ER_NO_DEFAULT_FOR_FIELD;
+            table->in_use->count_cuted_fields= CHECK_FIELD_WARN;
+          }
           ff->set_notnull(); // for next row WHERE condition in UPDATE
-          if (convert_null_to_field_value_or_error(of) || thd->is_error())
+          if (convert_null_to_field_value_or_error(of, err) || thd->is_error())
             return true;
         }
       }
@@ -9136,6 +9184,32 @@ static bool not_null_fields_have_null_values(TABLE *table)
 
   return false;
 }
+
+
+/**
+  The auxiliary function to determine whether a row should be skipped
+  or handled after invocation of triggers.
+
+  @return true in case either there is no BEFORE INSERT triggers or
+               the statement SIGNAL SQLSTATE '02TRG' wasn't executed by
+               BEFORE INSERT triggers, else return false meaning that the row
+               mustn't be processed by the INSERT statement.
+*/
+
+static inline bool no_need_to_skip_a_row(bool *skip_row_indicator)
+{
+  /*
+    A row currently being processed mustn't be skipped in case the parameter
+    skip_row_indicator passed into fill_record_n_invoke_before_triggers()
+    is not null (that is true for BEFORE INSERT triggers) and a value stored by
+    this pointer has the value false, meaning that no SIGNAL statement with
+    the SQLSTATE = '02TRG' was raised on processing triggers.
+  */
+  return
+    !skip_row_indicator ||
+    !*skip_row_indicator;
+}
+
 
 /**
   Fill fields in list with values from the list of items and invoke
@@ -9147,6 +9221,9 @@ static bool not_null_fields_have_null_values(TABLE *table)
   @param values        values to fill with
   @param ignore_errors TRUE if we should ignore errors
   @param event         event type for triggers to be invoked
+  @param [out] skip_row_indicator  the flag whose value tells whether to skip
+                                   the current record by INSERT/LOAD statements
+                                   or process it
 
   @detail
     This function assumes that fields which values will be set and triggers
@@ -9162,7 +9239,8 @@ bool
 fill_record_n_invoke_before_triggers(THD *thd, TABLE *table,
                                      List<Item> &fields,
                                      List<Item> &values, bool ignore_errors,
-                                     enum trg_event_type event)
+                                     enum trg_event_type event,
+                                     bool *skip_row_indicator)
 {
   int result;
   Table_triggers_list *triggers= table->triggers;
@@ -9172,16 +9250,20 @@ fill_record_n_invoke_before_triggers(THD *thd, TABLE *table,
 
   if (!result && triggers)
   {
+
     if (triggers->process_triggers(thd, event, TRG_ACTION_BEFORE,
-                                    TRUE) ||
+                                   true, skip_row_indicator, &fields) ||
         not_null_fields_have_null_values(table))
+    {
       return TRUE;
+    }
 
     /*
       Re-calculate virtual fields to cater for cases when base columns are
       updated by the triggers.
     */
-    if (table->vfield && fields.elements)
+    if (table->vfield && fields.elements &&
+        no_need_to_skip_a_row(skip_row_indicator))
     {
       Item *fld= (Item_field*) fields.head();
       Item_field *item_field= fld->field_for_view_update();
@@ -9207,6 +9289,9 @@ fill_record_n_invoke_before_triggers(THD *thd, TABLE *table,
   @param values        values to fill with
   @param ignore_errors TRUE if we should ignore errors
   @param use_value     forces usage of value of the items instead of result
+  @param check_for_computability whether to check for ability to invoke val_*()
+                                 methods (val_int () etc) against supplied
+                                 values
 
   @details
     fill_record() may set table->auto_increment_field_not_null and a
@@ -9220,7 +9305,7 @@ fill_record_n_invoke_before_triggers(THD *thd, TABLE *table,
 
 bool
 fill_record(THD *thd, TABLE *table, Field **ptr, List<Item> &values,
-            bool ignore_errors, bool use_value)
+            bool ignore_errors, bool use_value, bool check_for_computability)
 {
   List_iterator_fast<Item> v(values);
   List<TABLE> tbl_list;
@@ -9259,6 +9344,10 @@ fill_record(THD *thd, TABLE *table, Field **ptr, List<Item> &values,
     value=v++;
     /* Ensure the end of the list of values is not reached */
     DBUG_ASSERT(value);
+
+    if (check_for_computability &&
+        value->check_is_evaluable_expression_or_error())
+      goto err;
 
     const bool skip_sys_field= field->vers_sys_field() &&
                                !thd->vers_insert_history_fast(table);
@@ -9317,6 +9406,9 @@ err:
   @param values        values to fill with
   @param ignore_errors TRUE if we should ignore errors
   @param event         event type for triggers to be invoked
+  @param [out] skip_row_indicator  the flag whose value tells whether to skip
+                                   the current record by INSERT statement or
+                                   process it
 
   @detail
     This function assumes that fields which values will be set and triggers
@@ -9331,21 +9423,24 @@ err:
 bool
 fill_record_n_invoke_before_triggers(THD *thd, TABLE *table, Field **ptr,
                                      List<Item> &values, bool ignore_errors,
-                                     enum trg_event_type event)
+                                     enum trg_event_type event,
+                                     bool *skip_row_indicator)
 {
   bool result;
   Table_triggers_list *triggers= table->triggers;
 
-  result= fill_record(thd, table, ptr, values, ignore_errors, FALSE);
+  result= fill_record(thd, table, ptr, values, ignore_errors, false, false);
 
   if (!result && triggers && *ptr)
-    result= triggers->process_triggers(thd, event, TRG_ACTION_BEFORE, TRUE) ||
+    result= triggers->process_triggers(thd, event, TRG_ACTION_BEFORE, true,
+                                       skip_row_indicator) ||
             not_null_fields_have_null_values(table);
   /*
     Re-calculate virtual fields to cater for cases when base columns are
     updated by the triggers.
   */
-  if (!result && triggers && *ptr)
+  if (!result && triggers && *ptr &&
+      no_need_to_skip_a_row(skip_row_indicator))
   {
     DBUG_ASSERT(table == (*ptr)->table);
     if (table->vfield)
@@ -9358,17 +9453,17 @@ fill_record_n_invoke_before_triggers(THD *thd, TABLE *table, Field **ptr,
 
 my_bool mysql_rm_tmp_tables(void)
 {
+  THD *thd;
   size_t i, idx;
   char	path[FN_REFLEN], *tmpdir, path_copy[FN_REFLEN];
   MY_DIR *dirp;
   FILEINFO *file;
   TABLE_SHARE share;
-  THD *thd;
   DBUG_ENTER("mysql_rm_tmp_tables");
 
   if (!(thd= new THD(0)))
     DBUG_RETURN(1);
-  thd->thread_stack= (char*) &thd;
+  thd->thread_stack= (void*) &thd;              // Big stack
   thd->store_globals();
 
   for (i=0; i<=mysql_tmpdir_list.max; i++)
@@ -9396,9 +9491,10 @@ my_bool mysql_rm_tmp_tables(void)
           /* We should cut file extention before deleting of table */
           memcpy(path_copy, path, path_len - ext_len);
           path_copy[path_len - ext_len]= 0;
-          init_tmp_table_share(thd, &share, "", 0, "", path_copy);
+          init_tmp_table_share(thd, &share, "", 0, "", path_copy, true);
+          handlerton *ht= share.db_type();
           if (!open_table_def(thd, &share))
-            share.db_type()->drop_table(share.db_type(), path_copy);
+            ht->drop_table(share.db_type(), path_copy);
           free_table_share(&share);
         }
         /*
@@ -9544,9 +9640,11 @@ open_system_tables_for_read(THD *thd, TABLE_LIST *table_list)
 
   for (TABLE_LIST *tables= table_list; tables; tables= tables->next_global)
   {
-    DBUG_ASSERT(tables->table->s->table_category == TABLE_CATEGORY_SYSTEM);
-    tables->table->file->row_logging= 0;
-    tables->table->use_all_columns();
+    TABLE *table= tables->table;
+    DBUG_ASSERT(table->s->table_category == TABLE_CATEGORY_SYSTEM ||
+                table->s->table_category == TABLE_CATEGORY_STATISTICS);
+    table->file->row_logging= 0;
+    table->use_all_columns();
   }
   lex->restore_backup_query_tables_list(&query_tables_list_backup);
 
@@ -9736,3 +9834,177 @@ int dynamic_column_error_message(enum_dyncol_func_result rc)
 /**
   @} (end of group Data_Dictionary)
 */
+
+int TABLE::hlindex_open(uint nr)
+{
+  DBUG_ASSERT(s->hlindexes() == 1);
+  DBUG_ASSERT(nr == s->keys);
+  if (!hlindex)
+  {
+    s->lock_share();
+    if (!s->hlindex)
+    {
+      s->unlock_share();
+      TABLE_SHARE *share;
+      char *path= NULL;
+      size_t path_len= s->normalized_path.length + HLINDEX_BUF_LEN;
+
+      share= (TABLE_SHARE*)alloc_root(&s->mem_root, sizeof(*share));
+      path= (char*)alloc_root(&s->mem_root, path_len);
+      if (!share || !path)
+        return 1;
+
+      my_snprintf(path, path_len, "%s" HLINDEX_TEMPLATE,
+                  s->normalized_path.str, nr);
+      init_tmp_table_share(in_use, share, s->db.str, 0, s->table_name.str,
+                           path, false);
+      share->db_plugin= s->db_plugin;
+
+      LEX_CSTRING sql= mhnsw_hlindex_table_def(in_use, file->ref_length);
+      if (share->init_from_sql_statement_string(in_use, false,
+                        sql.str, sql.length))
+      {
+        if (share->db_plugin == s->db_plugin)
+          share->db_plugin= NULL;
+        free_table_share(share);
+        return 1;
+      }
+
+      s->lock_share();
+      if (!s->hlindex)
+      {
+        s->hlindex= share;
+        s->unlock_share();
+      }
+      else
+      {
+        s->unlock_share();
+        free_table_share(share);
+      }
+    }
+    else
+      s->unlock_share();
+    TABLE *table= (TABLE*)alloc_root(&mem_root, sizeof(*table));
+    if (!table || open_table_from_share(in_use, s->hlindex, &empty_clex_str,
+                    db_stat, EXTRA_RECORD, in_use->open_options, table, 0))
+      return 1;
+    hlindex= table;
+    hlindex->in_use= NULL;
+  }
+  return 0;
+}
+
+int TABLE::hlindex_lock(uint nr)
+{
+  DBUG_ASSERT(s->hlindexes() == 1);
+  DBUG_ASSERT(nr == s->keys);
+  DBUG_ASSERT(hlindex);
+  if (hlindex->in_use == in_use)
+    return 0;
+  hlindex->use_all_columns();
+
+  THR_LOCK_DATA *lock_data;
+  DBUG_ASSERT(hlindex->file->lock_count() <= 1);
+  hlindex->file->store_lock(in_use, &lock_data, reginfo.lock_type);
+
+  int res= hlindex->file->ha_external_lock(in_use,
+             reginfo.lock_type < TL_FIRST_WRITE ? F_RDLCK : F_WRLCK);
+  if (res == 0)
+    hlindex->in_use= in_use;      // mark in use for this query
+  if (hlindex->file->lock_count() > 0)
+  {
+    /*
+      This code is here mostly for Aria. It requires start_trans() call
+      to handle transaction logging.
+    */
+    if (res == 0 && !s->tmp_table && lock_data->lock->start_trans)
+      lock_data->lock->start_trans(lock_data->status_param);
+    lock_data->type= TL_UNLOCK;
+  }
+  return res;
+}
+
+int TABLE::open_hlindexes_for_write()
+{
+  DBUG_ASSERT(s->hlindexes() <= 1);
+  for (uint i= s->keys; i < s->total_keys; i++)
+    if (hlindex_open(i) || hlindex_lock(i))
+      return 1;
+  return 0;
+}
+
+int TABLE::unlock_hlindexes()
+{
+  if (hlindex && hlindex->in_use)
+  {
+    hlindex->file->ha_external_unlock(in_use);
+    hlindex->in_use= 0;
+  }
+  return 0;
+}
+
+int TABLE::hlindexes_on_insert()
+{
+  DBUG_ASSERT(s->hlindexes() == (hlindex != NULL));
+  if (hlindex && hlindex->in_use)
+    if (int err= mhnsw_insert(this, key_info + s->keys))
+      return err;
+  return 0;
+}
+
+int TABLE::hlindexes_on_update()
+{
+  DBUG_ASSERT(s->hlindexes() == (hlindex != NULL));
+  if (hlindex && hlindex->in_use)
+  {
+    int err;
+    // mark deleted node invalid and insert node for new row
+    if ((err= mhnsw_invalidate(this, record[1], key_info + s->keys)) ||
+        (err= mhnsw_insert(this, key_info + s->keys)))
+      return err;
+  }
+
+  return 0;
+}
+
+int TABLE::hlindexes_on_delete(const uchar *buf)
+{
+  DBUG_ASSERT(s->hlindexes() == (hlindex != NULL));
+  DBUG_ASSERT(buf == record[0] || buf == record[1]); // note: REPLACE
+  if (hlindex && hlindex->in_use)
+    if (int err= mhnsw_invalidate(this, buf, key_info + s->keys))
+      return err;
+  return 0;
+}
+
+int TABLE::hlindexes_on_delete_all(bool truncate)
+{
+  DBUG_ASSERT(s->hlindexes() == (hlindex != NULL));
+  if (hlindex && hlindex->in_use)
+    if (int err= mhnsw_delete_all(this, key_info + s->keys, truncate))
+      return err;
+  return 0;
+}
+
+int TABLE::hlindex_read_first(uint nr, Item *item, ulonglong limit)
+{
+  DBUG_ASSERT(s->hlindexes() == 1);
+  DBUG_ASSERT(nr == s->keys);
+
+  if (hlindex_open(nr) || hlindex_lock(nr))
+    return HA_ERR_CRASHED;
+
+  DBUG_ASSERT(hlindex->in_use == in_use);
+
+  return mhnsw_read_first(this, key_info + s->keys, item, limit);
+}
+
+int TABLE::hlindex_read_next()
+{
+  return mhnsw_read_next(this);
+}
+
+int TABLE::hlindex_read_end()
+{
+  return mhnsw_read_end(this);
+}

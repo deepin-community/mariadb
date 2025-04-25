@@ -50,7 +50,8 @@ using namespace messageqcpp;
 
 namespace dmlpackageprocessor
 {
-DMLPackageProcessor::DMLResult InsertPackageProcessor::processPackage(dmlpackage::CalpontDMLPackage& cpackage)
+DMLPackageProcessor::DMLResult InsertPackageProcessor::processPackageInternal(
+    dmlpackage::CalpontDMLPackage& cpackage)
 {
   SUMMARY_INFO("InsertPackageProcessor::processPackage");
 
@@ -100,7 +101,7 @@ DMLPackageProcessor::DMLResult InsertPackageProcessor::processPackage(dmlpackage
   {
     logging::Message::Args args;
     logging::Message message(9);
-    args.add("Unknown error occured while getting unique number.");
+    args.add("Unknown error occurred while getting unique number.");
     message.format(args);
     result.result = INSERT_ERROR;
     result.message = message;
@@ -176,9 +177,6 @@ DMLPackageProcessor::DMLResult InsertPackageProcessor::processPackage(dmlpackage
 
           for (; i < numTries; i++)
           {
-#ifdef _MSC_VER
-            Sleep(rm_ts.tv_sec * 1000);
-#else
             struct timespec abs_ts;
 
             do
@@ -186,8 +184,6 @@ DMLPackageProcessor::DMLResult InsertPackageProcessor::processPackage(dmlpackage
               abs_ts.tv_sec = rm_ts.tv_sec;
               abs_ts.tv_nsec = rm_ts.tv_nsec;
             } while (nanosleep(&abs_ts, &rm_ts) < 0);
-
-#endif
 
             try
             {
@@ -369,21 +365,28 @@ DMLPackageProcessor::DMLResult InsertPackageProcessor::processPackage(dmlpackage
   }
   catch (exception& ex)
   {
-    cerr << "InsertPackageProcessor::processPackage: " << ex.what() << endl;
-
-    logging::Message::Args args;
-    logging::Message message(1);
-    args.add("Insert Failed: ");
-    args.add(ex.what());
-    args.add("");
-    args.add("");
-    message.format(args);
-
-    if (result.result != VB_OVERFLOW_ERROR)
+    if (checkPPLostConnection(ex))
     {
-      result.result = INSERT_ERROR;
-      result.message = message;
-      errorMsg = ex.what();
+      result.result = PP_LOST_CONNECTION;
+    }
+    else
+    {
+      cerr << "InsertPackageProcessor::processPackage: " << ex.what() << endl;
+
+      logging::Message::Args args;
+      logging::Message message(1);
+      args.add("Insert Failed: ");
+      args.add(ex.what());
+      args.add("");
+      args.add("");
+      message.format(args);
+
+      if (result.result != VB_OVERFLOW_ERROR)
+      {
+        result.result = INSERT_ERROR;
+        result.message = message;
+        errorMsg = ex.what();
+      }
     }
   }
   catch (...)
@@ -401,7 +404,19 @@ DMLPackageProcessor::DMLResult InsertPackageProcessor::processPackage(dmlpackage
     result.message = message;
   }
 
-  if ((rc != 0) && (rc != IDBRANGE_WARNING))
+  if (rc == 1)
+  {
+    logging::Message::Args args;
+    logging::Message message(1);
+    args.add("Insert Failed: ");
+    args.add(errorMsg);
+    args.add("");
+    args.add("");
+    message.format(args);
+    result.result = PP_LOST_CONNECTION;
+    result.message = message;
+  }
+  else if ((rc != 0) && (rc != IDBRANGE_WARNING))
   {
     logging::Message::Args args;
     logging::Message message(1);
@@ -431,5 +446,3 @@ DMLPackageProcessor::DMLResult InsertPackageProcessor::processPackage(dmlpackage
 }
 
 }  // namespace dmlpackageprocessor
-
-// vim:ts=4 sw=4:

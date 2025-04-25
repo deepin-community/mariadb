@@ -1,6 +1,6 @@
 /* ssl-dummy.c
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -29,11 +29,11 @@
 
 Signer* GetCA(void* vp, byte* hash)
 {
-    return NULL  ;
+    return NULL;
 }
 
 Signer* GetCAByName(void* vp, byte* hash)
 {
-    return NULL ;
+    return NULL;
 }
 

@@ -6,7 +6,6 @@ etc/mysql/mariadb.conf.d/columnstore.cnf
 usr/bin/mcsRebuildEM
 usr/bin/DDLProc
 usr/bin/DMLProc
-usr/bin/ExeMgr
 usr/bin/PrimProc
 usr/bin/StorageManager
 usr/bin/WriteEngineServer
@@ -30,11 +29,15 @@ usr/bin/ddlcleanup
 usr/bin/editem
 usr/bin/idbmeminfo
 usr/bin/load_brm
+usr/bin/loop_process_starter.sh
 usr/bin/mariadb-columnstore-start.sh
 usr/bin/mariadb-columnstore-stop.sh
 usr/bin/mcs-savebrm.py
 usr/bin/mcs-loadbrm.py
 usr/bin/mcs-stop-controllernode.sh
+usr/bin/mcs-load-brm-from-file
+usr/bin/mcs-load-em
+usr/bin/mcs-shmem-locks
 usr/bin/mcsGetConfig
 usr/bin/mcsSetConfig
 usr/bin/mycnfUpgrade
@@ -44,7 +47,9 @@ usr/bin/reset_locks
 usr/bin/rollback
 usr/bin/save_brm
 usr/bin/smcat
+usr/bin/smkill
 usr/bin/smls
+usr/bin/smps
 usr/bin/smput
 usr/bin/smrm
 usr/bin/testS3Connection
@@ -71,7 +76,6 @@ usr/lib/*/libjoiner.so
 usr/lib/*/liblibmysql_client.so
 usr/lib/*/libloggingcpp.so
 usr/lib/*/libmarias3.so
-usr/lib/*/libmessageqcpp.so
 usr/lib/*/liboamcpp.so
 usr/lib/*/libquerystats.so
 usr/lib/*/libquerytele.so
@@ -80,7 +84,6 @@ usr/lib/*/librowgroup.so
 usr/lib/*/librwlock.so
 usr/lib/*/libstoragemanager.so
 usr/lib/*/libthreadpool.so
-usr/lib/*/libthrift.so
 usr/lib/*/libudfsdk.so
 usr/lib/*/libwindowfunction.so
 usr/lib/*/libwriteengine.so
@@ -106,7 +109,6 @@ usr/share/columnstore/mariadb-columnstore.service
 usr/share/columnstore/mcs-controllernode.service
 usr/share/columnstore/mcs-ddlproc.service
 usr/share/columnstore/mcs-dmlproc.service
-usr/share/columnstore/mcs-exemgr.service
 usr/share/columnstore/mcs-loadbrm.service
 usr/share/columnstore/mcs-primproc.service
 usr/share/columnstore/mcs-storagemanager.service

@@ -17,8 +17,7 @@
 
 //  $Id: wf_stats.h 3868 2013-06-06 22:13:05Z xlou $
 
-#ifndef UTILS_WF_STATS_H
-#define UTILS_WF_STATS_H
+#pragma once
 
 #include "windowfunctiontype.h"
 
@@ -49,6 +48,3 @@ class WF_stats : public WindowFunctionType
 
 }  // namespace windowfunction
 
-#endif  // UTILS_WF_STATS_H
-
-// vim:ts=4 sw=4:

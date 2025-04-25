@@ -1672,7 +1672,7 @@ int ColumnInfo::updateDctnryStore(char* buf, ColPosPair** pos, const int totalRo
   // column.
   // This only applies to default text mode.  This step is bypassed for
   // binary imports, because in that case, the data is already true binary.
-  if (((curCol.colType == WR_VARBINARY) || (curCol.colType == WR_BLOB)) &&
+  if (((curCol.colType == WR_VARBINARY) || (curCol.colType == WR_BLOB && fpTableInfo->readFromSTDIN())) &&
       (fpTableInfo->getImportDataMode() == IMPORT_DATA_TEXT))
   {
 #ifdef PROFILE
@@ -1697,7 +1697,7 @@ int ColumnInfo::updateDctnryStore(char* buf, ColPosPair** pos, const int totalRo
   Stats::stopParseEvent(WE_STATS_WAIT_TO_PARSE_DCT);
 #endif
 
-  int rc = fStore->insertDctnry(buf, pos, totalRow, id, tokenBuf, truncCount);
+  int rc = fStore->insertDctnry(buf, pos, totalRow, id, tokenBuf, truncCount, column.cs, column.weType);
 
   if (rc != NO_ERROR)
   {

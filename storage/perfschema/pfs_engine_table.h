@@ -25,21 +25,29 @@
 
 #include "table.h"
 #include "sql_acl.h"
+
+/*
+  The performance schema is implemented as a storage engine, in memory.
+  The current storage engine interface exposed by the server,
+  and in particular handlerton::discover, uses 'FRM' files to describe a
+  table structure, which are later stored on disk, by the server,
+  in ha_create_table_from_engine().
+  Because the table metadata is stored on disk, the table naming rules
+  used by the performance schema then have to comply with the constraints
+  imposed by the disk storage, and in particular with lower_case_table_names.
+*/
+
+using PFS_ident_db= Lex_ident_i_s_db;
+using PFS_ident_table = Lex_ident_i_s_table;
+
+
 /**
   @file storage/perfschema/pfs_engine_table.h
   Performance schema tables (declarations).
 */
 
 #include "pfs_instr_class.h"
-extern pthread_key_t THR_PFS_VG;   // global_variables
-extern pthread_key_t THR_PFS_SV;   // session_variables
-extern pthread_key_t THR_PFS_VBT;  // variables_by_thread
-extern pthread_key_t THR_PFS_SG;   // global_status
-extern pthread_key_t THR_PFS_SS;   // session_status
-extern pthread_key_t THR_PFS_SBT;  // status_by_thread
-extern pthread_key_t THR_PFS_SBU;  // status_by_user
-extern pthread_key_t THR_PFS_SBH;  // status_by_host
-extern pthread_key_t THR_PFS_SBA;  // status_by_account
+#include "pfs.h"
 
 class Field;
 struct PFS_engine_table_share;
@@ -56,8 +64,8 @@ struct time_normalizer;
 class PFS_table_context
 {
 public:
-  PFS_table_context(ulonglong current_version, bool restore, pthread_key_t key);
-  PFS_table_context(ulonglong current_version, ulong map_size, bool restore, pthread_key_t key);
+  PFS_table_context(ulonglong current_version, bool restore, void** thr_var_ptr);
+  PFS_table_context(ulonglong current_version, ulong map_size, bool restore, void** thr_var_ptr);
 ~PFS_table_context(void);
 
   bool initialize(void);
@@ -67,7 +75,7 @@ public:
   bool versions_match(void) { return m_last_version == m_current_version; }
   void set_item(ulong n);
   bool is_item_set(ulong n);
-  pthread_key_t m_thr_key;
+  void** m_thr_varptr;
 
 private:
   ulonglong m_current_version;
@@ -304,7 +312,7 @@ struct PFS_engine_table_share
   int write_row(TABLE *table, const unsigned char *buf, Field **fields) const;
 
   /** Table name. */
-  LEX_STRING m_name;
+  Lex_ident_table m_name;
   /** Table ACL. */
   const ACL_internal_table_access *m_acl;
   /** Open table function. */
@@ -340,8 +348,8 @@ public:
 
   ~PFS_readonly_acl() = default;
 
-  virtual ACL_internal_access_result check(privilege_t want_access,
-                                           privilege_t *save_priv) const;
+  ACL_internal_access_result check(privilege_t want_access,
+    privilege_t *save_priv, bool any_combination_will_do) const override;
 };
 
 /** Singleton instance of PFS_readonly_acl. */
@@ -358,8 +366,8 @@ public:
 
   ~PFS_truncatable_acl() = default;
 
-  virtual ACL_internal_access_result check(privilege_t want_access,
-                                   privilege_t *save_priv) const;
+  ACL_internal_access_result check(privilege_t want_access,
+    privilege_t *save_priv, bool any_combination_will_do) const override;
 };
 
 /** Singleton instance of PFS_truncatable_acl. */
@@ -377,7 +385,7 @@ public:
   ~PFS_updatable_acl() = default;
 
   ACL_internal_access_result check(privilege_t want_access,
-                                   privilege_t *save_priv) const;
+    privilege_t *save_priv, bool any_combination_will_do) const override;
 };
 
 /** Singleton instance of PFS_updatable_acl. */
@@ -395,7 +403,7 @@ public:
   ~PFS_editable_acl() = default;
 
   ACL_internal_access_result check(privilege_t want_access,
-                                   privilege_t *save_priv) const;
+    privilege_t *save_priv, bool any_combination_will_do) const override;
 };
 
 /** Singleton instance of PFS_editable_acl. */
@@ -412,7 +420,7 @@ public:
   ~PFS_unknown_acl() = default;
 
   ACL_internal_access_result check(privilege_t want_access,
-                                   privilege_t *save_priv) const;
+    privilege_t *save_priv, bool any_combination_will_do) const override;
 };
 
 /** Singleton instance of PFS_unknown_acl. */
@@ -430,7 +438,8 @@ public:
 
   ~PFS_readonly_world_acl()
   {}
-  virtual ACL_internal_access_result check(privilege_t want_access, privilege_t *save_priv) const;
+  ACL_internal_access_result check(privilege_t want_access,
+    privilege_t *save_priv, bool any_combination_will_do) const override;
 };
 
 
@@ -449,7 +458,8 @@ public:
 
   ~PFS_truncatable_world_acl()
   {}
-  virtual ACL_internal_access_result check(privilege_t want_access, privilege_t *save_priv) const;
+  ACL_internal_access_result check(privilege_t want_access,
+    privilege_t *save_priv, bool any_combination_will_do) const override;
 };
 
 
@@ -468,8 +478,8 @@ class PFS_readonly_processlist_acl : public PFS_readonly_acl {
   ~PFS_readonly_processlist_acl()
   {}
 
-  virtual ACL_internal_access_result check(privilege_t want_access,
-                                           privilege_t *save_priv) const;
+  ACL_internal_access_result check(privilege_t want_access,
+    privilege_t *save_priv, bool any_combination_will_do) const override;
 };
 
 /** Singleton instance of PFS_readonly_processlist_acl */
@@ -619,7 +629,7 @@ struct PFS_triple_index
 bool pfs_show_status(handlerton *hton, THD *thd,
                      stat_print_fn *print, enum ha_stat_type stat);
 
-int pfs_discover_table_names(handlerton *hton, LEX_CSTRING *db,
+int pfs_discover_table_names(handlerton *hton, const LEX_CSTRING *db,
                              MY_DIR *dir,
                              handlerton::discovered_list *result);
 

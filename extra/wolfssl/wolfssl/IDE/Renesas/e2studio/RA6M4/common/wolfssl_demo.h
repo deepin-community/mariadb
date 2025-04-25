@@ -1,6 +1,6 @@
 /* wolfssl_demo.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -36,7 +36,7 @@
 #define DIRECT_KEY_ADDRESS_128      FLASH_HP_DF_BLOCK_2
 
 /* Client connects to the server with these details. */
-#define SERVER_IP    "192.168.11.49"
+#define SERVER_IP    "192.168.11.4"
 #define DEFAULT_PORT 11111
 
 /* Enable wolfcrypt test */
@@ -45,7 +45,7 @@
 
 /* Enable benchmark               */
 /* can be enabled with cyrpt test */
-/*#define BENCHMARK*/
+/* #define BENCHMARK */
 
 /* Enable TLS client     */
 /* cannot enable with CRYPT_TEST or BENCHMARK */
@@ -82,7 +82,7 @@ typedef struct tagTestInfo
 void sce_test();
 void TCPInit();
 void wolfSSL_TLS_client_init();
-void wolfSSL_TLS_client_do(void *pvParam);
+int wolfSSL_TLS_client_do(void *pvParam);
 void wolfSSL_TLS_cleanup();
 extern WOLFSSL_CTX *client_ctx;
 

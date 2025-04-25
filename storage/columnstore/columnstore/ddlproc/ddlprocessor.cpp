@@ -75,8 +75,9 @@ void cleanPMSysCache()
 class PackageHandler
 {
  public:
-  PackageHandler(QueryTeleClient qtc, DBRM* dbrm, messageqcpp::IOSocket& ios, bool concurrentSupport)
-   : fIos(ios), fDbrm(dbrm), fQtc(qtc), fConcurrentSupport(concurrentSupport)
+  PackageHandler(QueryTeleClient qtc, DBRM* dbrm, messageqcpp::IOSocket& ios, bool concurrentSupport,
+                 uint32_t* debugLevel)
+   : fIos(ios), fDbrm(dbrm), fQtc(qtc), fConcurrentSupport(concurrentSupport), fDebugLevel(debugLevel)
   {
   }
 
@@ -185,9 +186,6 @@ class PackageHandler
           {
             for (; i < numTries; i++)
             {
-#ifdef _MSC_VER
-              Sleep(rm_ts.tv_sec * 1000);
-#else
               struct timespec abs_ts;
 
               // cout << "session " << fSessionID << " nanosleep on package type " << (int)packageType <<
@@ -198,7 +196,6 @@ class PackageHandler
                 abs_ts.tv_nsec = rm_ts.tv_nsec;
               } while (nanosleep(&abs_ts, &rm_ts) < 0);
 
-#endif
               anyOtherActiveTransaction =
                   sessionManager.checkActiveTransaction(fSessionID, bIsDbrmUp, blockingsid);
 
@@ -494,6 +491,8 @@ class PackageHandler
           boost::scoped_ptr<CreateTableProcessor> processor(new CreateTableProcessor(fDbrm));
           processor->fTxnid.id = fTxnid.id;
           processor->fTxnid.valid = true;
+          if (fDebugLevel)
+            processor->setDebugLevel(static_cast<DDLPackageProcessor::DebugLevel>(*fDebugLevel));
           // cout << "create table using txnid " << fTxnid.id << endl;
 
           QueryTeleStats qts;
@@ -508,7 +507,7 @@ class PackageHandler
           qts.schema_name = createTableStmt.schemaName();
           fQtc.postQueryTele(qts);
 
-          result = processor->processPackage(createTableStmt);
+          result = processor->processPackage(&createTableStmt);
 
           systemCatalogPtr->removeCalpontSystemCatalog(createTableStmt.fSessionID);
           systemCatalogPtr->removeCalpontSystemCatalog(createTableStmt.fSessionID | 0x80000000);
@@ -528,6 +527,8 @@ class PackageHandler
           boost::scoped_ptr<AlterTableProcessor> processor(new AlterTableProcessor(fDbrm));
           processor->fTxnid.id = fTxnid.id;
           processor->fTxnid.valid = true;
+          if (fDebugLevel)
+            processor->setDebugLevel(static_cast<DDLPackageProcessor::DebugLevel>(*fDebugLevel));
 
           QueryTeleStats qts;
           qts.query_uuid = QueryTeleClient::genUUID();
@@ -543,7 +544,7 @@ class PackageHandler
 
           processor->fTimeZone = alterTableStmt.getTimeZone();
 
-          result = processor->processPackage(alterTableStmt);
+          result = processor->processPackage(&alterTableStmt);
 
           systemCatalogPtr->removeCalpontSystemCatalog(alterTableStmt.fSessionID);
           systemCatalogPtr->removeCalpontSystemCatalog(alterTableStmt.fSessionID | 0x80000000);
@@ -564,6 +565,8 @@ class PackageHandler
 
           processor->fTxnid.id = fTxnid.id;
           processor->fTxnid.valid = true;
+          if (fDebugLevel)
+            processor->setDebugLevel(static_cast<DDLPackageProcessor::DebugLevel>(*fDebugLevel));
 
           QueryTeleStats qts;
           qts.query_uuid = QueryTeleClient::genUUID();
@@ -578,7 +581,7 @@ class PackageHandler
           fQtc.postQueryTele(qts);
 
           // cout << "Drop table using txnid " << fTxnid.id << endl;
-          result = processor->processPackage(dropTableStmt);
+          result = processor->processPackage(&dropTableStmt);
 
           systemCatalogPtr->removeCalpontSystemCatalog(dropTableStmt.fSessionID);
           systemCatalogPtr->removeCalpontSystemCatalog(dropTableStmt.fSessionID | 0x80000000);
@@ -599,6 +602,8 @@ class PackageHandler
 
           processor->fTxnid.id = fTxnid.id;
           processor->fTxnid.valid = true;
+          if (fDebugLevel)
+            processor->setDebugLevel(static_cast<DDLPackageProcessor::DebugLevel>(*fDebugLevel));
 
           QueryTeleStats qts;
           qts.query_uuid = QueryTeleClient::genUUID();
@@ -612,7 +617,7 @@ class PackageHandler
           qts.schema_name = truncTableStmt.schemaName();
           fQtc.postQueryTele(qts);
 
-          result = processor->processPackage(truncTableStmt);
+          result = processor->processPackage(&truncTableStmt);
 
           systemCatalogPtr->removeCalpontSystemCatalog(truncTableStmt.fSessionID);
           systemCatalogPtr->removeCalpontSystemCatalog(truncTableStmt.fSessionID | 0x80000000);
@@ -632,7 +637,10 @@ class PackageHandler
           boost::scoped_ptr<MarkPartitionProcessor> processor(new MarkPartitionProcessor(fDbrm));
           (processor->fTxnid).id = fTxnid.id;
           (processor->fTxnid).valid = true;
-          result = processor->processPackage(markPartitionStmt);
+          if (fDebugLevel)
+            processor->setDebugLevel(static_cast<DDLPackageProcessor::DebugLevel>(*fDebugLevel));
+
+          result = processor->processPackage(&markPartitionStmt);
           systemCatalogPtr->removeCalpontSystemCatalog(markPartitionStmt.fSessionID);
           systemCatalogPtr->removeCalpontSystemCatalog(markPartitionStmt.fSessionID | 0x80000000);
         }
@@ -647,7 +655,10 @@ class PackageHandler
           boost::scoped_ptr<RestorePartitionProcessor> processor(new RestorePartitionProcessor(fDbrm));
           (processor->fTxnid).id = fTxnid.id;
           (processor->fTxnid).valid = true;
-          result = processor->processPackage(restorePartitionStmt);
+          if (fDebugLevel)
+            processor->setDebugLevel(static_cast<DDLPackageProcessor::DebugLevel>(*fDebugLevel));
+
+          result = processor->processPackage(&restorePartitionStmt);
           systemCatalogPtr->removeCalpontSystemCatalog(restorePartitionStmt.fSessionID);
           systemCatalogPtr->removeCalpontSystemCatalog(restorePartitionStmt.fSessionID | 0x80000000);
         }
@@ -662,9 +673,21 @@ class PackageHandler
           boost::scoped_ptr<DropPartitionProcessor> processor(new DropPartitionProcessor(fDbrm));
           (processor->fTxnid).id = fTxnid.id;
           (processor->fTxnid).valid = true;
-          result = processor->processPackage(dropPartitionStmt);
+          if (fDebugLevel)
+            processor->setDebugLevel(static_cast<DDLPackageProcessor::DebugLevel>(*fDebugLevel));
+
+          result = processor->processPackage(&dropPartitionStmt);
           systemCatalogPtr->removeCalpontSystemCatalog(dropPartitionStmt.fSessionID);
           systemCatalogPtr->removeCalpontSystemCatalog(dropPartitionStmt.fSessionID | 0x80000000);
+        }
+        break;
+
+        case ddlpackage::DDL_DEBUG_STATEMENT:
+        {
+          DebugDDLStatement stmt;
+          stmt.unserialize(fByteStream);
+          if (fDebugLevel)
+            *fDebugLevel = stmt.fDebugLevel;
         }
         break;
 
@@ -732,6 +755,7 @@ class PackageHandler
   QueryTeleClient fQtc;
   oam::OamCache* fOamCache = nullptr;
   bool fConcurrentSupport;
+  uint32_t* fDebugLevel{nullptr};
 };
 
 }  // namespace
@@ -786,7 +810,7 @@ void DDLProcessor::process()
       try
       {
         ios = fMqServer.accept();
-        fDdlPackagepool.invoke(PackageHandler(fQtc, &dbrm, ios, concurrentSupport));
+        fDdlPackagepool.invoke(PackageHandler(fQtc, &dbrm, ios, concurrentSupport, &debugLevel));
       }
       catch (...)
       {
@@ -876,4 +900,3 @@ int DDLProcessor::commitTransaction(uint32_t txnID, std::string& errorMsg)
   return rc;
 }
 }  // namespace ddlprocessor
-// vim:ts=4 sw=4:

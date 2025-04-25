@@ -37,6 +37,8 @@
 #include "we_ddlcommandclient.h"
 #include "oamcache.h"
 #include "liboamcpp.h"
+#include "resourcemanager.h"
+
 using namespace std;
 using namespace WriteEngine;
 using namespace dmlpackage;
@@ -51,7 +53,7 @@ namespace dmlpackageprocessor
 /*static*/ std::set<uint64_t> CommandPackageProcessor::fActiveClearTableLockCmds;
 /*static*/ boost::mutex CommandPackageProcessor::fActiveClearTableLockCmdMutex;
 
-DMLPackageProcessor::DMLResult CommandPackageProcessor::processPackage(
+DMLPackageProcessor::DMLResult CommandPackageProcessor::processPackageInternal(
     dmlpackage::CalpontDMLPackage& cpackage)
 {
   SUMMARY_INFO("CommandPackageProcessor::processPackage");
@@ -370,10 +372,13 @@ DMLPackageProcessor::DMLResult CommandPackageProcessor::processPackage(
           int weRc = 0;
 
           // version rollback, Bulkrollback
-          weRc = rollBackTransaction(uniqueId, txnid, fSessionID, errorMsg);
+          weRc = tryToRollBackTransaction(uniqueId, txnid, fSessionID, errorMsg);
 
           if (weRc == 0)
           {
+            // MCOL-5021
+            fDbrm->addToLBIDList(fSessionID, lbidList);
+
             //@Bug 4560 invalidate cp first as bulkrollback will truncate the newly added lbids.
             fDbrm->invalidateUncommittedExtentLBIDs(0, true, &lbidList);
             cpInvalidated = true;
@@ -410,7 +415,7 @@ DMLPackageProcessor::DMLResult CommandPackageProcessor::processPackage(
         {
           std::string errorMsg("");
           logging::logCommand(cpackage.get_SessionID(), txnid.id, "ROLLBACK;");
-          int weRc = rollBackTransaction(uniqueId, txnid, fSessionID, errorMsg);
+          int weRc = tryToRollBackTransaction(uniqueId, txnid, fSessionID, errorMsg);
 
           if (weRc != 0)
           {
@@ -433,6 +438,12 @@ DMLPackageProcessor::DMLResult CommandPackageProcessor::processPackage(
 
         if (!cpInvalidated)
         {
+          // MCOL-5021
+          if (stmt == "ROLLBACK")
+          {
+            fDbrm->addToLBIDList(fSessionID, lbidList);
+          }
+
           fDbrm->invalidateUncommittedExtentLBIDs(0, stmt == "ROLLBACK", &lbidList);
         }
       }
@@ -474,17 +485,24 @@ DMLPackageProcessor::DMLResult CommandPackageProcessor::processPackage(
   }
   catch (std::exception& ex)
   {
-    cerr << "CommandPackageProcessor::processPackage: " << ex.what() << endl;
+    if (checkPPLostConnection(ex))
+    {
+      result.result = PP_LOST_CONNECTION;
+    }
+    else
+    {
+      cerr << "CommandPackageProcessor::processPackage: " << ex.what() << endl;
 
-    logging::Message::Args args;
-    logging::Message message(1);
-    args.add(ex.what());
-    args.add("");
-    args.add("");
-    message.format(args);
+      logging::Message::Args args;
+      logging::Message message(1);
+      args.add(ex.what());
+      args.add("");
+      args.add("");
+      message.format(args);
 
-    result.result = COMMAND_ERROR;
-    result.message = message;
+      result.result = COMMAND_ERROR;
+      result.message = message;
+    }
   }
   catch (...)
   {

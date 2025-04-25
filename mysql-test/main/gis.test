@@ -1,5 +1,5 @@
 -- source include/have_geometry.inc
-
+-- source include/not_embedded.inc
 
 #
 # Spatial objects
@@ -403,9 +403,12 @@ select (asWKT(geomfromwkb((0x010100000000000000000024400000000000002440)))) as e
 
 --enable_metadata
 --disable_view_protocol
+#check after fix MDEV-31540
+--disable_cursor_protocol
 create table t1 (g GEOMETRY);
 select * from t1;
 select asbinary(g) from t1;
+--enable_cursor_protocol
 --enable_view_protocol
 --disable_metadata
 drop table t1;
@@ -824,17 +827,6 @@ CREATE TABLE t2 (
   col0 INTEGER NOT NULL,
   col1 POINT,
   col2 POINT
-);
-
---error ER_WRONG_ARGUMENTS
-CREATE SPATIAL INDEX idx0 ON t2 (col1, col2);
-
---error ER_WRONG_ARGUMENTS
-CREATE TABLE t3 (
-  col0 INTEGER NOT NULL,
-  col1 POINT,
-  col2 LINESTRING,
-  SPATIAL INDEX i1 (col1, col2)
 );
 
 # cleanup
@@ -1434,7 +1426,7 @@ DROP TABLE g1;
 --echo # Bug#13013970 MORE CRASHES IN FIELD_BLOB::GET_KEY_IMAGE
 --echo #
 
-CREATE TABLE g1(a TEXT NOT NULL, KEY(a(255)));
+CREATE TABLE g1(a TEXT NOT NULL, KEY(a(250)));
 
 INSERT INTO g1 VALUES ('a'),('a');
 SELECT 1 FROM g1 WHERE a >= ANY
@@ -3245,6 +3237,8 @@ CREATE TABLE t1 (
   g    GEOMETRY
 ) CHARACTER SET utf8;
 
+#check after fix MDEV-31540
+--disable_cursor_protocol
 --disable_view_protocol
 --enable_metadata
 SELECT * FROM t1;
@@ -3350,6 +3344,7 @@ FROM t1;
 
 --disable_metadata
 --enable_view_protocol
+--enable_cursor_protocol
 DROP TABLE t1;
 
 --echo #
@@ -3374,7 +3369,176 @@ SELECT BIT_OR(a) FROM t1;
 SELECT BIT_XOR(a) FROM t1;
 DROP TABLE t1;
 
+--echo #
+--echo # MDEV-27666 User variable not parsed as geometry variable in geometry function.
+--echo #
+
+set @g= point(1, 1);
+select ST_AsWKT(GeometryCollection(Point(44, 6), @g));
+set @g=  "just a string";
+--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
+select ST_AsWKT(GeometryCollection(Point(44, 6), @g));
+
+SET @g= LineString(Point(0,0), Point(0,1));
+SELECT AsText(PointN(@g, 1));
+SELECT AsText(PointN(@g, 2));
+
+SET @g= Point(1, 1);
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+SELECT AsText(g) FROM t1;
+DROP TABLE t1;
+
+SET @g= MultiPoint(Point(1, 1), Point(-1,-1));
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+SELECT AsText(g) FROM t1;
+DROP TABLE t1;
+
+SET @g= LineString(Point(1, 1), Point(2,2));
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+SELECT AsText(g) FROM t1;
+DROP TABLE t1;
+
+SET @g= MultiLineString(LineString(Point(1, 1), Point(2,2)),
+                        LineString(Point(-1, -1), Point(-2,-2)));
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+SELECT AsText(g) FROM t1;
+DROP TABLE t1;
+
+SET @g= Polygon(LineString(Point(0, 0), Point(30, 0), Point(30, 30), Point(0, 0)));
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+SELECT AsText(g) FROM t1;
+DROP TABLE t1;
+
+SET @g= MultiPolygon(Polygon(LineString(Point(0, 3), Point(3, 3),
+                                        Point(3, 0), Point(0, 3))));
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+SELECT AsText(g) FROM t1;
+DROP TABLE t1;
+
+SET @g= GeometryCollection(Point(44, 6), LineString(Point(3, 6), Point(7, 9)));
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+SELECT AsText(g) FROM t1;
+DROP TABLE t1;
+
+SET @g= GeometryFromText('POINT(1 1)');
+CREATE TABLE t1 AS SELECT @g AS g;
+SHOW CREATE TABLE t1;
+SELECT AsText(g) FROM t1;
+DROP TABLE t1;
 
 --echo #
---echo # End of 10.5 tests
+--echo # MDEV-16699 heap-use-after-free in group_concat with compressed or GIS columns
 --echo #
+create table t1 (c polygon);
+insert into t1 values
+  (PolygonFromText('POLYGON((1 2,1 2))')),
+  (PolygonFromText('POLYGON((0 0,1 1,0 0))'));
+select length(group_concat(c, c order by 1,2)) from t1;
+create table t2 as select group_concat(c, c order by 1,2), concat(c), c from t1;
+show create table t2;
+drop table t1, t2;
+
+
+--echo #
+--echo # MDEV-33987 Server crashes at Item_func_as_wkt::val_str_ascii
+--echo #
+
+SELECT ST_ASTEXT(BOUNDARY(INET6_ATON('255.255.255.255'))) AS c1;
+
+--echo #
+--echo # Server crash in DTCollation::set_repertoire_from_charset
+--echo #
+
+CREATE TABLE t (f POINT, KEY(f));
+--error ER_CANT_CREATE_GEOMETRY_OBJECT
+DELETE FROM t WHERE f NOT IN (NULL,'x');
+DROP TABLE t;
+
+--echo #
+--echo # MDEV-31219 Assertion `fixed' failed in Item_func_hybrid_field_type / Frame_positional_cursor
+--echo #
+
+CREATE TABLE t (a INT, b POINT);
+INSERT INTO t VALUES (1,POINT(0,0)),(2,POINT(0,0));
+--error ER_ILLEGAL_PARAMETER_DATA_TYPES2_FOR_OPERATION
+SELECT NTH_VALUE(a,b) OVER () FROM t;
+DROP TABLE t;
+
+--echo # End of 10.5 tests
+
+--echo #
+--echo # Start of 11.5 tests
+--echo #
+
+--echo #
+--echo # MDEV-12668 SRID is not preserved in UNION, VIEW, MIN, MAX
+--echo #
+
+CREATE TABLE t1 (a POINT REF_SYSTEM_ID=0, b POINT REF_SYSTEM_ID=102);
+--error ER_ILLEGAL_PARAMETER_DATA_TYPES2_FOR_OPERATION
+SELECT a FROM t1 UNION SELECT b FROM t1;
+DROP TABLE t1;
+
+CREATE TABLE t1 (a POINT REF_SYSTEM_ID=101, b POINT REF_SYSTEM_ID=102);
+--error ER_ILLEGAL_PARAMETER_DATA_TYPES2_FOR_OPERATION
+SELECT a FROM t1 UNION SELECT b FROM t1;
+DROP TABLE t1;
+
+CREATE TABLE t1 (a POINT REF_SYSTEM_ID=101, b POINT REF_SYSTEM_ID=101);
+
+CREATE TABLE t2 AS SELECT a, b FROM t1;
+CREATE VIEW  v2 AS SELECT a, b FROM t1;
+
+CREATE TABLE t3 AS SELECT a FROM t1 UNION SELECT b FROM t1;
+CREATE VIEW  v3 AS SELECT a FROM t1 UNION SELECT b FROM t1;
+
+CREATE TABLE t4 AS SELECT COALESCE(a,b) AS a FROM t1;
+CREATE VIEW  v4 AS SELECT COALESCE(a,b) AS a FROM t1;
+
+CREATE TABLE t5 AS SELECT LEAST(a,b) AS a FROM t1;
+CREATE VIEW  v5 AS SELECT LEAST(a,b) AS a FROM t1;
+
+CREATE TABLE t6 AS SELECT MIN(a) AS a FROM t1;
+CREATE VIEW  v6 AS SELECT MIN(a) AS a FROM t1;
+
+CREATE TABLE t7 AS SELECT MIN(a) AS a FROM t1 UNION SELECT b FROM v2;
+CREATE VIEW  v7 AS SELECT MIN(a) AS a FROM t1 UNION SELECT b FROM v2;
+
+CREATE TABLE t8 AS SELECT (SELECT a FROM t1) AS a;
+CREATE  VIEW v8 AS SELECT (SELECT a FROM t1) AS a;
+
+CREATE TABLE t9 AS VALUES ((SELECT MAX(a) FROM t1)),(((SELECT MIN(b) FROM t1)));
+CREATE VIEW  v9 AS VALUES ((SELECT MAX(a) FROM t1)),(((SELECT MIN(b) FROM t1)));
+
+SELECT
+  G_TABLE_NAME, G_GEOMETRY_COLUMN, SRID
+FROM
+  INFORMATION_SCHEMA.GEOMETRY_COLUMNS
+WHERE
+  F_TABLE_SCHEMA='test'
+ORDER
+  BY G_TABLE_NAME, G_GEOMETRY_COLUMN;
+
+DROP TABLE t2,t3,t4,t5,t6,t7,t8,t9;
+DROP VIEW v2,v3,v4,v5,v6,v7,v8,v9;
+DROP TABLE t1;
+
+
+--echo #
+--echo # MDEV-34025 Virtual columns do not check assignment cast validity
+--echo #
+
+--error ER_ILLEGAL_PARAMETER_DATA_TYPES2_FOR_OPERATION
+CREATE TABLE t1 (a INT, b POINT GENERATED ALWAYS AS (a));
+
+--error ER_ILLEGAL_PARAMETER_DATA_TYPES2_FOR_OPERATION
+CREATE TABLE t1 (a POINT, b INT GENERATED ALWAYS AS (a));
+
+--echo # End of 11.5 tests

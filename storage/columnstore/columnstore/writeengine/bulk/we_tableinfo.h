@@ -19,8 +19,7 @@
  * $Id: we_tableinfo.h 4648 2013-05-29 21:42:40Z rdempsey $
  *
  *******************************************************************************/
-#ifndef _WE_TABLEINFO_H
-#define _WE_TABLEINFO_H
+#pragma once
 
 #include <sys/time.h>
 #include <fstream>
@@ -78,8 +77,8 @@ class TableInfo : public WeUIDGID
   FILE* fHandle;           // Handle to the input load file
   int fCurrentReadBuffer;  // Id of current buffer being popu-
   //   lated by the read thread
-  RID fTotalReadRows;               // Total number of rows read
-  volatile unsigned fTotalErrRows;  // Total error rows among all input
+  RID fTotalReadRows;      // Total number of rows read
+  unsigned fTotalErrRows;  // Total error rows among all input
   //   for this table.  Is volatile to
   //   insure parser & reader threads
   //   see the latest value.
@@ -460,6 +459,8 @@ class TableInfo : public WeUIDGID
 
   void setJobUUID(const boost::uuids::uuid& jobUUID);
 
+  bool readFromSTDIN();
+
  public:
   friend class BulkLoad;
   friend class ColumnInfo;
@@ -643,16 +644,8 @@ inline void TableInfo::setJobUUID(const boost::uuids::uuid& jobUUID)
 inline void TableInfo::setErrorDir(const std::string& errorDir)
 {
   fErrorDir = errorDir;
-#ifdef _MSC_VER
-
-  if (fErrorDir.length() > 0 && *(--(fErrorDir.end())) != '/' && *(--(fErrorDir.end())) != '\\')
-    fErrorDir.push_back('\\');
-}
-#else
 
   if (fErrorDir.length() > 0 && *(--(fErrorDir.end())) != '/')
     fErrorDir.push_back('/');
 }
-#endif
 }  // namespace WriteEngine
-#endif

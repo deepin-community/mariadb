@@ -15,14 +15,18 @@
    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
    MA 02110-1301, USA. */
 
-#ifndef SMCOMM_H_
-#define SMCOMM_H_
+#pragma once
 
 #include <sys/stat.h>
 #include <string>
 #include "SocketPool.h"
 #include "bytestream.h"
 #include "bytestreampool.h"
+
+namespace storagemanager
+{
+  struct list_iotask_resp_entry;
+}
 
 namespace idbdatafile
 {
@@ -62,6 +66,9 @@ class SMComm : public boost::noncopyable
 
   int copyFile(const std::string& file1, const std::string& file2);
 
+  int listIOTasks(std::vector<storagemanager::list_iotask_resp_entry>* entries);
+  int killIOTask(uint64_t id);
+
   virtual ~SMComm();
 
  private:
@@ -75,5 +82,3 @@ class SMComm : public boost::noncopyable
 };
 
 }  // namespace idbdatafile
-
-#endif

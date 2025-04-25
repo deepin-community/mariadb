@@ -34,7 +34,7 @@ connect(plug_con,localhost,plug,plug_dest,"*NO-ONE*");
 select USER(),CURRENT_USER();
 
 --echo ## test SET PASSWORD
-#--error ER_SET_PASSWORD_AUTH_PLUGIN
+# here we set for native password plugin
 SET PASSWORD = PASSWORD('plug_dest');
 
 connection default;
@@ -506,7 +506,7 @@ SELECT IS_NULLABLE, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
     COLUMN_NAME IN ('plugin', 'authentication_string')
   ORDER BY COLUMN_NAME;
 let $datadir= `select @@datadir`;
-remove_file $datadir/mysql_upgrade_info;
+remove_file $datadir/mariadb_upgrade_info;
 drop table mysql.global_priv;
 rename table mysql.global_priv_bak to mysql.global_priv;
 

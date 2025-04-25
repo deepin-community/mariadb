@@ -1,6 +1,6 @@
 /* user_settings.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -88,7 +88,6 @@ extern "C" {
     #define WOLFSSL_HAVE_SP_RSA
     #define WOLFSSL_HAVE_SP_DH
     #define WOLFSSL_HAVE_SP_ECC
-    #define WOLFSSL_SP_CACHE_RESISTANT
     //#define WOLFSSL_SP_MATH     /* only SP math - eliminates fast math code */
 
     /* Assembly */
@@ -402,6 +401,7 @@ extern "C" {
 
     /* prototypes for user heap override functions */
     /* Note: Realloc only required for normal math */
+    /* Note2: XFREE(NULL) must be properly handled */
     #include <stddef.h>  /* for size_t */
     extern void *myMalloc(size_t n, void* heap, int type);
     extern void myFree(void *p, void* heap, int type);

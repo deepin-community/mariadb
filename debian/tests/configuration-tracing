@@ -1,4 +1,6 @@
 #!/bin/sh
+# shellcheck disable=SC2086
+#
 # dep8 smoke test for mariadbd
 # Author: Otto Kekäläinen <otto@debian.org>
 #
@@ -16,6 +18,9 @@
 # compares the result to expected values in original binary/build.
 #
 
+MARIADB_CLIENT_PATH="${MARIADB_CLIENT_PATH:-/usr/bin}"
+MARIADB_SERVER_PATH="${MARIADB_SERVER_PATH:-/usr/sbin}"
+
 normalize_value() {
   VARIABLE="$1"
   VALUE="$2"
@@ -24,7 +29,7 @@ normalize_value() {
 }
 
 trace() {
-  TRACE_NAME="$(echo "$*" | sed -E 's|/usr/(s?)bin/||' | sed 's/ //g' | sed 's/--/-/g')"
+  TRACE_NAME="$(basename "$*" | sed 's/ //g' | sed 's/--/-/g')"
 
   # Show in test what was run
   echo
@@ -45,7 +50,7 @@ trace() {
     sed "s/$(hostname)/HOSTNAME/g" -i "$TEMPFILE"
 
     # Version/revision increases on every release
-    VERSION=$(mariadbd --help --verbose | grep -e "^version " | rev | cut -d ' ' -f 1 | rev)
+    VERSION=$($MARIADB_SERVER_PATH/mariadbd --help --verbose | grep -e "^version " | rev | cut -d ' ' -f 1 | rev)
     sed "s/$VERSION/VERSION/g" -i "$TEMPFILE"
 
     # SSL library version inherited form dependency, not relevant for tracing
@@ -73,10 +78,22 @@ trace() {
     normalize_value max-binlog-stmt-cache-size 18446744073709547520 # 32-bit: 4294963200
     normalize_value myisam-max-sort-file-size 18446744073709551615 # 32-bit: 2146435072
     normalize_value myisam-mmap-size 9223372036853727232 # 32-bit: 4294967295
+    normalize_value quick-max-column-width 9223372036854775807 # 32-bit: 2147483647
     normalize_value tmp-disk-table-size 18446744073709551615 # 32-bit: 4294967295
 
     # ppc64el has larger default value: 393216
     normalize_value log-tc-size 24576
+
+    # feedback plugin submitter identifier is random
+    normalize_value server-uid 1234567890abcdefghijklmnopq=
+
+    # wsrep-provider exists twice as a system variable: both to control if
+    # plugin is on or off, and to define the path to the plugin. As according to
+    # https://mariadb.com/kb/en/galera-cluster-system-variables/#wsrep_provider)
+    # defining the path is the documented on, clean away the ON/OFF flag from
+    # causing issues in tracing:
+    sed '/wsrep-provider\s\+ON/d' -i "$TEMPFILE"
+    sed '/^  --wsrep-provider\[=name\]/,/^[[:blank:]]\+be uninstalled/d' -i "$TEMPFILE"
 
     mv "$TEMPFILE" "$TRACE_NAME.actual"
   fi
@@ -89,23 +106,39 @@ trace() {
     echo
     echo "If the change is intentional, update the debian/tests/traces to match"
     echo "the new values and document change to users in mariadb-server.NEWS"
-    exit 1
+
+    if [ -n "$ERRORS" ]
+    then
+      ERRORS="$ERRORS, $TRACE_NAME"
+    else
+      ERRORS="$TRACE_NAME"
+    fi
   fi
 }
 
-echo "Running test 'configuration-tracing'"
-cd debian/tests/traces || exit 1
+TEST_DIR="$(dirname "$(realpath "$0")")"
+echo "Running test 'configuration-tracing' at $TEST_DIR"
+cd $TEST_DIR/traces || exit 1
 
 set -e
 
+ERRORS=""
+
 # Dump out what parameters mariadb would be called with by default
-trace /usr/bin/mariadb --print-defaults
+trace $MARIADB_CLIENT_PATH/mariadb --print-defaults
 
 # Dump out all help texts, client variables and their default values
-trace /usr/bin/mariadb --verbose --help
+trace $MARIADB_CLIENT_PATH/mariadb --verbose --help
 
 # Dump out what parameters mariadbd would be called with by default on system
-trace /usr/sbin/mariadbd --print-defaults
+trace $MARIADB_SERVER_PATH/mariadbd --print-defaults
 
 # Dump out all help texts, server variables and their default values
-trace /usr/sbin/mariadbd --verbose --help
+trace $MARIADB_SERVER_PATH/mariadbd --verbose --help
+
+# Emit non-zero exit code if there was errors
+if [ -n "$ERRORS" ]
+then
+  echo "Error: mismatch in $ERRORS"
+  exit 1
+fi

@@ -22,12 +22,24 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <boost/filesystem.hpp>
+#include <boost/thread/lock_types.hpp>
+#include <ctime>
 #include <iostream>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <boost/uuid/random_generator.hpp>
+#include <sstream>
 #define BOOST_SPIRIT_THREADSAFE
+#ifndef __clang__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+
 #include <boost/property_tree/ptree.hpp>
+
+#ifndef __clang__
+#pragma GCC diagnostic pop
+#endif
 #include <boost/property_tree/json_parser.hpp>
 #include "Utilities.h"
 
@@ -52,8 +64,7 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
 inline bool retryable_error(uint8_t s3err)
 {
   return (s3err == MS3_ERR_RESPONSE_PARSE || s3err == MS3_ERR_REQUEST_ERROR || s3err == MS3_ERR_OOM ||
-          s3err == MS3_ERR_IMPOSSIBLE || s3err == MS3_ERR_SERVER ||
-          s3err == MS3_ERR_AUTH_ROLE);
+          s3err == MS3_ERR_IMPOSSIBLE || s3err == MS3_ERR_SERVER || s3err == MS3_ERR_AUTH_ROLE);
 }
 
 // Best effort to map the errors returned by the ms3 API to linux errnos
@@ -72,7 +83,8 @@ const int s3err_to_errno[] = {
     ENOENT,        // 9 MS3_ERR_NOT_FOUND
     EPROTO,        // 10 MS3_ERR_SERVER
     EMSGSIZE,      // 11 MS3_ERR_TOO_BIG
-    EKEYREJECTED   // 12 MS3_ERR_AUTH_ROLE
+    EKEYREJECTED,  // 12 MS3_ERR_AUTH_ROLE
+    EFAULT         // 13 MS3_ERR_ENDPOINT
 };
 
 const char* s3err_msgs[] = {"All is well",
@@ -87,9 +99,10 @@ const char* s3err_msgs[] = {"All is well",
                             "Object not found",
                             "Unknown error code in response",
                             "Data to PUT is too large; 4GB maximum length",
-                            "Authentication failed, token has expired"};
+                            "Authentication failed, token has expired",
+                            "Configured bucket does not match endpoint location"};
 
-S3Storage::ScopedConnection::ScopedConnection(S3Storage* s, ms3_st* m) : s3(s), conn(m)
+S3Storage::ScopedConnection::ScopedConnection(S3Storage* s, shared_ptr<S3Storage::Connection> m) : s3(s), conn(m)
 {
   assert(conn);
 }
@@ -120,6 +133,9 @@ S3Storage::S3Storage(bool skipRetry) : skipRetryableErrors(skipRetry)
   string use_http = tolower(config->getValue("S3", "use_http"));
   string ssl_verify = tolower(config->getValue("S3", "ssl_verify"));
   string port_number = config->getValue("S3", "port_number");
+  string libs3_debug = config->getValue("S3", "libs3_debug");
+  string connect_timeout = config->getValue("S3", "connect_timeout");
+  string timeout = config->getValue("S3", "timeout");
 
   bool keyMissing = false;
   isEC2Instance = false;
@@ -199,16 +215,27 @@ S3Storage::S3Storage(bool skipRetry) : skipRetryableErrors(skipRetry)
   }
 
   endpoint = config->getValue("S3", "endpoint");
+  if (!connect_timeout.empty())
+  {
+      connectTimeout = stof(connect_timeout);
+  }
+  if (!timeout.empty())
+  {
+      operationTimeout = stof(timeout);
+  }
 
   ms3_library_init();
-  // ms3_debug();
+  if (libs3_debug == "enabled")
+  {
+    ms3_debug(1);
+  }
   testConnectivityAndPerms();
 }
 
 S3Storage::~S3Storage()
 {
   for (auto& conn : freeConns)
-    ms3_deinit(conn.conn);
+    ms3_deinit(conn->conn);
   ms3_library_deinit();
 }
 
@@ -222,7 +249,7 @@ S3Storage::~S3Storage()
 
 bool S3Storage::getIAMRoleFromMetadataEC2()
 {
-  CURL* curl = NULL;
+  CURL* curl = nullptr;
   CURLcode curl_res;
   string readBuffer;
   string instanceMetadata = "http://169.254.169.254/latest/meta-data/iam/security-credentials/";
@@ -244,7 +271,7 @@ bool S3Storage::getIAMRoleFromMetadataEC2()
 
 bool S3Storage::getCredentialsFromMetadataEC2()
 {
-  CURL* curl = NULL;
+  CURL* curl = nullptr;
   CURLcode curl_res;
   std::string readBuffer;
   string instanceMetadata = "http://169.254.169.254/latest/meta-data/iam/security-credentials/" + IAMrole;
@@ -272,7 +299,7 @@ bool S3Storage::getCredentialsFromMetadataEC2()
 
 void S3Storage::testConnectivityAndPerms()
 {
-  boost::shared_array<uint8_t> testObj(new uint8_t[1]);
+  std::shared_ptr<uint8_t[]> testObj(new uint8_t[1]);
   testObj[0] = 0;
   boost::uuids::uuid u = boost::uuids::random_generator()();
   ostringstream oss;
@@ -297,7 +324,8 @@ void S3Storage::testConnectivityAndPerms()
   err = exists(testObjKey, &_exists);
   if (err)
   {
-    logger->log(LOG_CRIT, "S3Storage::exists() failed on nonexistent object. Check 'ListBucket' permissions.");
+    logger->log(LOG_CRIT,
+                "S3Storage::exists() failed on nonexistent object. Check 'ListBucket' permissions.");
     FAIL(HEAD)
   }
   logger->log(LOG_INFO, "S3Storage: S3 connectivity & permissions are OK");
@@ -306,7 +334,7 @@ void S3Storage::testConnectivityAndPerms()
 int S3Storage::getObject(const string& sourceKey, const string& destFile, size_t* size)
 {
   int fd, err;
-  boost::shared_array<uint8_t> data;
+  std::shared_ptr<uint8_t[]> data;
   size_t len, count = 0;
   char buf[80];
 
@@ -342,33 +370,33 @@ int S3Storage::getObject(const string& sourceKey, const string& destFile, size_t
   return 0;
 }
 
-int S3Storage::getObject(const string& _sourceKey, boost::shared_array<uint8_t>* data, size_t* size)
+int S3Storage::getObject(const string& _sourceKey, std::shared_ptr<uint8_t[]>* data, size_t* size)
 {
   uint8_t err;
   size_t len = 0;
-  uint8_t* _data = NULL;
+  uint8_t* _data = nullptr;
   string sourceKey = prefix + _sourceKey;
 
-  ms3_st* creds = getConnection();
-  if (!creds)
+  auto conn = getConnection();
+  if (!conn)
   {
     logger->log(LOG_ERR,
                 "S3Storage::getObject(): failed to GET, S3Storage::getConnection() returned NULL on init");
     errno = EINVAL;
     return -1;
   }
-  ScopedConnection sc(this, creds);
+  ScopedConnection sc(this, conn);
 
   do
   {
-    err = ms3_get(creds, bucket.c_str(), sourceKey.c_str(), &_data, &len);
-    if (err && (!skipRetryableErrors && retryable_error(err)))
+    err = ms3_get(conn->conn, bucket.c_str(), sourceKey.c_str(), &_data, &len);
+    if (err && (!skipRetryableErrors && retryable_error(err)) && !conn->terminate)
     {
-      if (ms3_server_error(creds))
+      if (ms3_server_error(conn->conn))
         logger->log(LOG_WARNING,
                     "S3Storage::getObject(): failed to GET, server says '%s'.  bucket = %s, key = %s."
                     "  Retrying...",
-                    ms3_server_error(creds), bucket.c_str(), sourceKey.c_str());
+                    ms3_server_error(conn->conn), bucket.c_str(), sourceKey.c_str());
       else
         logger->log(LOG_WARNING,
                     "S3Storage::getObject(): failed to GET, got '%s'.  bucket = %s, key = %s.  Retrying...",
@@ -377,20 +405,20 @@ int S3Storage::getObject(const string& _sourceKey, boost::shared_array<uint8_t>*
       {
         getIAMRoleFromMetadataEC2();
         getCredentialsFromMetadataEC2();
-        ms3_ec2_set_cred(creds, IAMrole.c_str(), key.c_str(), secret.c_str(), token.c_str());
+        ms3_ec2_set_cred(conn->conn, IAMrole.c_str(), key.c_str(), secret.c_str(), token.c_str());
       }
       else if (!IAMrole.empty())
       {
-        ms3_assume_role(creds);
+        ms3_assume_role(conn->conn);
       }
       sleep(5);
     }
-  } while (err && (!skipRetryableErrors && retryable_error(err)));
+  } while (err && (!skipRetryableErrors && retryable_error(err)) && !conn->terminate);
   if (err)
   {
-    if (ms3_server_error(creds))
+    if (ms3_server_error(conn->conn))
       logger->log(LOG_ERR, "S3Storage::getObject(): failed to GET, server says '%s'.  bucket = %s, key = %s.",
-                  ms3_server_error(creds), bucket.c_str(), sourceKey.c_str());
+                  ms3_server_error(conn->conn), bucket.c_str(), sourceKey.c_str());
     else
       logger->log(LOG_ERR, "S3Storage::getObject(): failed to GET, got '%s'.  bucket = %s, key = %s.",
                   s3err_msgs[err], bucket.c_str(), sourceKey.c_str());
@@ -407,7 +435,7 @@ int S3Storage::getObject(const string& _sourceKey, boost::shared_array<uint8_t>*
 
 int S3Storage::putObject(const string& sourceFile, const string& destKey)
 {
-  boost::shared_array<uint8_t> data;
+  std::shared_ptr<uint8_t[]> data;
   int err, fd;
   size_t len, count = 0;
   char buf[80];
@@ -455,30 +483,30 @@ int S3Storage::putObject(const string& sourceFile, const string& destKey)
   return putObject(data, len, destKey);
 }
 
-int S3Storage::putObject(const boost::shared_array<uint8_t> data, size_t len, const string& _destKey)
+int S3Storage::putObject(const std::shared_ptr<uint8_t[]> data, size_t len, const string& _destKey)
 {
   string destKey = prefix + _destKey;
   uint8_t s3err;
-  ms3_st* creds = getConnection();
-  if (!creds)
+  auto conn = getConnection();
+  if (!conn)
   {
     logger->log(LOG_ERR,
                 "S3Storage::putObject(): failed to PUT, S3Storage::getConnection() returned NULL on init");
     errno = EINVAL;
     return -1;
   }
-  ScopedConnection sc(this, creds);
+  ScopedConnection sc(this, conn);
 
   do
   {
-    s3err = ms3_put(creds, bucket.c_str(), destKey.c_str(), data.get(), len);
-    if (s3err && (!skipRetryableErrors && retryable_error(s3err)))
+    s3err = ms3_put(conn->conn, bucket.c_str(), destKey.c_str(), data.get(), len);
+    if (s3err && (!skipRetryableErrors && retryable_error(s3err)) && !conn->terminate)
     {
-      if (ms3_server_error(creds))
+      if (ms3_server_error(conn->conn))
         logger->log(LOG_WARNING,
                     "S3Storage::putObject(): failed to PUT, server says '%s'.  bucket = %s, key = %s."
                     "  Retrying...",
-                    ms3_server_error(creds), bucket.c_str(), destKey.c_str());
+                    ms3_server_error(conn->conn), bucket.c_str(), destKey.c_str());
       else
         logger->log(LOG_WARNING,
                     "S3Storage::putObject(): failed to PUT, got '%s'.  bucket = %s, key = %s."
@@ -488,24 +516,29 @@ int S3Storage::putObject(const boost::shared_array<uint8_t> data, size_t len, co
       {
         getIAMRoleFromMetadataEC2();
         getCredentialsFromMetadataEC2();
-        ms3_ec2_set_cred(creds, IAMrole.c_str(), key.c_str(), secret.c_str(), token.c_str());
+        ms3_ec2_set_cred(conn->conn, IAMrole.c_str(), key.c_str(), secret.c_str(), token.c_str());
       }
       else if (!IAMrole.empty())
       {
-        ms3_assume_role(creds);
+        ms3_assume_role(conn->conn);
       }
       sleep(5);
     }
-  } while (s3err && (!skipRetryableErrors && retryable_error(s3err)));
+  } while (s3err && (!skipRetryableErrors && retryable_error(s3err)) && !conn->terminate);
   if (s3err)
   {
-    if (ms3_server_error(creds))
+    if (ms3_server_error(conn->conn))
       logger->log(LOG_ERR, "S3Storage::putObject(): failed to PUT, server says '%s'.  bucket = %s, key = %s.",
-                  ms3_server_error(creds), bucket.c_str(), destKey.c_str());
+                  ms3_server_error(conn->conn), bucket.c_str(), destKey.c_str());
     else
       logger->log(LOG_ERR, "S3Storage::putObject(): failed to PUT, got '%s'.  bucket = %s, key = %s.",
                   s3err_msgs[s3err], bucket.c_str(), destKey.c_str());
     errno = s3err_to_errno[s3err];
+    if (s3err == MS3_ERR_ENDPOINT)
+      logger->log(
+          LOG_ERR,
+          "S3Storage::putObject(): Bucket location not match provided endpoint:, bucket = %s, endpoint = %s.",
+          bucket.c_str(), endpoint.c_str());
     return -1;
   }
   return 0;
@@ -515,8 +548,8 @@ int S3Storage::deleteObject(const string& _key)
 {
   uint8_t s3err;
   string deleteKey = prefix + _key;
-  ms3_st* creds = getConnection();
-  if (!creds)
+  auto conn = getConnection();
+  if (!conn)
   {
     logger->log(
         LOG_ERR,
@@ -524,18 +557,18 @@ int S3Storage::deleteObject(const string& _key)
     errno = EINVAL;
     return -1;
   }
-  ScopedConnection sc(this, creds);
+  ScopedConnection sc(this, conn);
 
   do
   {
-    s3err = ms3_delete(creds, bucket.c_str(), deleteKey.c_str());
-    if (s3err && s3err != MS3_ERR_NOT_FOUND && (!skipRetryableErrors && retryable_error(s3err)))
+    s3err = ms3_delete(conn->conn, bucket.c_str(), deleteKey.c_str());
+    if (s3err && s3err != MS3_ERR_NOT_FOUND && (!skipRetryableErrors && retryable_error(s3err)) && !conn->terminate)
     {
-      if (ms3_server_error(creds))
+      if (ms3_server_error(conn->conn))
         logger->log(LOG_WARNING,
                     "S3Storage::deleteObject(): failed to DELETE, server says '%s'.  bucket = %s, key = %s."
                     "  Retrying...",
-                    ms3_server_error(creds), bucket.c_str(), deleteKey.c_str());
+                    ms3_server_error(conn->conn), bucket.c_str(), deleteKey.c_str());
       else
         logger->log(
             LOG_WARNING,
@@ -545,22 +578,22 @@ int S3Storage::deleteObject(const string& _key)
       {
         getIAMRoleFromMetadataEC2();
         getCredentialsFromMetadataEC2();
-        ms3_ec2_set_cred(creds, IAMrole.c_str(), key.c_str(), secret.c_str(), token.c_str());
+        ms3_ec2_set_cred(conn->conn, IAMrole.c_str(), key.c_str(), secret.c_str(), token.c_str());
       }
       else if (!IAMrole.empty())
       {
-        ms3_assume_role(creds);
+        ms3_assume_role(conn->conn);
       }
       sleep(5);
     }
-  } while (s3err && s3err != MS3_ERR_NOT_FOUND && (!skipRetryableErrors && retryable_error(s3err)));
+  } while (s3err && s3err != MS3_ERR_NOT_FOUND && (!skipRetryableErrors && retryable_error(s3err)) && !conn->terminate);
 
   if (s3err != 0 && s3err != MS3_ERR_NOT_FOUND)
   {
-    if (ms3_server_error(creds))
+    if (ms3_server_error(conn->conn))
       logger->log(LOG_ERR,
                   "S3Storage::deleteObject(): failed to DELETE, server says '%s'.  bucket = %s, key = %s.",
-                  ms3_server_error(creds), bucket.c_str(), deleteKey.c_str());
+                  ms3_server_error(conn->conn), bucket.c_str(), deleteKey.c_str());
     else
       logger->log(LOG_ERR, "S3Storage::deleteObject(): failed to DELETE, got '%s'.  bucket = %s, key = %s.",
                   s3err_msgs[s3err], bucket.c_str(), deleteKey.c_str());
@@ -573,26 +606,26 @@ int S3Storage::copyObject(const string& _sourceKey, const string& _destKey)
 {
   string sourceKey = prefix + _sourceKey, destKey = prefix + _destKey;
   uint8_t s3err;
-  ms3_st* creds = getConnection();
-  if (!creds)
+  auto conn = getConnection();
+  if (!conn)
   {
     logger->log(LOG_ERR,
                 "S3Storage::copyObject(): failed to copy, S3Storage::getConnection() returned NULL on init");
     errno = EINVAL;
     return -1;
   }
-  ScopedConnection sc(this, creds);
+  ScopedConnection sc(this, conn);
 
   do
   {
-    s3err = ms3_copy(creds, bucket.c_str(), sourceKey.c_str(), bucket.c_str(), destKey.c_str());
-    if (s3err && (!skipRetryableErrors && retryable_error(s3err)))
+    s3err = ms3_copy(conn->conn, bucket.c_str(), sourceKey.c_str(), bucket.c_str(), destKey.c_str());
+    if (s3err && (!skipRetryableErrors && retryable_error(s3err)) && !conn->terminate)
     {
-      if (ms3_server_error(creds))
+      if (ms3_server_error(conn->conn))
         logger->log(LOG_WARNING,
                     "S3Storage::copyObject(): failed to copy, server says '%s'.  bucket = %s, srckey = %s, "
                     "destkey = %s.  Retrying...",
-                    ms3_server_error(creds), bucket.c_str(), sourceKey.c_str(), destKey.c_str());
+                    ms3_server_error(conn->conn), bucket.c_str(), sourceKey.c_str(), destKey.c_str());
       else
         logger->log(LOG_WARNING,
                     "S3Storage::copyObject(): failed to copy, got '%s'.  bucket = %s, srckey = %s, "
@@ -602,24 +635,24 @@ int S3Storage::copyObject(const string& _sourceKey, const string& _destKey)
       {
         getIAMRoleFromMetadataEC2();
         getCredentialsFromMetadataEC2();
-        ms3_ec2_set_cred(creds, IAMrole.c_str(), key.c_str(), secret.c_str(), token.c_str());
+        ms3_ec2_set_cred(conn->conn, IAMrole.c_str(), key.c_str(), secret.c_str(), token.c_str());
       }
       else if (!IAMrole.empty())
       {
-        ms3_assume_role(creds);
+        ms3_assume_role(conn->conn);
       }
       sleep(5);
     }
-  } while (s3err && (!skipRetryableErrors && retryable_error(s3err)));
+  } while (s3err && (!skipRetryableErrors && retryable_error(s3err)) && !conn->terminate);
 
   if (s3err)
   {
     // added the add'l check MS3_ERR_NOT_FOUND to suppress error msgs for a legitimate case in IOC::copyFile()
-    if (ms3_server_error(creds) && s3err != MS3_ERR_NOT_FOUND)
+    if (ms3_server_error(conn->conn) && s3err != MS3_ERR_NOT_FOUND)
       logger->log(LOG_ERR,
                   "S3Storage::copyObject(): failed to copy, server says '%s'.  bucket = %s, srckey = %s, "
                   "destkey = %s.",
-                  ms3_server_error(creds), bucket.c_str(), sourceKey.c_str(), destKey.c_str());
+                  ms3_server_error(conn->conn), bucket.c_str(), sourceKey.c_str(), destKey.c_str());
     else if (s3err != MS3_ERR_NOT_FOUND)
       logger->log(LOG_ERR,
                   "S3Storage::copyObject(): failed to copy, got '%s'.  bucket = %s, srckey = %s, "
@@ -632,9 +665,9 @@ int S3Storage::copyObject(const string& _sourceKey, const string& _destKey)
 
 #if 0
     // no s3-s3 copy yet.  get & put for now.
-    
+
     int err;
-    boost::shared_array<uint8_t> data;
+    std::shared_ptr<uint8_t[]> data;
     size_t len;
     err = getObject(sourceKey, &data, &len);
     if (err)
@@ -648,7 +681,7 @@ int S3Storage::exists(const string& _key, bool* out)
   string existsKey = prefix + _key;
   uint8_t s3err;
   ms3_status_st status;
-  ms3_st* creds = getConnection();
+  auto creds = getConnection();
   if (!creds)
   {
     logger->log(LOG_ERR,
@@ -660,14 +693,14 @@ int S3Storage::exists(const string& _key, bool* out)
 
   do
   {
-    s3err = ms3_status(creds, bucket.c_str(), existsKey.c_str(), &status);
-    if (s3err && s3err != MS3_ERR_NOT_FOUND && (!skipRetryableErrors && retryable_error(s3err)))
+    s3err = ms3_status(creds->conn, bucket.c_str(), existsKey.c_str(), &status);
+    if (s3err && s3err != MS3_ERR_NOT_FOUND && (!skipRetryableErrors && retryable_error(s3err)) && !creds->terminate)
     {
-      if (ms3_server_error(creds))
+      if (ms3_server_error(creds->conn))
         logger->log(LOG_WARNING,
                     "S3Storage::exists(): failed to HEAD, server says '%s'.  bucket = %s, key = %s."
                     "  Retrying...",
-                    ms3_server_error(creds), bucket.c_str(), existsKey.c_str());
+                    ms3_server_error(creds->conn), bucket.c_str(), existsKey.c_str());
       else
         logger->log(LOG_WARNING,
                     "S3Storage::exists(): failed to HEAD, got '%s'.  bucket = %s, key = %s.  Retrying...",
@@ -676,21 +709,21 @@ int S3Storage::exists(const string& _key, bool* out)
       {
         getIAMRoleFromMetadataEC2();
         getCredentialsFromMetadataEC2();
-        ms3_ec2_set_cred(creds, IAMrole.c_str(), key.c_str(), secret.c_str(), token.c_str());
+        ms3_ec2_set_cred(creds->conn, IAMrole.c_str(), key.c_str(), secret.c_str(), token.c_str());
       }
       else if (!IAMrole.empty())
       {
-        ms3_assume_role(creds);
+        ms3_assume_role(creds->conn);
       }
       sleep(5);
     }
-  } while (s3err && s3err != MS3_ERR_NOT_FOUND && (!skipRetryableErrors && retryable_error(s3err)));
+  } while (s3err && s3err != MS3_ERR_NOT_FOUND && (!skipRetryableErrors && retryable_error(s3err)) && !creds->terminate);
 
   if (s3err != 0 && s3err != MS3_ERR_NOT_FOUND)
   {
-    if (ms3_server_error(creds))
+    if (ms3_server_error(creds->conn))
       logger->log(LOG_ERR, "S3Storage::exists(): failed to HEAD, server says '%s'.  bucket = %s, key = %s.",
-                  ms3_server_error(creds), bucket.c_str(), existsKey.c_str());
+                  ms3_server_error(creds->conn), bucket.c_str(), existsKey.c_str());
     else
       logger->log(LOG_ERR, "S3Storage::exists(): failed to HEAD, got '%s'.  bucket = %s, key = %s.",
                   s3err_msgs[s3err], bucket.c_str(), existsKey.c_str());
@@ -702,7 +735,7 @@ int S3Storage::exists(const string& _key, bool* out)
   return 0;
 }
 
-ms3_st* S3Storage::getConnection()
+shared_ptr<S3Storage::Connection> S3Storage::getConnection()
 {
   boost::unique_lock<boost::mutex> s(connMutex);
 
@@ -711,12 +744,12 @@ ms3_st* S3Storage::getConnection()
   clock_gettime(CLOCK_MONOTONIC_COARSE, &now);
   while (!freeConns.empty())
   {
-    Connection& back = freeConns.back();
-    if (back.idleSince.tv_sec + maxIdleSecs <= now.tv_sec)
+    auto& back = freeConns.back();
+    if (back->touchedAt.tv_sec + maxIdleSecs <= now.tv_sec)
     {
-      ms3_deinit(back.conn);
+      ms3_deinit(back->conn);
       // connMutexes.erase(back.conn);
-      back.conn = NULL;
+      back->conn = nullptr;
       freeConns.pop_back();
     }
     else
@@ -724,43 +757,54 @@ ms3_st* S3Storage::getConnection()
   }
 
   // get a connection
-  ms3_st* ret = NULL;
   uint8_t res = 0;
   if (freeConns.empty())
   {
-    ret = ms3_init(key.c_str(), secret.c_str(), region.c_str(), (endpoint.empty() ? NULL : endpoint.c_str()));
+    auto ret = make_shared<S3Storage::Connection>(nextConnId++);
+    ret->conn = ms3_init(key.c_str(), secret.c_str(), region.c_str(), (endpoint.empty() ? nullptr : endpoint.c_str()));
     // Something went wrong with libmarias3 init
-    if (ret == NULL)
+    if (ret->conn == nullptr)
     {
       logger->log(LOG_ERR, "S3Storage::getConnection(): ms3_init returned NULL, no specific info to report");
+      return nullptr;
     }
     // Set option for use http instead of https
     if (useHTTP)
     {
-      ms3_set_option(ret, MS3_OPT_USE_HTTP, NULL);
+      ms3_set_option(ret->conn, MS3_OPT_USE_HTTP, nullptr);
     }
     // Set option to disable SSL Verification
     if (!sslVerify)
     {
-      ms3_set_option(ret, MS3_OPT_DISABLE_SSL_VERIFY, NULL);
+      ms3_set_option(ret->conn, MS3_OPT_DISABLE_SSL_VERIFY, nullptr);
     }
     // Port number is not 0 so it was set by cnf file
     if (portNumber != 0)
     {
-      ms3_set_option(ret, MS3_OPT_PORT_NUMBER, &portNumber);
+      ms3_set_option(ret->conn, MS3_OPT_PORT_NUMBER, &portNumber);
+    }
+
+    // timeouts
+    if (connectTimeout.has_value())
+    {
+        ms3_set_option(ret->conn, MS3_OPT_CONNECT_TIMEOUT, &connectTimeout.value());
+    }
+    if (operationTimeout.has_value())
+    {
+        ms3_set_option(ret->conn, MS3_OPT_TIMEOUT, &operationTimeout.value());
     }
     // IAM role setup for keys
     if (!IAMrole.empty())
     {
       if (isEC2Instance)
       {
-        res = ms3_ec2_set_cred(ret, IAMrole.c_str(), key.c_str(), secret.c_str(), token.c_str());
+        res = ms3_ec2_set_cred(ret->conn, IAMrole.c_str(), key.c_str(), secret.c_str(), token.c_str());
       }
       else
       {
-        res = ms3_init_assume_role(ret, (IAMrole.empty() ? NULL : IAMrole.c_str()),
-                                   (STSendpoint.empty() ? NULL : STSendpoint.c_str()),
-                                   (STSregion.empty() ? NULL : STSregion.c_str()));
+        res = ms3_init_assume_role(ret->conn, (IAMrole.empty() ? nullptr : IAMrole.c_str()),
+                                   (STSendpoint.empty() ? nullptr : STSendpoint.c_str()),
+                                   (STSregion.empty() ? nullptr : STSregion.c_str()));
       }
 
       if (res)
@@ -771,34 +815,69 @@ ms3_st* S3Storage::getConnection()
                     "aws_access_key_id, aws_secret_access_key values. Also check sts_region and sts_endpoint "
                     "if configured.",
                     IAMrole.c_str());
-        if (ms3_server_error(ret))
+        if (ms3_server_error(ret->conn))
           logger->log(LOG_ERR, "S3Storage::getConnection(): ms3_error: server says '%s'  role name = %s",
-                      ms3_server_error(ret), IAMrole.c_str());
-        ms3_deinit(ret);
-        ret = NULL;
+                      ms3_server_error(ret->conn), IAMrole.c_str());
+        ms3_deinit(ret->conn);
+        ret->conn = nullptr;
       }
     }
     // assert(connMutexes[ret].try_lock());
-    s.unlock();
+    if (ret->conn == nullptr)
+    {
+      s.unlock();
+      return {};
+    }
+    clock_gettime(CLOCK_MONOTONIC_COARSE, &ret->touchedAt);
+    usedConns.try_emplace(ret->id, ret);
     return ret;
   }
-  assert(freeConns.front().idleSince.tv_sec + maxIdleSecs > now.tv_sec);
-  ret = freeConns.front().conn;
+  assert(freeConns.front()->touchedAt.tv_sec + maxIdleSecs > now.tv_sec);
+  auto ret = freeConns.front();
+  clock_gettime(CLOCK_MONOTONIC_COARSE, &ret->touchedAt);
   freeConns.pop_front();
   // assert(connMutexes[ret].try_lock());
   return ret;
 }
 
-void S3Storage::returnConnection(ms3_st* ms3)
+void S3Storage::returnConnection(std::shared_ptr<S3Storage::Connection> conn)
 {
-  assert(ms3);
-  Connection conn;
-  conn.conn = ms3;
-  clock_gettime(CLOCK_MONOTONIC_COARSE, &conn.idleSince);
+  assert(conn);
+  assert(conn->conn);
+  clock_gettime(CLOCK_MONOTONIC_COARSE, &conn->touchedAt);
 
   boost::unique_lock<boost::mutex> s(connMutex);
+  usedConns.erase(conn->id);
+  conn->terminate = false;
+  conn->id = nextConnId++;
   freeConns.push_front(conn);
   // connMutexes[ms3].unlock();
+}
+
+vector<S3Storage::IOTaskData> S3Storage::taskList() const
+{
+  boost::unique_lock<boost::mutex> s(connMutex);
+  vector<IOTaskData> ret;
+  ret.reserve(usedConns.size());
+  timespec now;
+  clock_gettime(CLOCK_MONOTONIC_COARSE, &now);
+  for (const auto& [id, conn]: usedConns) {
+      double elapsed = (double)(now.tv_sec - conn->touchedAt.tv_sec) + 1.e-9 * (now.tv_nsec - conn->touchedAt.tv_nsec);;
+      ret.emplace_back(id, elapsed);
+  }
+  s.unlock();
+  return ret;
+}
+
+bool S3Storage::killTask(uint64_t id)
+{
+    boost::unique_lock<boost::mutex> s(connMutex);
+    if (auto it = usedConns.find(id); it != usedConns.end())
+    {
+        it->second->terminate = true;
+        return true;
+    }
+    return false;
 }
 
 }  // namespace storagemanager

@@ -687,6 +687,8 @@ static my_bool pagecache_fwrite(PAGECACHE *pagecache,
   /* FIXME: ENGINE=Aria occasionally writes uninitialized data */
   __msan_unpoison(args.page, pagecache->block_size);
 #endif
+  /* Reset MY_WAIT_IF_FULL for temporary tables */
+  flags= _ma_write_flags_callback(filedesc->callback_data, flags);
   res= (int)my_pwrite(filedesc->file, args.page, pagecache->block_size,
                  ((my_off_t) pageno << pagecache->shift), flags);
   (*filedesc->post_write_hook)(res, &args);
@@ -3876,7 +3878,7 @@ restart:
       {
         pagecache_pthread_mutex_unlock(&pagecache->cache_lock);
         DBUG_ASSERT(0);
-        return (uchar*) 0;
+        DBUG_RETURN((uchar*) 0);
       }
     }
     /*
@@ -4722,8 +4724,10 @@ static my_bool free_block(PAGECACHE *pagecache, PAGECACHE_BLOCK_LINK *block,
 }
 
 
-static int cmp_sec_link(PAGECACHE_BLOCK_LINK **a, PAGECACHE_BLOCK_LINK **b)
+static int cmp_sec_link(const void *a_, const void *b_)
 {
+  PAGECACHE_BLOCK_LINK *const *a= a_;
+  PAGECACHE_BLOCK_LINK *const *b= b_;
   return (((*a)->hash_link->pageno < (*b)->hash_link->pageno) ? -1 :
       ((*a)->hash_link->pageno > (*b)->hash_link->pageno) ? 1 : 0);
 }
@@ -5227,7 +5231,7 @@ int flush_pagecache_blocks_with_filter(PAGECACHE *pagecache,
 {
   int res;
   DBUG_ENTER("flush_pagecache_blocks_with_filter");
-  DBUG_PRINT("enter", ("pagecache: %p", pagecache));
+  DBUG_PRINT("enter", ("pagecache: %p  fd: %di", pagecache, file->file));
 
   if (pagecache->disk_blocks <= 0)
     DBUG_RETURN(0);

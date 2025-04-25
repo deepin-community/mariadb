@@ -1,6 +1,6 @@
 /* wolfssl_simple_demo.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -36,9 +36,9 @@
 /* cannot enable with other definition */
 /* simplest tcp client*/
 /*#define SIMPLE_TCP_CLIENT */
-/* software TLS　client */
+/* software TLS client */
 /* #define SIMPLE_TLS_CLIENT */
-/* use TSIP　Acceleration */
+/* use TSIP Acceleration */
 /*#define SIMPLE_TLS_TSIP_CLIENT*/
 
 /* simplest tcp server */
@@ -54,7 +54,7 @@ void wolfSSL_TLS_server();
 void simple_tcp_server();
 
 #if defined(SIMPLE_TCP_CLIENT) || defined(SIMPLE_TLS_CLIENT) || \
-	defined(SIMPLE_TCP_SERVER) || defined(SIMPLE_TLS_SERVER)
+    defined(SIMPLE_TCP_SERVER) || defined(SIMPLE_TLS_SERVER)
  #define min(x,y) ((x)<(y)?(x):(y))
  int isascii(const char *s);
 #endif

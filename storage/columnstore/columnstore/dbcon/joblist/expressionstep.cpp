@@ -24,7 +24,7 @@
 using namespace std;
 
 #include <boost/shared_ptr.hpp>
-#include <boost/shared_array.hpp>
+
 using namespace boost;
 
 #include "messagequeue.h"
@@ -52,6 +52,7 @@ using namespace execplan;
 using namespace rowgroup;
 
 #include "expressionstep.h"
+
 
 namespace joblist
 {
@@ -790,4 +791,3 @@ const string ExpressionStep::toString() const
 }
 
 }  // namespace joblist
-// vim:ts=4 sw=4:

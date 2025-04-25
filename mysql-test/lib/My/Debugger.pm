@@ -78,7 +78,7 @@ my %debuggers = (
     options => '-f -o {log} {exe} {args}',
   },
   rr => {
-    options => '_RR_TRACE_DIR={log} rr record {exe} {args} --loose-skip-innodb-use-native-aio --loose-innodb-flush-method=fsync',
+    options => '_RR_TRACE_DIR={log} rr record {exe} {args}',
     run => 'env',
     pre => sub {
       ::mtr_error('rr requires kernel.perf_event_paranoid <= 1')
@@ -263,6 +263,7 @@ sub pre_setup() {
     $::opt_suite_timeout= 24 * 60;                              # in minutes
     $::opt_shutdown_timeout= ($interactive ? 24 * 60 : 3) * 60; # in seconds
     $::opt_start_timeout= $::opt_shutdown_timeout;              # in seconds
+    $::opt_debug_sync_timeout= 3000;                            # in seconds
   }
 }
 

@@ -17,7 +17,6 @@
 # License along with this library; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1335  USA
 
-cmake_minimum_required(VERSION 2.8.12)
 project(mroonga)
 
 if("${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -56,6 +55,11 @@ if(MRN_BUNDLED)
       WITHOUT_MROONGA_STORAGE_ENGINE OR
       "${PLUGIN_MROONGA}" STREQUAL "NO")
     return()
+  endif()
+  if(WITHOUT_DYNAMIC_PLUGINS)
+    if(NOT (PLUGIN_MROONGA STREQUAL STATIC))
+      return()
+    endif()
   endif()
 endif()
 
@@ -416,14 +420,6 @@ set(MRN_TEST_SUITE_DIR "${CMAKE_SOURCE_DIR}/mysql-test/suite/mroonga")
 if(NOT EXISTS "${MRN_TEST_SUITE_DIR}")
   set(MRN_TEST_SUITE_DIR "${PROJECT_SOURCE_DIR}/mysql-test/mroonga")
 endif()
-configure_file(
-  "${MRN_TEST_SUITE_DIR}/storage/r/information_schema_plugins.result.in"
-  "${MRN_TEST_SUITE_DIR}/storage/r/information_schema_plugins.result"
-  NEWLINE_STYLE LF)
-configure_file(
-  "${MRN_TEST_SUITE_DIR}/storage/r/variable_version.result.in"
-  "${MRN_TEST_SUITE_DIR}/storage/r/variable_version.result"
-  NEWLINE_STYLE LF)
 
 configure_file(
   "${PROJECT_SOURCE_DIR}/data/install.sql.in"

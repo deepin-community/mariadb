@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 #crl.test
 # if we can, isolate the network namespace to eliminate port collisions.
@@ -22,6 +22,7 @@ cp -rp . $RUNNING_DIR/.
 cd $RUNNING_DIR
 
 revocation_code="-361"
+revocation_code_openssl="23"
 exit_code=1
 counter=0
 # need a unique resume port since may run the same time as testsuite
@@ -112,7 +113,7 @@ run_test() {
     server_result=$?
 
     case  "$capture_out" in
-    *$revocation_code*)
+    *"$revocation_code"*|*"$revocation_code_openssl"*)
         # only exit with zero on detection of the expected error code
         echo ""
         echo "Successful Revocation!!!!"
@@ -178,7 +179,7 @@ run_hashdir_test() {
   server_result=$?
 
   case  "$capture_out" in
-    *$revocation_code*)
+    *"$revocation_code"*|*"$revocation_code_openssl"*)
         # only exit with zero on detection of the expected error code
         echo ""
         echo "Successful Revocation!!!! with hash dir"
@@ -216,8 +217,14 @@ else
    exit_hash_dir_code=0
 fi
 
-# run the test
-run_test
+# Check that server is enabled
+./examples/server/server -? 2>&1 | grep -- 'Create Ready file'
+if [ $? -eq 0 ]; then
+    # run the test
+    run_test
+else
+    exit_code=0
+fi
 
 # If we get to this exit, exit_code will be a 1 signaling failure
 echo "exiting with $exit_code certificate was not revoked"

@@ -1,6 +1,6 @@
 /* kcapi_hmac.h
  *
- * Copyright (C) 2006-2023 wolfSSL Inc.
+ * Copyright (C) 2006-2024 wolfSSL Inc.
  *
  * This file is part of wolfSSL.
  *
@@ -26,12 +26,6 @@
 #include <wolfssl/wolfcrypt/types.h>
 #include <wolfssl/wolfcrypt/port/kcapi/wc_kcapi.h>
 #include <wolfssl/wolfcrypt/hmac.h>
-
-#if defined(HAVE_FIPS) && \
-                        (!defined(HAVE_FIPS_VERSION) || (HAVE_FIPS_VERSION < 2))
-int HmacInit(Hmac* hmac, void* heap, int devId);
-void HmacFree(Hmac* hmac);
-#endif
 
 #endif /* WOLF_CRYPT_KCAPI_HMAC_H  */
 
