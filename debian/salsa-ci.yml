@@ -6,7 +6,7 @@ include:
 # Override Salsa CI with MariaDB specific variations
 variables:
   BUILT_PACKAGES: "libmariadb-dev libmariadb-dev-compat libmariadb3
-    libmariadbd19t64 libmariadbd-dev mariadb-common mariadb-client-core
+    libmariadbd19 libmariadbd-dev mariadb-common mariadb-client-core
     mariadb-client mariadb-server-core mariadb-server mariadb-backup
     mariadb-plugin-connect mariadb-plugin-s3 mariadb-plugin-rocksdb
     mariadb-plugin-oqgraph mariadb-plugin-mroonga mariadb-plugin-spider
@@ -369,7 +369,7 @@ blhc:
   - *test-enable-artifacts-repo
   - apt-get install -yq --no-install-recommends libmariadb-dev-compat libmariadbd-dev
   # Installs 31 packages, including:
-  # libmariadb3 libmariadb-dev libmariadb-dev-compat libmariadbd19t64 libmariadbd-dev
+  # libmariadb3 libmariadb-dev libmariadb-dev-compat libmariadbd19 libmariadbd-dev
 
 .test-full-upgrade-libs: &test-full-upgrade-libs
   - *test-enable-artifacts-repo
@@ -863,7 +863,7 @@ libmysql* to libmariadb* upgrade:
     - apt-get install -qq --yes libmariadb-dev-compat
     - pkg-config --cflags mysqlclient # mysqlclient.pc from compat package
     - pkg-config --list-all
-    - apt-get install -qq --yes libmariadbd19t64
+    - apt-get install -qq --yes libmariadbd19
     - pkg-config --list-all
     - apt-get install -qq --yes libmariadbd-dev
     - pkg-config --list-all
@@ -930,7 +930,7 @@ mysql-8.0 in Sid upgrade:
     - *test-prepare-container
     # Using 'mysql*' would match also mysql-workbench, which is broken, so use
     # more exact matchers
-    - apt-get install -q --yes 'mysql-t*' 'mysql-s*' 'mysql-c*' mysqltcl 'mysql-r*' libmysqlcppconn7t64
+    - apt-get install -q --yes 'mysql-t*' 'mysql-s*' 'mysql-c*' mysqltcl 'mysql-r*' libmysqlcppconn7
     # Ensure MySQL 8.0 package actually got installed
     - dpkg -l | grep -e "mysql-server.*8\.0"
     - *test-verify-initial

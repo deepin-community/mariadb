@@ -1,3 +1,10 @@
+mariadb (1:11.8.1-4deepin1) unstable; urgency=medium
+
+  * revert t64.
+  * fix risc64 build error.
+
+ -- lhdjply <lhdjply@126.com>  Fri, 25 Apr 2025 13:42:35 +0800
+
 mariadb (1:11.8.1-4) unstable; urgency=medium
 
   * Disable main.mysqld--help-aria test that failed on nearly every
